@@ -309,3 +309,113 @@ report = GoldenReport(golden=golden + "（候选池序）", repo=repo, project_i
                       results=tuple(results), top_k=10)
 print(render_report(report), end=""); write_report(report, report_path)
 ```
+
+---
+
+## 8. 修复后复测（TASK-021：装填层 Code/Docs 平衡，R21）
+
+> 生成：2026-09-10 ｜ 分支：`feature/task-021_xwz0910`（jump 自 `main` @ `0f55f86`）
+> 改动：`core/zace_core/contextpack/assembly.py` 新增 `BudgetConfig.code_floor=2` 与
+> `BudgetConfig.docs_ratio=0.10`（均为 TASK-015 校准项），详见 TASK-021 执行记录。
+> 原始报告：`benches/results/raw-fix021-{zace,aibox,cameraservice}-e2e.md`。
+> **本节只追加，不修改上文 §1–§7 的原始数字**；对照口径 = 同一 golden、同一 data root
+> （`/tmp/zace-verify-main`、`/tmp/zace-aibox`、`/tmp/zace-cam`）、同一 runner 命令。
+
+### 8.1 索引口径提醒（读对照表前必看）
+
+复测复现了 §4.2 的 R17 现象：`/tmp/zace-verify-main` 现已包含 `benches/**`（golden 与报告产物），
+因此 zace（dogfood）一行的"修复前"数字不等于 §3.1 的主基线：
+
+| 运行 | zace recall@5/@10/MRR | zace 负例 |
+|---|---|---|
+| §3.1 主基线（索引不含 `benches/**`） | 0.636 / 0.682 / 0.529 | 1/2 |
+| 本节"修复前"（同索引复跑，代码 = `0f55f86`） | 0.636 / 0.636 / 0.524 | 0/2 |
+
+差异全部来自 R17（`zace-0106`、`zace-0004` 被自身题面命中 → `answerable=true`），与本次改动无关。
+**本节所有前后对比都使用"同一索引 + 同一 commit 的代码"，即第二行。**
+
+### 8.2 整体对照（② e2e，排名口径 = ContextPack 装填序）
+
+| repo | 段 | 正例数 | 修复前 r@5 | 修复后 r@5 | 修复前 r@10 | 修复后 r@10 | 修复前 MRR | 修复后 MRR |
+|---|---|---|---|---|---|---|---|---|
+| zace（dogfood） | ② e2e | 22 | 0.636 | **0.682** | 0.636 | **0.864** | 0.524 | **0.561** |
+| aibox-super-sdk | ② e2e | 18 | 0.556 | 0.556 | 0.611 | **0.667** | 0.455 | **0.466** |
+| linux-mtk-mw-cameraservice | ② e2e | 14 | 0.500 | 0.500 | 0.500 | 0.500 | 0.324 | 0.314 |
+| **三仓库合并（正例 54）** | ② e2e | 54 | **0.574** | **0.593** | **0.593** | **0.704** | **0.449** | **0.465** |
+| **三仓库合并** | 负例 | 6 | 1/6 | 1/6 | — | — | — | — |
+
+- **DoD ①**（recall@5 不得低于 0.574）：**0.593 > 0.574 达标**；recall@10 +0.111、MRR +0.016 同步上升。
+- 负例通过率不变（1/6）——负例由 `answerable` 判定决定，属 TASK-022 范围。
+- 唯一负向：`cameraservice` MRR 0.324 → 0.314（−0.010，`cameraservice-0007` 之外有一条用例名次后移）；
+  recall@5/@10 持平。见 §8.5 未决问题。
+
+### 8.3 按类别对照（三仓库合并 ② e2e）
+
+| category | 正例数 | 修复前 r@5 | 修复后 r@5 | 修复前 r@10 | 修复后 r@10 | 修复前 MRR | 修复后 MRR |
+|---|---|---|---|---|---|---|---|
+| behavior | 16 | 0.625 | 0.625 | 0.625 | **0.688** | 0.481 | **0.490** |
+| path | 10 | 0.100 | **0.200** | 0.100 | **0.400** | 0.050 | **0.098** |
+| spec | 12 | 0.833 | 0.833 | 0.917 | 0.833 | 0.732 | 0.711 |
+| symbol | 16 | 0.625 | 0.625 | 0.625 | **0.813** | 0.455 | **0.486** |
+
+`path` 类是本体最强项（r@5 2×、r@10 4×）；`spec` 类 r@5 持平但 r@10 由 0.917 降到 0.833
+（一条 spec 用例被挤出 top-10，见 §8.5）。
+
+### 8.4 R21 失败子集逐条对照（目标块在装填序中的首位名次）
+
+"修复前" = `0f55f86` 的代码（`/tmp/zace-prefix` 只读 worktree）；"修复后" = 本分支。
+`-` = 目标块不在包内（或不在前 10 位，见括注）。
+
+| id | 仓库 | 期望目标 | 修复前名次 | 修复后名次 | 结论 |
+|---|---|---|---|---|---|
+| `zace-0102` | zace | `parsing/fallback.py#split_fallback` | - | **6** | **fail → pass** |
+| `zace-0103` | zace | `chunking/fingerprint.py#check_fingerprint` | - | - | 未转 pass（池内名次 #90） |
+| `zace-0107` | zace | `storage/store.py` | - | **5** | **fail → pass** |
+| `aibox-0004` | aibox | `search/pipeline.py`、`search/planner.py` | - | - | 未转 pass（池内名次 #91） |
+| `aibox-0007` | aibox | `search/planner.py` | - | 12 | 逼近但未进 top-10（池内 #96） |
+| `aibox-0009` | aibox | `search/planner.py#analyze_query` | - | **9** | **fail → pass** |
+| `aibox-0012` | aibox | `add/strategies/indexed.py#add_event` | - | - | 未转 pass（池内无目标 chunk） |
+| `aibox-0015` | aibox | `internal/maintenance.py` | 16 | 16 | 持平（池内 #19，装填序未改善） |
+| `aibox-0017` | aibox | `delete/strategies/evidence.py` | - | **9** | **fail → pass** |
+
+- **DoD ②**（至少 3 条从 fail 转 pass）：**4 条转 pass**（`zace-0102`/`0107`、`aibox-0009`/`0017`）达标。
+- 机制可见：这些查询修复前的包内 `docs` 数（`zace-0103` 21、`aibox-0004` 37、`aibox-0007` 29、
+  `aibox-0009` 26、`aibox-0012` 35、`aibox-0017` 35）在修复后降到 4–7，代码证据重新进入可见区。
+- 剩余 5 条的共同点是**目标代码在候选池尾部**（#90–#96，见 §5 归因 #1/#3/#4）：
+  装填层最多能把它们抬到第 5–12 位，进不了 top-5 需要检索侧排序判别力（R24/TASK-015），
+  本卡不越界处理。
+
+### 8.5 docs_ratio 取值扫描（同索引、同 golden）
+
+| `docs_ratio` | 合并 r@5 | 合并 r@10 | 合并 MRR | R21 转 pass 数 | spec 类 r@5 | 备注 |
+|---|---|---|---|---|---|---|
+| 0.50（卡内建议初值） | 0.574 | 0.611 | 0.452 | 1 | 0.833 | 几乎不动（文档切片太小，50% 预算仍够装 20+ 块） |
+| 0.25 | 0.574 | 0.630 | 0.454 | 2 | 0.833 | — |
+| 0.20 | 0.574 | 0.648 | 0.454 | 2 | — | — |
+| 0.15 | 0.574 | 0.704 | 0.460 | 3 | — | 达标但 `aibox-0009` 仅第 10 位 |
+| **0.10（本次选定）** | **0.593** | **0.704** | **0.465** | **4** | 0.833 | 保底优先，`aibox-0001`（4 条 doc 的 spec 题）仍 rank 3 |
+| 0.05 | 0.648 | 0.704 | 0.470 | 5 | 0.750 | **否决**：`aibox-0001` 被挤出 top-10（doc 预算 < 该题所需 4 块） |
+
+选定口径：在满足 DoD（≥3 条转 pass、recall@5 不降）的候选里，取**不伤害文档密集 spec 用例**者，
+再按整体指标择优 → `docs_ratio=0.10`、`code_floor=2`（`code_floor` 3/4 与 2 的结果完全相同，
+说明保底块数不是瓶颈，维持卡内建议值 2）。
+
+### 8.6 契约影响 / 与设计偏差 / 未决问题（本节新增项）
+
+- **契约影响**：无。未改 CF-03 字段；`docs_ratio` 造成的裁剪只体现在既有
+  `budget.omittedCount` / `budget.truncated` 与 `missingEvidence[retrieval_truncated].message` 文本里。
+- **与设计偏差**：`BudgetConfig` 默认值属实现口径（Module/03 §4.1 只规定 spec 保底、未规定 docs 份额），
+  本卡新增的两项默认值已标注为 TASK-015 校准项，不改 Module/03 条文。
+- **逐条名次变化（全部 54 条正例已逐一比对，负向项在此列全）**：
+  - 新增失败 1 条：`aibox-0019`（spec，期望文档路径）名次 **9 → 包外**——该题证据偏文档，被份额上限挤出；
+  - 名次后移（仍通过）2 条：`cameraservice-0016`（spec）3 → 5（这是 `cameraservice` MRR −0.010 的**全部**来源）、
+    `aibox-0010` 4 → 3 为前移，不计；
+  - 名次前移/转 pass 其余全部为正：`zace-0001` 12 → 8、`zace-0102` → 6、`zace-0107` → 5、`zace-0112` → 7、
+    `zace-0118` 11 → 6、`aibox-0007` → 12、`aibox-0009` → 9、`aibox-0017` → 9（其余同名次）。
+- **未决问题**：① `docs_ratio` 默认值仅在 3 仓库 60 条 golden 上标定，样本偏小，TASK-015 需复核
+  （已知代价：`spec` 类 r@10 0.917 → 0.833，具体是 `aibox-0019` 名次 9 → 包外；
+  与之对应 `path` 类 r@5 0.100 → 0.200、`symbol` 类 r@10 0.625 → 0.813）；
+  ② `cameraservice` MRR −0.010 已归因完毕（`cameraservice-0016` 的文档证据被份额上限后移 2 位，
+  该仓库文档稀薄，属份额上限的预期代价，不改代码）；
+  ③ 本卡未做"按文档文件限制切片数"（卡内"明确不做"），若 TASK-015 认为仍不足再议；
+  ④ `aibox-0004`/`0012` 的目标代码在候选池 #91+，装填层最多抬到第 5–12 位，进 top-5 需要 R24 的排序判别力。

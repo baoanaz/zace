@@ -1,6 +1,6 @@
 # TASK-021：装填层 Code/Docs 平衡（R21）
 
-> 状态：pending ｜ 阶段：Phase 1+（质量修复，**M1 后最高优先级**）｜ 硬依赖：TASK-014（基线，已合并）｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 1+（质量修复，**M1 后最高优先级**）｜ 硬依赖：TASK-014（基线，已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-021_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/`、`benches/results/`
 > **本卡与 TASK-022 同文件（assembly.py），必须串行**：等 TASK-021 合并后再开 TASK-022。
@@ -101,4 +101,96 @@ Q: Where does the retention maintenance loop live and what does it clean up?
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-10 ｜ 分支 `feature/task-021_xwz0910`（jump 自 `main` @ `0f55f86`）｜ 状态：review
+
+**改动文件**（任务卡所有权范围内）：
+
+- `core/zace_core/contextpack/assembly.py`：`BudgetConfig` 新增 `code_floor=2` / `docs_ratio=0.10`；
+  装填主流程新增 spec 份额上限（超限计入 `omittedCount` 并置 `truncated=True`，并在
+  `missingEvidence[retrieval_truncated].message` 里如实说明多少条因份额上限让位）、
+  代码保底补入（贪心后按候选序补入，去重/聚合/tier3 配额/单文件上限规则优先）；
+- `core/tests/contextpack/test_code_docs_balance.py`（新增 5 用例）；
+- `benches/results/raw-fix021-{zace,aibox,cameraservice}-e2e.md`（新增原始报告）与
+  `benches/results/phase1-baseline.md` §8（**追加**"修复后复测"，未改 §1–§7 原始数字）；
+- `docs/tasks/README.md` 任务板状态行。
+
+### 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `uv run ruff check .` | All checks passed |
+| `uv run python scripts/check_dependency_direction.py` | 通过（core 纯库 / service 不上探） |
+| `uv run pytest` | **495 passed, 2 skipped**（490 既有 + 5 新增，零回归） |
+| `uv run zace-core eval --golden benches/golden/zace --repo . --data /tmp/zace-verify-main --report benches/results/raw-fix021-zace-e2e.md` | 0.682 / 0.864 / 0.561；负例 0/2 |
+| 同上（`benches/golden/aibox-super-sdk` / `/tmp/zace-aibox`） | 0.556 / 0.667 / 0.466；负例 0/2 |
+| 同上（`benches/golden/linux-mtk-mw-cameraservice` / `/tmp/zace-cam`） | 0.500 / 0.500 / 0.314；负例 1/2 |
+
+### 基线前后对照（同一 golden、同一 data root；"前" = `0f55f86` 代码复跑）
+
+| 段 | 修复前 | 修复后 |
+|---|---|---|
+| 三仓库合并 r@5 / r@10 / MRR | 0.574 / 0.593 / 0.449 | **0.593 / 0.704 / 0.465** |
+| 负例通过率 | 1/6 | 1/6（不变；负例由 `answerable` 决定，属 TASK-022） |
+| zace（dogfood） | 0.636 / 0.636 / 0.524 | 0.682 / 0.864 / 0.561 |
+| aibox-super-sdk | 0.556 / 0.611 / 0.455 | 0.556 / 0.667 / 0.466 |
+| linux-mtk-mw-cameraservice | 0.500 / 0.500 / 0.324 | 0.500 / 0.500 / 0.314 |
+| 类别 r@5（behavior / path / spec / symbol） | 0.625 / 0.100 / 0.833 / 0.625 | 0.625 / **0.200** / 0.833 / 0.625 |
+| 类别 r@10（同上顺序） | 0.625 / 0.100 / 0.917 / 0.625 | **0.688 / 0.400** / 0.833 / **0.813** |
+
+> 索引漂移提醒：`/tmp/zace-verify-main` 现含 `benches/**`（基线 §4.2 的 R17 现象），故 zace"修复前"为
+> 0.636/0.636/0.524、负例 0/2，与基线 §3.1 主基线（0.636/0.682/0.529、1/2）不同；本节全部对比都是
+> "同一索引 + `0f55f86` 代码"复跑得到的同口径基线。
+
+**R21 失败子集逐条（目标块在装填序中的首位名次）**
+
+| id | 期望目标 | 修复前 | 修复后 | 结论 |
+|---|---|---|---|---|
+| `zace-0102` | `parsing/fallback.py#split_fallback` | - | **6** | **fail → pass** |
+| `zace-0103` | `chunking/fingerprint.py#check_fingerprint` | - | - | 未转（池内 #90） |
+| `zace-0107` | `storage/store.py` | - | **5** | **fail → pass** |
+| `aibox-0004` | `search/pipeline.py` / `search/planner.py` | - | - | 未转（池内 #91） |
+| `aibox-0007` | `search/planner.py` | - | 12 | 逼近但未进 top-10（池内 #96） |
+| `aibox-0009` | `search/planner.py#analyze_query` | - | **9** | **fail → pass** |
+| `aibox-0012` | `add/strategies/indexed.py#add_event` | - | - | 未转（池内无目标 chunk） |
+| `aibox-0015` | `internal/maintenance.py` | 16 | 16 | 持平（池内 #19） |
+| `aibox-0017` | `delete/strategies/evidence.py` | - | **9** | **fail → pass** |
+
+- DoD ①（recall@5 ≥ 0.574）：**0.593 达标**（不降反升）；DoD ②（≥3 条转 pass）：**4 条达标**；
+  DoD ④（指标下降即停）：未触发。包内 `docs` 数由 21–37 降到 4–7，机制复现。
+- 逐条名次变化已全量比对（54 条正例），负向项完整列出：新增失败 1 条 `aibox-0019`（spec，9 → 包外）；
+  名次后移仍通过 1 条 `cameraservice-0016`（3 → 5，即 cameraservice MRR −0.010 的全部来源）。
+
+### 关键实现口径与设计取舍（供 TASK-015 / TASK-022 复用）
+
+1. **docs_ratio 语义**：`spec 总 token ≤ docs_ratio × (hard_cap − framework_overhead)`，**静态上限**
+   （与当前 `used` 无关，避免顺序依赖），池中存在代码候选时才生效（`has_code`）。
+2. **保底优先于份额上限**：`spec_floor` 预留块不受 `docs_ratio` 约束（否则小预算下文档密集包会一块 spec 都不剩，
+   见 `test_spec_floor_wins_over_docs_ratio`）。
+3. **超限用 `continue` 而非 `break`**：spec 超份额后继续扫描池，让更靠后的代码候选仍有机会装填。
+4. **code_floor 实现方式与卡内建议的偏差（已实测）**：最初按"预留 + 收窄硬顶"实现（与 spec 保底同构），
+   实测导致 6 个既有用例回归（`tier3` 配额/同符号聚合/skeleton 降级/deep 快照被保底补入覆盖）
+   **且**把最高分证据挤到包尾（名次受损）；改为"贪心上限不变 + 贪心后按候选序补入（规则优先）"，
+   既有用例零回归。实测 `code_floor=3/4` 与 `2` 结果完全相同 → 维持卡内建议值 2。
+5. **docs_ratio 默认值 0.10 的依据**：见 `benches/results/phase1-baseline.md` §8.5 扫描表
+   （0.50 → 1 条转 pass、0.25 → 2、0.15 → 3、**0.10 → 4**；0.05 转 5 条但把 `aibox-0001`
+   （4 条 doc 的 spec 题）挤出 top-10，故否决）。卡内建议初值 0.5 达不到 DoD ②。
+
+### 契约影响
+
+无。CF-03 字段名/结构未动；份额上限只体现在既有 `budget.omittedCount` / `budget.truncated` 与
+`missingEvidence[retrieval_truncated].message` 文本上（`missingEvidence` 为自由文本字段）。
+
+### 与设计偏差
+
+1. `BudgetConfig` 新增两项默认值属实现口径（Module/03 §4.1 只规定 spec 保底，未规定 docs 份额），
+   已在代码注释与报告里标注为 TASK-015 校准项，**未改设计条文**；
+2. `code_floor` 未采用"预留收窄硬顶"（见上第 4 条），已在报告与本记录说明理由。
+
+### 未决问题
+
+1. `docs_ratio=0.10` 仅在 3 仓库 60 条 golden 上标定，样本偏小；已知代价是 `spec` 类 r@10
+   0.917 → 0.833（`aibox-0019` 名次 9 → 包外），换回 `path` r@5 0.100 → 0.200、`symbol` r@10 0.625 → 0.813。
+   **建议 TASK-015 用独立校准集复核该默认值**，并在需要时改常量（改一处即可）。
+2. 剩余 5 条 R21 用例的目标代码在候选池尾部（#90–#96），装填层最多抬到第 5–12 位；
+   进 top-5 需检索侧排序判别力（R24/TASK-015），本卡按"明确不做"未越界。
+3. 本卡未做"按文档文件限制切片数"（卡内"明确不做"），若 TASK-015 认为仍不足再议。

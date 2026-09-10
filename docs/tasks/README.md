@@ -38,7 +38,7 @@
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
 | [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
 | [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | done |
-| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | pending |
+| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | review |
 | [TASK-022](TASK-022-answerable判定收紧.md) | answerable/confidence 判定收紧（负例诚实性，R22） | TASK-021（同文件串行） | — | `core/zace_core/contextpack/assembly.py` | pending |
 
 > TASK-015（embedding bake-off + rerank 校准）前置已满足；R24 的排序候选方案需 TASK-021/022 的包形态稳定后再评，

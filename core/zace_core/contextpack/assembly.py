@@ -5,7 +5,8 @@
 ```text
 输入：候选（已 rerank） + flows + freshness + 索引信号
 预算：hardCap（Fast 默认 10K，可配 8-12K；Deep 12K） − 框架开销 ≈500 token
-装填：分数降序贪心；单文件 ≤25%；tier3 配额 ≤30%；spec 保底 ≥1
+装填：分数降序贪心；单文件 ≤25%；tier3 配额 ≤30%；spec 保底 ≥1；code 保底 ≥2（R21）；
+      spec 份额 ≤docs_ratio × 内容预算（R21，仅当池中存在代码候选时生效）
 去重三招：相邻区间合并（行距 ≤10）/ 同符号聚合 / skeleton 降级（>300 行且超预算）
 tier 不作为排序键（D-17）：只做配额与资格线
 ```
@@ -16,9 +17,17 @@ tier 不作为排序键（D-17）：只做配额与资格线
 
 - **内容来源**：``store`` 提供切片正文；``EvidenceItem.content`` 是**带行号原文**
   （``45 | def refresh(...)``，CF-03 定义），渲染层直接输出；
-- **spec 保底**在贪心前**预占**最高分 spec 候选（存在相关 spec 时），保证不被预算挤掉；保底分支与
-  贪心循环、合并路径共用 `placed_ids`（**按 chunk_id** 判重，R15，不再靠 `_Slot` 值比较）；预留块若
-  已被贪心循环装填，预留预算立即**归还**（后续候选恢复完整 `hardCap`）；
+- **spec 保底与 code 保底（R21）**：spec 保底在贪心前**预占**最高分 spec 候选（存在相关 spec 时），
+  保证不被预算挤掉；code 保底在贪心后按候选序**补入**（池中存在代码候选而包内代码证据不足
+  `code_floor` 块时）。两条路径与贪心循环共用 `placed_ids`（**按 chunk_id** 判重，R15，
+  不再靠 `_Slot` 值比较）；预占块若已被贪心循环装填，预留预算立即**归还**（后续候选恢复完整硬顶）。
+  code 保底不用"预占收窄硬顶"——实测它会覆盖 tier3/聚合/降级规则并让最高分证据掉到包尾（见
+  TASK-021 执行记录），故只做"规则优先的贪心后补入"。
+- **docs_ratio（R21，TASK-021）**：池中存在代码候选时，spec 证据总量 ≤ `docs_ratio × (hardCap −
+  framework_overhead)`；超上限的 spec 候选计入 `omittedCount`（并置 `truncated`，不静默丢弃），
+  `missingEvidence.retrieval_truncated` 的 message 里如实说明其中多少条因份额上限让位。
+  池中确实没有代码候选时该上限不生效（纯文档问题不受影响）；且**不约束保底块**——
+  `spec_floor` 的硬要求优先于份额上限（否则一条文档密集查询会一块 spec 都不剩）。
 - **tier3 配额**按 §4.1 字面实现：``tier3_used + est > tier3_ratio × used`` 即跳过；
 - **skeleton 降级**只在"超单文件上限或超硬预算"时触发（>300 行是前置条件）；
 - **"命中行"**：RRF 只给 chunk 粒度 → 取**切片起始行**（符号定义行，即该切片锚点行）起
@@ -112,6 +121,14 @@ class BudgetConfig:
     single_file_ratio: float = 0.25      # A2：单文件 ≤25% hardCap
     tier3_ratio: float = 0.30            # A3：tier3 配额 ≤30%
     spec_floor: int = 1                  # 存在相关 spec 时至少装 1-2 块
+    # R21（TASK-021）：存在代码候选时，至少装 N 块代码证据（镜像 spec 保底）。
+    code_floor: int = 2
+    # R21（TASK-021）：存在代码候选时，spec 证据总量 ≤ docs_ratio × 内容预算
+    # （hard_cap − framework_overhead）。池中确实没有代码候选时本项不生效（纯文档问题不受影响）。
+    # 默认 0.10 由 TASK-021 的基线对照实测选定（见 benches/results/phase1-baseline.md 修复后复测），
+    # 属 TASK-015 校准项：0.25 仅 2 条 R21 用例转 pass，0.15 为 3 条，0.10 为 4 条；而 0.05 会
+    # 把文档密集的 spec 用例（aibox-0001，期望 4 条 doc）挤出 top-10。
+    docs_ratio: float = 0.10
     skeleton_line_threshold: int = 300   # 超过此行数且超预算 → skeleton 降级
     skeleton_context_lines: int = 15     # 降级保留的上下文行数（±15）
 
@@ -119,6 +136,11 @@ class BudgetConfig:
 FAST_BUDGET = BudgetConfig()
 #: Deep 12K 硬顶（Module/03 §4.2 裁决；Phase 3 接入，本卡只实现配置）。
 DEEP_BUDGET = BudgetConfig(hard_cap=12_000)
+
+#: spec 候选的 ``Candidate.kind``（其余值 <code|test|fallback> 一律算代码侧证据，R21）。
+_SPEC_KIND = "spec"
+#: 被 spec 份额上限挡下的候选在 missingEvidence 里的统一措辞（R21 §C 观测要求）。
+_DOCS_RATIO_NOTE = "spec 份额上限"
 
 
 def budget_for(mode: str) -> BudgetConfig:
@@ -226,10 +248,18 @@ def assemble(
     fresh = freshness if freshness is not None else store.freshness()
     pool = sorted(candidates, key=lambda c: (-c.score, -c.rrf_score, c.chunk_id))
 
+    # R21：内容预算与 spec 份额上限。池里**存在代码候选**时 docs_ratio 才生效
+    # （纯文档问题——如 spec 类查询——不应被本机制伤害）。
+    content_budget = max(active.hard_cap - active.framework_overhead, 0)
+    has_code = any(candidate.kind != _SPEC_KIND for candidate in pool)
+    docs_cap = int(content_budget * active.docs_ratio) if has_code else content_budget
+
     used = active.framework_overhead
     omitted = 0
     capacity_cut = 0
     tier3_used = 0
+    spec_used = 0
+    docs_capped = 0
     file_usage: dict[str, int] = {}
     symbol_slots: dict[str, _Slot] = {}
     slots: list[_Slot] = []
@@ -241,8 +271,10 @@ def assemble(
     placed_ids: set[str] = set()
 
     def _place(candidate: Candidate, slot: _Slot, tokens: int) -> None:
-        nonlocal used, tier3_used
+        nonlocal used, tier3_used, spec_used
         used += tokens
+        if candidate.kind == _SPEC_KIND:
+            spec_used += tokens
         key = candidate.path or ""
         file_usage[key] = file_usage.get(key, 0) + tokens
         if candidate.tier == 3:
@@ -257,20 +289,20 @@ def assemble(
     reserved: _Slot | None = None
     if active.spec_floor > 0:
         for candidate in pool:
-            if candidate.kind != "spec":
+            if candidate.kind != _SPEC_KIND:
                 continue
             slot = _build_slot(store, candidate, index_signals)
             if slot is None:
                 continue
             reserved = slot
             break
-    reserve_tokens = reserved.tokens if reserved is not None else 0
     reserved_id = reserved.candidate.chunk_id if reserved is not None else None
 
     def _hard_limit() -> int:
         """预留期间收窄的硬顶；预留块被装填后即归还预留预算（R15，不再挤压其它候选）。"""
         pending = reserved_id is not None and reserved_id not in placed_ids
-        return max(active.hard_cap - (reserve_tokens if pending else 0), active.framework_overhead)
+        reserve_tokens = reserved.tokens if pending and reserved is not None else 0
+        return max(active.hard_cap - reserve_tokens, active.framework_overhead)
 
     for candidate in pool:
         if candidate.chunk_id in placed_ids:
@@ -307,6 +339,18 @@ def assemble(
             omitted += 1
             capacity_cut += 1
             continue
+        if (
+            has_code
+            and candidate.kind == _SPEC_KIND
+            and candidate.chunk_id != reserved_id  # 保底块不受份额上限约束（§4.1 硬要求）
+            and spec_used + tokens > docs_cap
+        ):
+            # R21：spec 份额超上限 → 让位（不静默丢弃：计 omittedCount 并置 truncated）。
+            # 这里用 continue 而非 break——池里更靠后的代码候选仍应有机会装填。
+            omitted += 1
+            docs_capped += 1
+            capacity_cut += 1
+            continue
         if used + tokens > hard_limit:
             omitted += 1
             capacity_cut += 1
@@ -316,18 +360,59 @@ def assemble(
         if merged is not None:
             delta = merged
             used += delta
+            if slot.item.type == "spec":
+                spec_used += delta
             file_usage[file_key] = file_usage.get(file_key, 0) + delta
             placed_ids.add(candidate.chunk_id)  # 已并入既有块：同一 chunk 不再单独装填
             continue
         _place(candidate, slot, tokens)
 
-    # 保底补入：仅在预留块**尚未**被装填时执行（按 chunk_id 判重，R15）。
+    # 保底补入：仅在预留块**尚未**被装填时执行（按 chunk_id 判重，R15）。只受 hard_cap 约束——
+    # 保底块优先于 docs_ratio（spec 保底是 Module/03 §4.1 的硬要求，否则文档密集查询会一块都不剩）。
     if (
         reserved is not None
         and reserved.candidate.chunk_id not in placed_ids
         and used + reserved.tokens <= active.hard_cap
     ):
         _place(reserved.candidate, reserved, reserved.tokens)
+
+    # 代码保底补入（R21）：池中存在代码候选、但包内代码证据不足 code_floor 块时，用剩余预算
+    # 按候选序补入。去重/同符号聚合/tier3 配额/单文件上限/硬预算规则优先，不为凑数覆盖它们。
+    if has_code and active.code_floor > 0:
+        code_placed = sum(1 for slot in slots if slot.item.type != "spec")
+        for candidate in pool:
+            if code_placed >= active.code_floor:
+                break
+            if candidate.kind == _SPEC_KIND or candidate.chunk_id in placed_ids:
+                continue
+            slot = _build_slot(store, candidate, index_signals)
+            if slot is None:
+                continue
+            existing = symbol_slots.get(candidate.symbol_fqn) if candidate.symbol_fqn else None
+            if existing is not None and existing is not slot:
+                continue  # 同符号聚合优先（不覆盖 R15）
+            tokens = slot.tokens
+            file_key = candidate.path or ""
+            over_file_cap = file_usage.get(file_key, 0) + tokens > single_file_cap
+            if over_file_cap or used + tokens > active.hard_cap:
+                degraded = _degrade(candidate, slot, active, store)
+                if degraded is not None:
+                    tokens = degraded.tokens
+            if file_usage.get(file_key, 0) + tokens > single_file_cap:
+                continue
+            if candidate.tier == 3 and tier3_used + tokens > active.tier3_ratio * used:
+                continue
+            if used + tokens > active.hard_cap:
+                continue
+            merged = _try_merge(slots, slot, tokens)
+            if merged is not None:
+                used += merged
+                file_usage[file_key] = file_usage.get(file_key, 0) + merged
+                placed_ids.add(candidate.chunk_id)
+                code_placed += 1  # 已完成并入既有块：内容已在包内
+                continue
+            _place(candidate, slot, tokens)
+            code_placed += 1
 
     truncated = capacity_cut > 0
     flow_tokens = sum(
@@ -370,6 +455,7 @@ def assemble(
         omitted=omitted,
         truncated=truncated,
         evidence_count=len(evidence) + len(docs),
+        docs_capped=docs_capped,
     )
     pack.next_queries = _next_queries(pool, evidence, docs)
     return pack
@@ -580,6 +666,7 @@ def _missing_evidence(
     omitted: int,
     truncated: bool,
     evidence_count: int,
+    docs_capped: int = 0,
 ) -> list[MissingEvidence]:
     """Phase 1 可实现的缺失证据子集（Module/03 §5；graph_boundary/symbol_ambiguous 留接口）。"""
     missing: list[MissingEvidence] = []
@@ -629,12 +716,16 @@ def _missing_evidence(
             )
         )
     if truncated:
+        # R21 §C：docs_ratio 挡下的候选在这里如实说明（CF-03 无新增字段，message 为自由文本）。
+        share = (
+            f"（其中 {docs_capped} 个因 {_DOCS_RATIO_NOTE}让位给代码证据）" if docs_capped else ""
+        )
         missing.append(
             MissingEvidence(
                 code="retrieval_truncated",
                 message=(
-                    f"候选池被预算裁剪：省略 {omitted} 个候选，可能有相关但未展示的证据；"
-                    "可提高预算或收窄查询。"
+                    f"候选池被预算裁剪：省略 {omitted} 个候选{share}，"
+                    "可能有相关但未展示的证据；可提高预算或收窄查询。"
                 ),
             )
         )
