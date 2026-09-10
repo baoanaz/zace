@@ -23,6 +23,9 @@ R4（``FileDelta`` 三集合）、R8（imports 边缘）、R10（向量相似度
   或"``apply_deletions`` 返回被删 id"的原语，跨进程删除会留孤儿向量——检索侧会跳过、下一次全量
   重建清理）。
 - 单项目串行：不做并发（跨项目并行属 service 层职责）。
+- **单文件失败隔离**（TASK-018 §C，Module/01 §4.3 per-file 韧性）：解析失败走 fallback；
+  但“切分/落库”环节的意外异常只写 ``report.errors`` 并跳过该文件，**不**中断整次 ingest，
+  也**不**计入 added/modified。崩溃、静默丢数据都比“如实报告后继续”更差。
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ class IngestReport:
     chunks_reused: int = 0        # content_hash 未变、向量可复用的 chunk 数
     chunks_removed: int = 0       # 行被移除（需要删向量）的 chunk 数
     unresolved_resolved: int = 0  # 本次落边的 unresolved 引用条数
-    errors: tuple[str, ...] = ()  # 解析/读取失败（不中断整体 ingest）
+    errors: tuple[str, ...] = ()  # 解析/切分/落库失败（单文件隔离，不中断整体 ingest）
     invalidation: Invalidation = Invalidation.NONE  # 本次执行的失效层级（D-07）
     files_parsed: int = 0         # 实际解析（含兜底切分）的文件数
     vectors_upserted: int = 0     # 写入/覆盖的向量行数
@@ -282,8 +285,12 @@ class Indexer:
             return None
         language = _language_for(item.path, repo_is_cpp)
         parsed = self._parse(item.path, text, language, acc)
-        chunks = tuple(split_file(parsed, text))
-        delta = self._store.apply_file_change(parsed, chunks, file_content_hash(item.data))
+        try:
+            chunks = tuple(split_file(parsed, text))
+            delta = self._store.apply_file_change(parsed, chunks, file_content_hash(item.data))
+        except Exception as exc:  # 单文件切分/落库失败 → 如实记录并跳过（TASK-018 §C）
+            acc.errors.append(f"{item.path}: {type(exc).__name__}: {exc}")
+            return None
         if item.kind == "added":
             acc.added += 1
         else:
@@ -384,7 +391,11 @@ class Indexer:
                 continue
             language = _language_for(path, "cpp" in self._languages)
             parsed = self._parse(path, text, language, acc)
-            ids.extend(chunk.id for chunk in split_file(parsed, text))
+            try:
+                ids.extend(chunk.id for chunk in split_file(parsed, text))
+            except Exception as exc:  # 同上：单文件切分失败不拖垮重建（TASK-018 §C 同一口径）
+                acc.errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                continue
         stored = self._store.chunks_by_ids(ids)
         self._embed_and_upsert(list(stored), acc)
 

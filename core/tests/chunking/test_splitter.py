@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
 from zace_core.chunking import (
     CLASS_SKELETON_KIND,
     FALLBACK_KIND,
@@ -19,7 +20,7 @@ from zace_core.chunking import (
     split_file,
 )
 from zace_core.hashing import chunk_content_hash
-from zace_core.parsing.fallback import FALLBACK_MAX_LINES
+from zace_core.parsing.fallback import FALLBACK_MAX_CHARS, FALLBACK_MAX_LINES
 from zace_core.storage import Store
 from zace_core.types import ParsedFile
 
@@ -290,3 +291,38 @@ def test_split_file_reports_symbol_kinds_for_each_language(parse_source) -> None
 
 def test_callable_fixtures_are_wired(parse_source: Callable[[str, str], ParsedFile]) -> None:
     assert parse_source("mod.py", MODULE_SOURCE).path == "mod.py"
+
+
+# ---------------------------------------------------------------------------
+# TASK-018 §B：chunk id 唯一性防御
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_chunk_ids_raise_value_error() -> None:
+    """人为重复 id → 带明细的 ValueError，而不是静默去重/写库时才爆 IntegrityError。"""
+    from zace_core.types import SymbolDef
+
+    duplicate = SymbolDef(name="dup", fqn="dup", kind="function", start_line=1, end_line=3)
+    parsed = ParsedFile(path="src/dup.py", language="python", symbols=(duplicate, duplicate))
+    source = "def dup():\n    a = 1\n    return a\n"
+
+    with pytest.raises(ValueError) as excinfo:
+        split_file(parsed, source)
+
+    message = str(excinfo.value)
+    assert message.startswith("src/dup.py: ")
+    assert "src/dup.py:dup:1" in message
+    assert "重复 chunk id" in message
+
+
+def test_oversized_single_line_fallback_raises_with_details() -> None:
+    """单行超长硬切出的兜底块同 id（fqn 恒为 ``(module)``）→ 显式失败并列出冲突 id。"""
+    parsed = ParsedFile(path="assets/blob.bin", language="fallback", fallback=True)
+    source = "x" * (FALLBACK_MAX_CHARS * 2 + 10)
+
+    with pytest.raises(ValueError) as excinfo:
+        split_file(parsed, source)
+
+    message = str(excinfo.value)
+    assert "assets/blob.bin" in message
+    assert f"assets/blob.bin:{MODULE_FQN}:1" in message
