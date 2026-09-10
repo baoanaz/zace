@@ -31,13 +31,13 @@
 | [TASK-011](TASK-011-图扩展与Rerank.md) | 图扩展（calls + spec_references）+ 确定性 rerank | TASK-010 | — | `core/zace_core/retrieval/{expand,rerank}.py` | done |
 | [TASK-012](TASK-012-ContextPack组装.md) | ContextPack 组装 + Markdown 渲染 | TASK-010, TASK-011 | — | `core/zace_core/contextpack/` | done |
 | [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | done |
-| [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | review |
+| [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | done |
 | [TASK-015](TASK-015-Bakeoff与校准.md) | embedding bake-off + rerank 初值校准 | TASK-013 | TASK-014 | `benches/bakeoff/` | pending |
 | [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
-| [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | review |
+| [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
 | [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
-| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | review |
+| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | done |
 
 ### 开卡批次历史（并行安全）
 

@@ -1,6 +1,6 @@
 # TASK-014：golden set 扩充 + 基线报告
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-013 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-013 ｜ soft 依赖：无
 > 建议分支：`feature/task-014_<你的缩写><MMDD>`
 > 交付物所有权：`benches/golden/`、`benches/results/`、`benches/README.md`（仅追加"用例编写指南"节）
 
