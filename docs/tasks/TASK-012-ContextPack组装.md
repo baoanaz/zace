@@ -1,6 +1,6 @@
 # TASK-012：ContextPack 组装 + Markdown 渲染
 
-> 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010、TASK-011 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010、TASK-011 ｜ soft 依赖：无
 > 建议分支：`feature/task-012_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/contextpack/`、`core/tests/contextpack/`
 > 允许并在卡内预期：在 `core/pyproject.toml` 的 `dev` extra 增加 `jsonschema`（schema 校验测试用），其余依赖不动。
@@ -72,4 +72,80 @@ tier 不作为排序键（D-17）：只做配额与资格线
 
 ## 执行记录
 
-（实施 AI 在此填写。Confidence/answerable 与 missingEvidence 的最终实现口径必须记录。）
+### 2026-09-10 / feature/task-012_xwz0910（泳道 E，本地分支交付，基于 feature/task-011_xwz0910）
+
+**完成报告**
+
+- 分支：`feature/task-012_xwz0910`
+- 验收：
+  - `uv run pytest core/tests/contextpack -q` → 38 passed（预算/配额/去重三招/判定矩阵 7 组合/
+    missingEvidence/nextQueries/schema 校验/渲染快照/性能）；
+  - 性能：200 候选组装 < 50ms（单测计时断言，实测远低于阈值）；
+  - 基线三条：`uv run ruff check .` → All checks passed；
+    `uv run python scripts/check_dependency_direction.py` → 通过；`uv run pytest` → 366 passed, 2 skipped。
+- 关键产物：`core/zace_core/contextpack/{__init__,assembly,render}.py`、
+  `core/tests/contextpack/{conftest,test_assembly,test_render,test_schema}.py`、
+  `core/tests/contextpack/snapshots/rich_pack.md`；
+  `core/pyproject.toml` dev extra 按卡内授权新增 `jsonschema>=4.21`（同时更新 `uv.lock`）。
+- 契约影响：无（CF-03 字段与 `docs/contracts/contextpack.schema.json` 逐项对齐并由 jsonschema
+  正向校验；未动 `types.py` / `interfaces.py` / `docs/contracts/**`）。
+- 与设计偏差：无实质偏差；预算/token 估算与缺失证据口径见下。
+- 建议复核点：① `score = rrf_score × RRF_BASE_SCALE + Σ特征` 由 TASK-011 引入，本卡直接消费
+  ``candidate.score``（不重算），确认排序责任归属；② tier3 配额按 §4.1 字面实现（下文）；
+  ③ 渲染快照改用文件比对（避开 ruff E501/W291 对长中文行的误报）。
+
+**Confidence / answerable 最终口径（照抄 Module/03 §4.4，判定基于**输入候选池**而非裁剪后证据）**
+
+```
+explicit_hits  = 池中 channel_ranks 含 'exact' 或 reasons 含 'explicit path' 的候选数
+consensus      = 池中 channel_ranks 维度 ≥2 的候选数
+answerable     = explicit_hits ≥ 1 OR consensus ≥ 2 OR structural_result（Phase 3 路由接口，默认 False）
+confidence     = high   ：explicit_hits ≥ 1 且 consensus ≥ 3 且无 graph_boundary
+                 medium ：(consensus > 0 且 explicit_hits == 0) 或 spec-only 命中（docs 非空且 evidence 空）
+                 low    ：其余
+```
+
+`graph_boundary` 与 `structural_result` 作为命名参数留接口（Phase 3 数据源），默认 False；
+Phase 1 不产生 graph_boundary 的 missingEvidence。
+
+**missingEvidence 最终口径（Phase 1 可实现子集，按固定顺序输出）**
+
+| code | 触发条件 | 数据源 |
+|---|---|---|
+| `index_stale` | `freshness.stale_files` 非空 | 01/05 同步层 |
+| `indexing_pending` | `freshness.indexing_files` 非空 | 05 同步层 |
+| `unresolved_reference` | `unresolved_refs(status=failed)` 计数 > 0 | Store |
+| `stale_doc_reference` | 已装填 doc 的 `spec_refs_for_spec().stale` | Store（G4） |
+| `retrieval_truncated` | 因容量（预算/单文件/ tier3 配额）裁剪 ≥1 候选 | 本组件 |
+| `no_context_match` | 装填后 evidence+docs 均为空 | 本组件 |
+
+`graph_boundary` / `symbol_ambiguous` 本卡不产生（留接口，Phase 3 数据源）；每条 message 均含
+"缺什么 + 为什么缺"，自愈建议一律走 `nextQueries`。
+
+**其他实现口径**
+
+1. **spec 保底**：为最高分 spec 候选**预留预算**（`hard_limit = hardCap − reserve`），贪心后再补入——
+   保住 Module/03 §4.1 的保底意图，同时让 "E 编号 = 装填顺序 = score 降序" 成立（不因保底插队）。
+2. **tier3 配额**按 §4.1 字面：`tier3_used + est > 0.30 × used` 则跳过。池中若**只有** tier3 候选，
+   `used=0` → 配额为 0 → 装填为空（用 `no_context_match` 如实报告）；生产路径不会出现
+   （扩展候选总与其 seed 同时入池）。已记入未决问题。
+3. **skeleton 降级**触发条件 = “>300 行”且（超单文件上限 或 超硬预算）；
+   保留签名 + **切片起始行**（符号定义行，RRF 无 chunk 内命中行信息）起 15 行，其余计入 `elidedLines`。
+4. **去重三招**：相邻区间合并仅在同文件、同为 spec/非 spec 且行距 ≤10 时发生（合并后重算 token 账）
+   其余计入 `elidedLines` 并追加 reason；同符号聚合保留最高分并写 `同符号聚合×N`；
+   三者均不计入 `retrieval_truncated`（只有容量裁剪才置 `truncated=true`）。
+5. **内容与编号**：`EvidenceItem.content` = 带行号原文（`45 | def refresh(...)`，CF-03 定义）；
+   evidence 与 docs 共用 E 编号（按装填顺序），flows 沿用 011 产出的 F 编号。
+6. **渲染**：快照存为 `snapshots/rich_pack.md`（Python 内长中文行会撞 ruff E501/W291）；
+   `render_evidence_for_prompt` 只输出 Code/Docs 两节（Phase 3 的 04 prompt 直接复用）。
+
+**未决问题**
+
+1. **tier3 配额的退化边界**（口径 2）：池内只有 tier3 候选时空包。生产不会发生，但若 TASK-013
+   的装配路径可能单跑图扩展，建议编排者裁定是否给"首块豁免"。
+2. **`files.generated` 仍无数据源**（同 TASK-010/011）：本卡不消费 generated 信号（rerank 已处理），
+   但 Phase 2 的 `sync_status`/元数据若要展示 generated 统计，仍需 Store 读 API。
+3. **flows 的 token 只计不争**：`budget.usedTokens` 含 flows 估算量，但 flows 不参与装填竞争，
+   也不会被预算裁剪（Module/03 §4.1 "flows 直接收纳"）；若 Phase 2 需要在预算紧张时裁剪 flows，
+   需回到 Module/03 重新裁定。
+

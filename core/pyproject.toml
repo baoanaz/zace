@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "jsonschema>=4.21"]  # CF-03：TASK-012 对 ContextPack JSON 做 schema 校验
 
 [project.scripts]
 zace-core = "zace_core.cli:main"   # TASK-013 实现
