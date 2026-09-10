@@ -1,6 +1,6 @@
 # TASK-007：索引流水线（ChangeSet → 增量失效 → 向量对账）
 
-> 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001、TASK-006 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩开发，合并前切换真实实现）
+> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001、TASK-006 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩开发，合并前切换真实实现）
 > 建议分支：`feature/task-007_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/pipeline/`、`core/tests/pipeline/`
 
@@ -85,4 +85,85 @@ ingest(changes: ChangeSet) -> IngestReport
 
 ## 执行记录
 
-（实施 AI 在此填写。IngestReport 字段与 SourceProvider 签名在此记录，供 TASK-013/Phase 2 对齐。）
+### 2026-09-10 ｜ 分支 `feature/task-007_xwz0910`（基于 `feature/task-006_xwz0910`）｜ 状态 review
+
+**交付物**：`core/zace_core/pipeline/{__init__,indexer,source}.py`、
+`core/tests/pipeline/{__init__,conftest,test_indexer,test_pipeline_real_stack}.py`（新增 19 个测试）。
+
+**验收命令与结果**：
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest core/tests/pipeline -q` | 19 passed |
+| `uv run pytest` | 281 passed, 2 skipped（W1 220 + TASK-006 42 + 本卡 19，无回归） |
+| `uv run ruff check .` | clean |
+| `uv run python scripts/check_dependency_direction.py` | 通过 |
+
+**IngestReport 字段（供 TASK-013 / Phase 2 对齐，卡内要求记录）**
+
+```text
+卡内规定：added / modified / deleted / chunks_new / chunks_reused / chunks_removed /
+          unresolved_resolved / errors
+本卡补充（观测与自证）：invalidation（none|reembed|full_reparse）、files_parsed、
+          vectors_upserted、vectors_deleted、edges_retargeted、spec_refs、ambiguous_refs、
+          skipped_files（二进制跳过）、orphan_files（删除时无法枚举 chunk id）、languages（已见语言）
+```
+
+**SourceProvider 签名（pipeline 内部契约，卡内要求记录）**
+
+```python
+class SourceProvider(Protocol):
+    def read(self, path: str) -> bytes: ...          # 仓库相对路径（正斜杠）
+    def list_files(self) -> Sequence[str]: ...       # 稳定排序；全量重解析 / reembed 枚举的输入
+```
+卡内只列了 `read`；`list_files` 是卡内「遍历 SourceProvider 全部文件」的必需能力，故补齐。
+`DirectorySource` 另含路径安全校验（拒绝绝对路径/``..``/反斜杠，抛 `SourcePathError`）。
+Phase 2 service 必须提供 blobs 侧的 `list_files`（按上传目录/DB 列举）。
+
+**实现口径（评审重点）**
+
+1. **R1 语言抬升**：「仓库已见语言」持久化在 `index_config.indexed_languages`（JSON 数组，
+   由 pipeline 维护；不改 registry、不改 DDL）。判定集 = 已持久化语言 ∪ 本次输入文件的 registry
+   默认语言；含 `cpp` 时 `.h` 走 C++。C++ 扩展名集合取自 registry（`EXTENSION_LANGUAGE`，
+   包含卡内 R1 清单全部项，外加 `.c++`/`.h++`）。测试覆盖「仅 .h → C」「.cpp 出现后 .h → C++」。
+2. **增量嵌入判据（重要）**：不只按 `FileDelta.new`，而是「`VectorStore.get_hashes(new_id 集合)`
+   与该 chunk 的 content_hash 不一致才嵌」。原因：`chunk_id` 含 `start_line`（D-04 不追求跨代稳定），
+   删中间一个函数会让后面 chunk 的 id 漂移——这些 chunk 的 content_hash 在 `FileDelta` 里属
+   `reused`，但向量库里没有新 id 的行。若不补嵌，这些 chunk 会永久失去向量（检索侧取不到）。
+   R4 的「复用键是 hash 不是 id」在 TASK-009 的 ``VectorStore``（按 chunk_id 存行、无读回原语）下
+   只能通过“重新嵌入同 hash 的新 id”落地（一次性代价）。这也是 `chunks_reused` 与
+   `vectors_upserted` 可能不相等的原因。
+3. **指纹两档执行**：`reembed` = `VectorStore.rebuild(dim)` + 重嵌存量（**不写 SQLite**；
+   存量 chunk 通过「遍历 provider → 重解析切分拿 id → `Store.chunks_by_ids` 取回库内权威内容」枚举）；
+   `full_reparse` = provider 全量重跑增量 + 重建向量表；两者末尾都刷新 {
+   ``parser_config_hash``/``embedding_model``/``embedding_dim``}。首建时也写指纹。
+4. **向量清理**：`FileDelta.removed_chunk_ids` 直接删；整文件删除用 Indexer 记录过的 chunk id 清；
+   整表重建（reembed/full_reparse）天然清除历史孤儿。
+5. **二阶段解析接入**：每次 ingest 末尾依次 `resolve_pending` → `retry_failed`（本次新符号名）→
+   `resolve_edges`（裸名边 fqn 化）→ `link_spec_references`（本卡新增的调用点；卡内步骤 3 未列，
+   但 TASK-006 §D 要求 spec 引用写库，且 `apply_file_change` 会先删本文件旧引用，必须在本步重建）。
+6. **错误处理**：未知语言 / `ParserUnavailableError` / 抽取器异常 → 兜底 `ParsedFile`（不中断）；
+   语法错误进 `report.errors`；含 NUL 的二进制文件跳过并进 `skipped_files`；扫描期读失败也进 `errors`。
+
+**契约影响**：无（不改 `docs/contracts/**` 与冻结类型/接口；只读消费 `Store`/`VectorStore`/
+`EmbeddingProvider`/TASK-006 原语）。新增 `index_config.indexed_languages` 键与 `SourceProvider.list_files`
+属 L1（前者是 KV 表新增键，不动 DDL/列语义；后者是 pipeline 内部契约）。
+
+**与设计偏差**：无功能性偏差；两条实现期解释已记录在第 2、5 条（id 漂移需补嵌；spec 引用重建时机）。
+
+**未决问题**
+
+1. **`Store` 缺「按文件列举 chunk id / 列举全部 chunk」原语**（本卡两处受阻）：
+   (a) 整文件删除时无法枚举向量 → 跨进程删除会留孤儿向量（当前用进程内记录缓解 + `orphan_files`
+   如实上报；孤儿向量在检索侧会被 `chunks_by_ids` 跳过，下一次整表重建清除）；
+   (b) `reembed` 需要“不重解析”的廉价存量枚举（当前靠遍历 provider 重解析拿 id，CPU 成本等同
+   一次全量解析）。建议 L2：`Store.chunk_ids_for_file(path)` / `Store.iter_chunks()` /
+   `apply_deletions` 返回被删 id。
+2. **`Store` 缺「列举全部文件（path + language + content_hash）」原语**：TASK-013 计算 ChangeSet、
+   Phase 2 同步对账都需它（当前只能靠 provider 清单 + 逐文件重解析）；建议 L2 时一并考虑。
+3. **`index_config.indexed_languages` 是否升格为契约键**：CF-01 表头只列举了 4 个键；若编排者
+   认为该键属跨卡契约（Phase 2 service 也要读），建议补记到 `docs/plan/contracts.md` §3.2。
+4. **`max_input_tokens` 不参与指纹**（同 TASK-006 未决问题 3），本卡按卡内口径未处理。
+
+**建议复核点**：增量嵌入判据（第 2 条，影响正确性）、R1 抬升的键选择（未决 3）、
+指纹两档的执行边界（第 3 条）、`orphan_files` 的诚实性（未决 1）。

@@ -24,7 +24,7 @@
 | [TASK-004](TASK-004-Cpp抽取器.md) | C++ 抽取器（尽力而为 + 诚实标注） | TASK-003 | — | `core/zace_core/parsing/cpp.py` 等 | done |
 | [TASK-005](TASK-005-Markdown-SpecBlock.md) | Markdown SpecBlock 抽取（doctype / 标题树 / mentioned） | — | — | `core/zace_core/parsing/markdown.py` 等 | done |
 | [TASK-006](TASK-006-Chunk模型与解析.md) | Chunk 模型 + unresolved 两阶段解析 + 配置指纹 | TASK-001 | TASK-002..005 | `core/zace_core/chunking/` | review |
-| [TASK-007](TASK-007-索引流水线.md) | 索引流水线：ChangeSet → 增量失效 → 向量对账 | TASK-001, TASK-006 | TASK-008, TASK-009 | `core/zace_core/pipeline/` | pending |
+| [TASK-007](TASK-007-索引流水线.md) | 索引流水线：ChangeSet → 增量失效 → 向量对账 | TASK-001, TASK-006 | TASK-008, TASK-009 | `core/zace_core/pipeline/` | review |
 | [TASK-008](TASK-008-Embedding双实现.md) | Embedding Provider 双实现（本地 ONNX 默认 + API） | — | — | `core/zace_core/embedding/` | done |
 | [TASK-009](TASK-009-向量存储.md) | 向量存储（LanceDB）+ hash 复用对账 | — | — | `core/zace_core/vectors/` | done |
 | [TASK-010](TASK-010-检索通道与RRF.md) | 检索通道（Exact/BM25/Vector）+ RRF + 降级 | TASK-001 | TASK-008, TASK-009 | `core/zace_core/retrieval/{exact,bm25,vector,rrf,fusion}.py` | pending |
@@ -54,7 +54,7 @@ Phase 2+ 的任务卡等 M1 达成后由编排者细化（见 `docs/plan/roadmap
 | W1 | B 解析线 | `zace-lane-b` | TASK-002 → 003 → 004 | 已完成 |
 | W1 | C 文档与向量线 | `zace-lane-c` | TASK-005 → 009 | 已完成 |
 | W1 | D 向量线 | `zace-lane-d` | TASK-008 | 已完成 |
-| W2 | A（继续） | `zace-lane-a` | TASK-006 → 007 | 进行中（TASK-006 review） |
+| W2 | A（继续） | `zace-lane-a` | TASK-006 → 007 | 已完成（两张卡 review，待合并） |
 | W2 | E 检索线 | `zace-lane-e` | TASK-010 → 011 → 012 | 待开工 |
 | W3 | F 出口与评测 | `zace-lane-f` | TASK-013 → 014 → 015 | 等待 W2 |
 
