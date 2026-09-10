@@ -1,6 +1,6 @@
 # TASK-014：golden set 扩充 + 基线报告
 
-> 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-013 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-013 ｜ soft 依赖：无
 > 建议分支：`feature/task-014_<你的缩写><MMDD>`
 > 交付物所有权：`benches/golden/`、`benches/results/`、`benches/README.md`（仅追加"用例编写指南"节）
 
@@ -65,4 +65,64 @@
 
 ## 执行记录
 
-（实施 AI 在此填写：实际使用的仓库/commit、条目统计、基线指标摘要、失败 Top10 归因。）
+### 2026-09-10 ｜ 分支 `feature/task-014_xwz0910`（自 `main` @ `086d24e`）
+
+**前置核验**：TASK-016（BM25 OR 语义）、TASK-017（证据块行序）、TASK-018（兜底行号/ID 唯一性）、
+TASK-019（spec 保底去重）均已合并进 `main`（`git log --oneline` 可见 `9628e83`/`7fddd1c`/`1af6587` 等合并点），
+`086d24e` 已含 TASK-020（BM25 判别力）。
+
+**实际使用的仓库 / commit / 索引**：
+
+| repo_hint | commit | 索引文件/chunks/symbols/edges | data root |
+|---|---|---|---|
+| `zace` | `self`（`086d24e` + 编排者既有 golden 文件） | 217 / 2412 / 1467 / 7058 | `/tmp/zace-verify-main`（复用，19:34 增量刷新 6s） |
+| `aibox-super-sdk` | `debf8a322aff7d2d21939bc6d09b4cfa985671ea` | 451 扫描（434 解析）/ 5760 / 2632 / 13269 | `/tmp/zace-aibox`（复用，增量刷新 1.2s） |
+| `linux-mtk-mw-cameraservice`（自选 C++17） | `3fb0b2d69d81850a630eb5b6ced5d78f5461257c` | 281（+1101 二进制跳过）/ 6257 / 4614 / 2760 | `/tmp/zace-cam`（全量新建，559.6s） |
+
+**条目统计**：60 条（zace 24 含样例题 4、aibox 20 含编排者种子 8、cameraservice 16）；
+lang：zh 26 / en 14 / mixed 20；category：symbol 16 / path 10 / behavior 16 / spec 12 / negative 6。
+种子用例零改动（`git status` 为 `R` 纯改名，逐字节保留）；`sample.jsonl`、`aibox-seed.jsonl`
+移入各自仓库目录（同目录混放多仓库用例时无法按仓库取指标）。
+
+**基线指标摘要**（正例 54；详细数字与分类见 `benches/results/phase1-baseline.md`）：
+
+- ①索引层（候选池序）：recall@5 **0.556** / recall@10 **0.593** / MRR **0.447**；
+- ②端到端（ContextPack 装填序）：recall@5 **0.574** / recall@10 **0.611** / MRR **0.451**；负例通过 **2/6**；
+- 分仓库 e2e：zace 0.636/0.682/0.529（负例 1/2）、aibox 0.556/0.611/0.455（0/2）、
+  cameraservice 0.500/0.500/0.324（1/2）；向量通道零降级；
+- 分类：spec 0.833 最稳、symbol/behavior 0.625、**path 仅 0.100 最弱**；en 0.769 > zh 0.524 ≥ mixed 0.500。
+
+**失败 Top10 归因**（完整表见报告 §5）：docs/spec 挤占 code（zace-0103/0102/0107、aibox-0004/0007/0009/0012、
+zace-0119 近名干扰）、path 类无字面路径（aibox-0011/0015/0017）、符号单向匹配口径（zace-0113 路径已中但符号不匹配）、
+`.claude/` 未被忽略的 skill 文档抢位（cameraservice-0006/0008）、装填预算把代码块挤出（cameraservice-0007）、
+装填正贡献样本（zace-0118 候选池外→e2e top-10）。种子负例 `aibox-0008` 前提已过期（`Kubernetes` 在
+仓库根 README + 未跟踪 `egg-info/PKG-INFO` 各 1 处命中，源码目录仍 0 命中）——不删题，已记录归因。
+
+**R17 实测（dogfood 负例）**：索引含本轮 golden 文件时 `zace-0106` 由通过转不通过（负例 1/2 → 0/2），
+`zace-0004` 两次运行皆因 `core/tests/cli/eval.py` fixture + `benches/golden/sample.jsonl` 命中 top-2 而失败。
+结论：`benches/**` 在索引内时 dogfood 负例不可能通过，已写入报告未决问题 1（需 `--exclude` 口径或独立 data root）。
+
+**验收命令与结果**：
+
+```text
+uv run ruff check .                                → All checks passed!
+uv run python scripts/check_dependency_direction.py → 依赖方向检查通过（core 纯库 / service 不上探）
+uv run pytest                                      → 484 passed, 2 skipped in 12.27s
+uv run zace-core eval --golden benches/golden --repo . --data /tmp/zace-verify-main \
+  --report benches/results/raw-smoke-all-repos-on-zace.md
+  → 60 条全部执行、0 异常、向量降级 0（跨仓库混跑，只作 runner 冒烟，不代表质量）
+uv run zace-core eval --golden benches/golden/zace --repo . ...（另有 aibox / cameraservice 各一条，见报告 §7）
+  → 三条分仓库 e2e 报告 + 三条索引层报告，落在 benches/results/raw-*.md
+```
+
+**契约影响**：无。**与设计偏差**：无。
+
+**未决问题**（报告 §6 详述，需编排者裁决/开卡）：
+
+1. R17 需口径级解法（runner `--exclude` 或负例回归专用 data root）；
+2. `answerable` 判定在文档密集仓库上恒为真（`_assess` 的 `consensus>=2` 只数双通道命中数，
+   外部 3 条负例 `missingEvidence` 已报 `unresolved_reference` 却 `answerable=true`）——属 Module/03 §4.4 口径；
+3. runner 缺 `--stage index|e2e` 开关（本卡①段用 40 行脚本，未入库，建议 TASK-015 固化为 CLI 能力）；
+4. 符号断言单向匹配（`Indexer.ingest` 不满足期望 `Indexer`），建议评估父类/模块前缀是否算命中；
+5. `DirectorySource` 未落地 D-28 忽略规则（`.claude/`、`egg-info/`、构建目录文本文件都进索引）；
+6. 期望待复核 2 条（`zace-0001` 构造点 vs 定义点、`aibox-0008` 负例前提），均不删题。
