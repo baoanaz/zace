@@ -24,15 +24,13 @@
 
 | 波次 | 同时开几个会话 | 泳道（工作区） | 任务卡（按序做） | 状态 |
 |---|---|---|---|---|
-| W1 | 4 | A `zace-lane-a` | TASK-001 | 已完成并合并 |
-| W1 | | B `zace-lane-b` | TASK-002 → 003 → 004 | 已完成并合并 |
-| W1 | | C `zace-lane-c` | TASK-005 → 009 | 已完成并合并 |
-| W1 | | D `zace-lane-d` | TASK-008 | 已完成并合并 |
-| W2 | 2 | A `zace-lane-a` | TASK-006 → 007 | **当前波次** |
-| W2 | | E `zace-lane-e` | TASK-010 → 011 → 012 | **当前波次** |
-| W3 | 1 | F `zace-lane-f` | TASK-013 → 014 → 015 | 等 W2 合并 |
-
-并行安全的前提：各泳道的文件所有权互不重叠（见各任务卡"交付物"节），且都只在自己工作区里提交。
+| W1 | 4 | A/B/C/D | TASK-001 / 002→003→004 / 005→009 / 008 | 已完成 |
+| W2 | 2 | A `zace-lane-a` | TASK-006 → 007 | 已完成 |
+| W2 | | E `zace-lane-e` | TASK-010 → 011 → 012 | 已完成 |
+| W3a | 3 | B `zace-lane-b` | TASK-016（BM25 多词召回修复 + E2E 回归） | **当前波次** |
+| W3a | | C `zace-lane-c` | TASK-017（证据块行序修复） | **当前波次** |
+| W3a | | F `zace-lane-f` | TASK-013（CLI + eval runner） | **当前波次** |
+| W3b | 1 | F `zace-lane-f` | TASK-014 → TASK-015（必须在 016/017 合并后跑） | 等 W3a |
 
 ## 2. 提示词（整段复制）
 
@@ -259,31 +257,118 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
 ```
 
-### W3-1 · 泳道 F（TASK-013 → 014 → 015 出口与评测）
+### W3a-1 · 泳道 B（TASK-016 BM25 多词召回修复）
 
 ```text
-你是 zace 项目的实施工程师，本会话负责【泳道 F：CLI/eval → golden 集 → bake-off 校准】。
-W2 的索引流水线（TASK-007）与检索组装（TASK-012）已由总览 AI 合并进 main。
+你是 zace 项目的实施工程师，本会话负责【泳道 B：BM25 多词召回语义修复 + 跨模块 E2E 回归】。
+背景：编排者的端到端实测发现中文自然语言查询在 BM25 通道恒零命中（FTS5 隐式 AND），
+导致 answerable 恒为 False——这是一个已定位、已给出修复方向的真实缺陷。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-f
-先执行 `git switch -c feature/task-013_xwzMMDD main` 确认能拿到最新主干；若目录或主干不对，先停下提醒我。
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-b
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1          # 应为 “Merge W2 lanes and add two quality-fix cards found by E2E”
+  git switch -c feature/task-016_xwzMMDD main
 
 【开工】
-1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"节、docs/tasks/README.md、benches/README.md。
-2. 按顺序完成 3 张任务卡（做完一张立刻做下一张）：
-   docs/tasks/TASK-013-CLI与Eval.md
-   docs/tasks/TASK-014-Golden集与基线.md
-   docs/tasks/TASK-015-Bakeoff与校准.md
-3. 工艺（每张卡重复一遍）：
-   a) 开分支：第一张 `git switch -c feature/task-013_xwzMMDD main`；后续卡从上一张卡的分支创建。
-   b) 只修改该卡"交付物（文件所有权）"清单里的文件；其他文件一律不动。
-   c) 跑通该卡"验收标准"的全部命令 + 基线三条：uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest。
-   d) 回填该卡"执行记录"节；任务板对应行状态改 review。
-   e) git add -A && git commit（"task-013: " / "task-014: " / "task-015: " 前缀）。
-4. 输出报告（每张卡一段）：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题。
+1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
+   docs/tasks/TASK-016-BM25多词召回修复.md（含完整背景、修复要求 A/B/C/D 与验收标准）、
+   docs/plan/contracts.md §3.3（R11-R13 裁定）。
+2. 完成 TASK-016 一张卡。特别注意：
+   - 卡内已给出 codegraph 的参考实现位置（source/codegraph/src/db/queries.ts:1505-1513，只读），
+     修复方向（OR 连接 + 列权重）已定，不要自行发明其他方案；若你判断方案有问题，先停下写进"未决问题"。
+   - 本卡**必须交付** core/tests/integration/ 的跨模块 E2E 测试（卡内 §D 列了 5 条必须断言）；
+     embedding 用卡内要求的确定性假 provider（CI 不联网）。
+   - 你会同步修改 core/tests/storage/ 下少量依赖旧 AND 语义的断言——这是卡内明确授权的，
+     每处改动要在执行记录说明；不得弱化"中文不分词不命中"等关键覆盖。
+3. 工艺：
+   a) 只修改卡内"交付物所有权"清单里的文件；其他文件一律不动（尤其 core/zace_core/contextpack/，那是 TASK-017 的范围）。
+   b) 跑通卡内"验收标准"全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   c) 回填"执行记录"（必须含修复前后对比数据：BM25 命中数 0→N、answerable False→True）。
+   d) 任务板 docs/tasks/README.md 里 TASK-016 那行状态改为 review。
+   e) git add -A && git commit（提交信息以 "task-016: " 开头）。
+4. 输出报告。
 
-【需要外部仓库时】TASK-014 需要 2-3 个真实仓库做 golden 集（建议 Python/C/C++ 各一个）。若本机没有，先报告缺什么、你打算 clone 哪些（列 URL 与 commit），等我确认后再继续；仓库放在 /tmp 之外会被清理的目录，不要 vendor 进仓库。
-【联网提示】TASK-015 需要下载候选 embedding 模型；先在报告里说明下载清单与耗时。
+【报告格式】
+- 卡号 / 分支：
+- 验收命令与结果：
+- 修复前后对比（BM25 命中数 / answerable / confidence）：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+```
+
+### W3a-2 · 泳道 C（TASK-017 证据块行序修复）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 C：ContextPack 证据块行号单调性修复】。
+背景：编排者的端到端实测发现渲染出的证据块行号回跳（9→6→14→1），会误导 agent 对齐编辑。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1          # 应为 “Merge W2 lanes and add two quality-fix cards found by E2E”
+  git switch -c feature/task-017_xwzMMDD main
+
+【开工】
+1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
+   docs/tasks/TASK-017-证据块行序修复.md（含根因分析、修复要求、DoD）、
+   docs/plan/contracts.md §3.3（R12）。
+2. 完成 TASK-017 一张卡。要点：
+   - 只改 合并区间的存储与渲染顺序 与 elidedLines 语义；阈值/配额/保底/E 编号顺序等行为保持不变。
+   - 卡内"DoD"第一条是修一处 flaky 性能断言（test_assembly.py 的 elapsed_ms < 50），
+     并发跑测试时会误报——放宽阈值或标 slow，不要删断言。
+3. 工艺：
+   a) 只修改卡内"交付物所有权"清单里的文件（core/zace_core/contextpack/、core/tests/contextpack/）；
+      其他一律不动（尤其 core/zace_core/storage/、core/zace_core/retrieval/，那是 TASK-016 的范围）。
+   b) 跑通卡内"验收标准"全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   c) 回填"执行记录"，贴一段修复后的渲染样例（证明行号单调、省略标注正确）。
+   d) 任务板对应行状态改 review。
+   e) git add -A && git commit（"task-017: " 前缀）。
+4. 输出报告（格式同上：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题）。
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+```
+
+### W3a-3 · 泳道 F（TASK-013 CLI + eval runner）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 F：core CLI + engine 装配 + golden runner】。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-f
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1          # 应为 “Merge W2 lanes and add two quality-fix cards found by E2E”
+  ls core/zace_core/pipeline core/zace_core/retrieval core/zace_core/contextpack
+  git switch -c feature/task-013_xwzMMDD main
+
+【开工】
+1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
+   docs/tasks/TASK-013-CLI与Eval.md、benches/README.md、docs/plan/contracts.md §3.2/§3.3。
+2. 完成 TASK-013 一张卡（**本波只做这一张**，不要提前做 014/015——它们必须等 BM25/行序修复合并后才跑，
+   否则黄金集指标会系统性失真）。
+3. 已知事项（避免踩坑）：
+   - 本波并行泳道 B 正在修 BM25（core/zace_core/storage/store.py + retrieval/bm25.py），
+     泳道 C 正在修 contextpack 行序。**你的 eval runner 要按接口调用，不要依赖这两处的当前行为**；
+     若你发现测试受它们影响，先记录不要修改它们的文件。
+   - `core/tests/contextpack/test_assembly.py` 有一处并发下会误报的 50ms 性能断言（泳道 C 正在修），
+     若你跑全仓测试时它偶发失败，不必处理。
+4. 工艺：
+   a) 只修改卡内"交付物所有权"清单里的文件（core/zace_core/cli/、core/zace_core/engine.py、benches/run.py、core/tests/cli/）；
+      `core/pyproject.toml` 的 console script 入口已预置（zace-core = "zace_core.cli:main"），无需改。
+   b) 跑通卡内"验收标准"全部命令（含新增的跨模块 E2E 断言）+ 基线三条。
+   c) 回填"执行记录"：贴对 zace 仓库自身 ingest 的真实耗时/chunks 数与 2 条中文查询输出摘要。
+   d) 任务板对应行状态改 review。
+   e) git add -A && git commit（"task-013: " 前缀）。
+5. 输出报告（格式：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题）。
+
 【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
 ```
 
