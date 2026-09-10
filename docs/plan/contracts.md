@@ -119,6 +119,10 @@
 
 > R36/R37 属 CF-05/CF-07 的**扩展**（新增可选参数/放宽字段必填），已由编排者先改契约文件再放行实现（orchestration §4 的 L2 流程）。
 
+| R38 | **M2a 的 MCP 接入形态**（用户 2026-09-10 拍板）：原设计（Module/05）把 MCP 放在 Rust client，前提是**服务在远端**（client 要扫描本地代码、算 hash、上传 blob）。本地模式下 service 与代码同机同文件系统，该前提不成立 | **M2a 由 service 直接提供 MCP Streamable HTTP 端点**（`/mcp`，编辑器填 URL 直连），同步环节在本地模式整体消失（改为服务端懒重扫 TASK-034 §C）。**Rust client 保留给远端场景**（M2c），届时它才必需（在代码本地扫描/哈希/上传到 VPS）。分期记录：M2a = HTTP MCP；M2c = Rust client + 同步。**依据**：Cursor 官方支持三种 transport（stdio / SSE / Streamable HTTP），HTTP 是其一等公民 |
+
+> R38 是**形态分期**裁定：不推翻 D-39（client = Rust），只是把 Rust client 的实现时点后移到它真正必需的场景。
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。

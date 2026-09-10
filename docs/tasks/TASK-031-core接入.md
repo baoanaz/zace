@@ -38,13 +38,20 @@
 `core/zace_core/engine.py::Engine.ingest` 增加关键字参数 `source: SourceProvider | None = None`，
 并把它传给 `_source_for` 的替代路径（`self._ingest(...)` 内部使用 `source or self._source_for(project_id)`）。
 
+> **根因更正（2026-09-10，实施 AI 实测推翻编排者的初判）**：不是"chunks 被清空"——
+> SQLite 的分块/符号**都还在**，被清空的是**向量索引**（`rebuild` 后重嵌 0 行）；而且
+> **指纹会被改写成"一致"**，所以这个错误**不会被重试、也不会再被发现**，检索能力静默退化到不可用。
+> 回归测试同时断言了这两点（`core/tests/integration/test_ingest_source.py`）。
+
 **为什么必须做（本卡的立项理由，测试必须覆盖）**：`Indexer.ingest()` 在配置指纹一级/二级失效时会走
 `full_reparse` / `reembed`，这两条路径**遍历 `source.list_files()` 重建**。上传模式下若 `_source_for`
 返回 `_EmptySource`（无本地目录绑定），结果是：
 
 ```text
 库里有文件 + 指纹缺失（异常中断）→ check_fingerprint 判 FULL_REPARSE
- → _run 清掉全部 chunk → list_files() 为空 → 什么也没重建 → 索引静默清空
+ → chunks 保留、向量索引清空（重嵌 0 行）
+ → 指纹被改写为"一致" → 该错误永不重试、不可自愈
+ → search 的 answerable 由 true 静默变为 false
 ```
 
 最小复现（测试里要断言"清空"与"修复后不清空"两种结果）：

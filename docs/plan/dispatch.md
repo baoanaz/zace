@@ -29,7 +29,8 @@
 | W3c | 2 | A / C | TASK-018 / TASK-019 | 已完成 |
 | W3d | 2 | B / F | TASK-020（零成本版）/ TASK-014（基线） | 已完成 |
 | W4a | 1 | A `zace-lane-a` | TASK-021 → TASK-022（质量修复） | 已完成 |
-| **W5a** | **1** | **A `zace-lane-a`** | **TASK-030 → 031 → 032 → 033**（Phase 2 M2a-1：service 外壳） | **当前波次** |
+| W5a | 1 | A `zace-lane-a` | TASK-030 → 031 → 032 → 033（Phase 2 M2a-1：service 外壳） | 已完成 |
+| **W5b** | **1** | **A `zace-lane-a`** | **TASK-035 → 034 → 040**（Phase 2 M2a-2：错误映射 → 本地模式 → **MCP 端点，demo 收口**） | **当前波次** |
 
 ## 2. 提示词（整段复制）
 
@@ -510,6 +511,63 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 
 【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
 core/zace_core/{types,interfaces,hashing}.py；遇到契约/设计冲突先停下写进"未决问题"。
+```
+
+### W5b · 泳道 A（Phase 2 M2a-2：本地模式 + MCP 端点，**demo 收口波**）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 A：Phase 2 M2a-2 —— 错误映射 → 本地单用户模式 → service 侧 MCP 端点】。
+背景：service 的骨架/查询/同步 API 已完成并合并。本波三张卡做完，用户就能在编辑器里用真实问题验证系统（M2 验收）。
+三张卡串联（同泳道、有依赖），做完一张立刻做下一张，不要等我确认。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 "Merge branch 'feature/task-033_xwz0910'"
+  git switch -c feature/task-035_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】按顺序完成 3 张任务卡：
+  docs/tasks/TASK-035-provider健康与错误映射.md
+  docs/tasks/TASK-034-本地单用户模式.md
+  docs/tasks/TASK-040-service侧MCP端点.md
+  第二张起从上一张的分支串联（git switch -c feature/task-034_xwzMMDD feature/task-035_xwzMMDD，以此类推）。
+
+【必读】
+  docs/tasks/README.md、docs/plan/orchestration.md 的"泳道模式"一节、
+  docs/contracts/mcp-tools.json（CF-06：工具 schema 是冻结合同）、
+  docs/plan/contracts.md §3.8（R33-R38；**R38 是本波 MCP 形态的裁定依据**，务必读）、
+  各卡"输入文档"节。
+
+【本波特别提醒（每一条都是踩过的坑或硬纪律）】
+1. TASK-040 的卡里有"已验证的实现要点"5 条——那是我实测 mcp==2.2.0 得到的结论，
+   **照做，别重新摸索**：导入路径是 mcp.server.mcpserver.MCPServer（不是 fastmcp，会直接 ImportError）；
+   挂载必须传 streamable_http_path="/"（否则路径叠加成 /mcp/mcp 全 404）；session manager 的 lifespan 必须跑。
+2. TASK-040 的 Origin 防护**默认已生效**（恶意 Origin 返回 403）——**不要为了"跑通"把它关掉**。
+3. 本波会新增第三方依赖 mcp>=2.2（只加在 service/pyproject.toml）。这是本波唯一允许的新依赖。
+4. TASK-034 的进度语义要诚实：索引期间 processed_files 允许为 0，**不许伪造百分比**（D-30）。
+5. TASK-034 的懒重扫失败**不得**让检索失败——记日志 + 如实报告，照常返回既有索引结果。
+6. TASK-040 必须复用 TASK-032 的 packmeta 与 render_markdown，不要另写一份 meta 或渲染。
+7. 不要基于当前 60 条测试集调检索质量参数（R29/R30 冻结中）。
+8. core 引擎调用是阻塞的——MCP 工具必须写成 async + 线程池执行，不要在事件循环里直接跑。
+
+【工艺】（每张卡重复）
+  a) 只修改该卡"交付物所有权"清单里的文件；
+  b) 跑通该卡"验收标准"全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+  c) 回填该卡"执行记录"（含卡内要求的实测输出）；
+  d) 任务板对应行状态改为 review；
+  e) git add -A && git commit（"task-035: " / "task-034: " / "task-040: " 前缀）。
+
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
 ```
 
 ## 3. 收尾
