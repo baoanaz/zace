@@ -1,6 +1,6 @@
 # TASK-020：BM25 查询侧噪声 token 过滤（原 IDF 重排方案已被实测否决）
 
-> 状态：pending（**编排者已修订范围**）｜ 阶段：Phase 1（W3d）｜ 硬依赖：TASK-016（OR 语义，已合并）｜ soft 依赖：无
+> 状态：review（实施完成，待编排者复核）｜ 阶段：Phase 1（W3d）｜ 硬依赖：TASK-016（OR 语义，已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-020_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/retrieval/bm25.py`、`core/tests/retrieval/`、`core/tests/storage/test_storage_fts.py`
 > （**不新增 Store 原语**——见 §D；`contextpack/` 与 `storage/store.py` 本卡不得改动）
@@ -156,4 +156,115 @@ DF 仅 19）——**稀有度本身在本语料上不可靠**，所以纯 IDF �
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### TASK-020 完成报告（2026-09-10，第二轮：按修订后 §D 收窄为「零成本清理」）
+
+- 分支：`feature/task-020b_xwz0910`（从 `main@086d24e` 开；上一轮分支 `feature/task-020_xwz0910`
+  已按指令删除，其 DF 探测实现**未带入**本轮；仅本地提交，未 push）
+- 交付（严格限定在卡内所有权清单）：
+  - `core/zace_core/retrieval/bm25.py`：`is_noise_token`（纯标点判定）+ `filter_bm25_tokens(tokens)`
+    （**签名不接 `store`**，纯函数零 SQL）+ `recall_bm25` 接入清洗 + 模块 docstring 写明
+    「`operator="and"` 路径若未来启用，需调用方自备 DF=0 清洗」的约定；
+  - `core/tests/retrieval/test_bm25.py`（+5 用例）、`core/tests/storage/test_storage_fts.py`（+1 用例）；
+  - **未改** `storage/store.py`（无新 Store 原语）、未动 RRF/rerank/装填层/向量通道/契约/设计文档。
+
+#### 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `uv run ruff check .` | All checks passed! |
+| `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过（core 纯库 / service 不上探） |
+| `uv run pytest` | **490 passed, 2 skipped**（基线 484 + 本卡新增 6；零回归） |
+| `uv run pytest core/tests/retrieval/test_bm25.py core/tests/storage/test_storage_fts.py -q` | 13 + 11 passed |
+
+#### 是否引入额外 SQL / 耗时（性能回归结论）
+
+**零额外 SQL**：`recall_bm25` 单次调用恒为 **1 条 `fts_search`**，不随 token 数增长——
+由 `test_recall_bm25_does_not_probe_tokens_one_by_one`（`_CountingStore` 计数包装）固定：
+单 token 查询与 ≥6 token 查询的 SQL 次数都恰为 1，且 `operator` 恒为 `"or"`。
+
+| 指标（真实靶场，20 次采样） | 上一轮（已否决的 DF 探测） | 本轮（纯函数清洗） |
+|---|---|---|
+| `recall_bm25` 额外 SQL | 11 条（1+11，逐 token `fts_search(limit=1)`） | **0 条** |
+| 清洗自身耗时 | 约 7.4ms/查询 | **0.0036ms**（`filter_bm25_tokens`） |
+| 单次 `fts_search(limit=50)` | 7.02ms（含 `？` 的 MATCH 串） | 6.61ms（清洗后，差异在噪声内） |
+| 单次 `recall_bm25` 端到端（含分词） | — | 6.80ms |
+
+#### 真实仓库前后对比（靶场 `aibox-super-sdk`；复用只读索引 `/tmp/zace-aibox`，project `8f39057792cf72e8`，434 文件 / 5760 chunks）
+
+查询：`workflow 在记忆系统里是怎么定义和使用的？`（「前」= TASK-016 原路径直接 `fts_search`，
+「后」= 本卡 `recall_bm25`；两组均在同一索引上实测）
+
+**① 进入 MATCH 的 token 清单**
+
+| | token 清单 | 个数 |
+|---|---|---|
+| 前 | `workflow 在 记忆系统 里 是 怎么 定义 和 使用 的 ？` | 11 |
+| 后 | `workflow 在 记忆系统 里 是 怎么 定义 和 使用 的` | 10 |
+| 丢弃 | `？`（DF=0，全库无命中；`is_noise_token` 判为纯标点） | 1 |
+
+各 token 实测 DF：`workflow 22`、`在 825`、`记忆系统 462`、`里 19`、`是 494`、`怎么 19`、
+`定义 386`、`和 1680`、`使用 531`、`的 1485`、`？ 0`（与卡内背景表一致）。
+
+**② 目标文件 `src/aibox/capabilities/memory/internal/maintenance.py` 的 BM25 rank 前后对比**
+
+| 指标 | 前 | 后 |
+|---|---|---|
+| OR 命中集规模 | 2400 | 2400 |
+| 目标文件首个块（`...(module):1`）rank | 471 | **471（不劣化）** |
+| 是否进 top50 | 否 | 否 |
+| OR 结果 chunk_id 序列逐项一致 | — | **是** |
+| bm25 分值序列逐项一致 | — | **是** |
+
+**③ 最终 ContextPack 的 Code/Docs 块数**（`zace-core search --json`，预算 10000 tokens）
+
+| 指标 | 前 | 后 |
+|---|---|---|
+| Code（`evidence` 非 elided） | 1（`.../memory/example/chatbot/agent.py`） | 1（同） |
+| Docs（`docs` 非 elided） | 34 | 34 |
+| 目标文件出现 | 否 | 否 |
+| answerable / confidence | True / medium | 完全相同 |
+| budget | usedTokens 9087、truncated True、omittedCount 6 | 完全相同 |
+| `--json` 全量输出 | — | 与修复前 **逐字节一致**（`diff` 无差异） |
+
+**结论（诚实表述）**：本卡对 **OR 召回结果与最终 ContextPack 无任何改变**（实测逐项/逐字节一致）——
+这正是 R20 的实测结论，不声称任何质量提升。确定收益是：① 进入 MATCH 的 token 串更干净；
+② 删除约 7.4ms/查询的零收益探测；③ 把「AND 需调用方自备 DF=0 清洗」的口径写进代码与测试。
+目标 rank 471 与装填层 Docs/Code 失衡按裁定分别归 R24 / R21。
+
+#### 测试覆盖（对照修订后 DoD）
+
+| DoD 条目 | 落点 |
+|---|---|
+| ① `is_noise_token` 真值表 | `test_is_noise_token_truth_table`（标点/空白/符号为真；字母/数字/CJK/混合/`token_1` 为假） |
+| ② `filter_bm25_tokens` 不接 store | `test_filter_bm25_tokens_is_a_pure_function`（`inspect.signature` 断言参数恰为 `["tokens"]`） |
+| ③ 全 token 被过滤 → 空列表 | `test_recall_bm25_returns_empty_when_every_token_is_noise`（4 组纯标点查询） |
+| 性能回归（新增硬要求） | `test_recall_bm25_does_not_probe_tokens_one_by_one`（单次调用恒 1 条 SQL、`operator="or"`） |
+| 不得声称质量提升 | `test_noise_filter_does_not_change_or_results`（清洗前后 OR 的 chunk_id 与 bm25 分逐项一致） |
+| 保持 `operator="and"` 语义与 Store 边界 | `test_operator_and_boundary_facts_are_unchanged_by_query_side_cleaning`（Store 层：标点不影响 OR/AND；库外词仍使 AND 恒空） |
+
+上一轮写入 `test_storage_fts.py` 的 `test_operator_and_is_unchanged_by_query_side_noise_filtering` 因从最新
+`main` 重开分支已不在工作树中；本轮以新口径的 Store 层用例重新落点，断言**未弱化**（新增 OR 逐项一致断言）。
+
+#### 契约影响
+
+无。只改 `retrieval/bm25.py` 内部与两个测试文件；`Store` 签名/语义、`types.py`、`interfaces.py`、
+`docs/contracts/**`、`docs/design/**`、RRF/rerank/装填层/向量通道全部未动。
+
+#### 与设计偏差
+
+无。本轮严格按修订后 §D 执行：`filter_bm25_tokens` 不接 `store`、无逐 token DF 探测、
+无 IDF 重排、无新 Store 原语、无排序行为变更。
+
+#### 未决问题
+
+1. **R20 因果描述已按实测修正，卡内 §A/§D 的历史文字仍留有旧表述**（§A.2「库中不存在的 token 丢弃
+   ——需一次轻量查询」已由 §D.3 显式推翻；§B 保留为否决记录）。本轮不改设计/契约文档，仅提示编排者：
+   任务卡正文中 §A.2 与 DoD 中「批量 DF 查询不超过 2 条 SQL」「IDF 权重单调性」「目标块进 BM25 top10」
+   仍是 §B 时代的残留条目（与本轮范围冲突），建议在合并时统一清理。
+2. **`？` 不会使 AND 恒空**（R20 已裁定，本轮测试已按真实机制落点）：FTS5 unicode61 把不可切分标点
+   当分隔符，`"？"` 不产生词项。真实使 AND 恒空的是**可切分但库外（DF=0）**的 token（如 `k8s`）。
+   因 `filter_bm25_tokens` 不再探测库内，**本卡实现不解决该场景**——按 §D.4 属未来 AND 调用方责任。
+3. **R22 负例未改善（预期内）**：负例 `Kubernetes operator 的部署协调逻辑在哪里实现？` 的 token
+   `Kubernetes(DF=3)/operator/部署/协调/逻辑/实现` 均在库中，唯一 DF=0 的仍是 `？`，
+   清洗后 token 集仅少一个零贡献项，故结果不变（仍无 `missingEvidence`）。按卡「明确不做」转 R22/R24。
+4. **目标 rank 471 未改善**：本卡范围内不可解（排序变更属 R24，需 golden set 基线）。

@@ -81,6 +81,37 @@ def test_update_removes_stale_fts_rows(
     assert store.fts_search(segment("连接复用"), 10)[0][0] == new.id
 
 
+def test_operator_and_boundary_facts_are_unchanged_by_query_side_cleaning(
+    store: Store, make_parsed: Callable[..., ParsedFile], make_chunk: Callable[..., ChunkDef]
+) -> None:
+    """TASK-020：清洗在检索层（``retrieval.bm25``）纯函数，**Store 语义不变**。
+
+    两个边界都在本测试里固定（R20 实测修正后的因果，2026-09-10）：
+
+    - 标点（``？``）在 unicode61 下不产生词项（当分隔符）→ **不影响 OR，也不影响 AND**；
+    - **可切分但库外（DF=0）** 的 token 仍如实使 ``operator="and"`` 恒空，而 OR 不受影响
+      ——清洗是调用方（``bm25.filter_bm25_tokens``）的事，Store 不猜库内内容。
+    """
+    chunk = make_chunk(fqn="f", start=1, content="def f():\n    # 令牌刷新\n    pass\n")
+    store.apply_file_change(make_parsed(), [chunk], "file-hash-1")
+
+    punctuated = segment("令牌刷新？")
+    assert "？" in punctuated.split()  # 前提：分词产出标点 token
+    assert [chunk_id for chunk_id, _ in store.fts_search(punctuated, 10, operator="and")] == [
+        chunk.id
+    ]
+    assert [chunk_id for chunk_id, _ in store.fts_search(punctuated, 10)] == [chunk.id]
+
+    with_off_index = segment("令牌刷新 Kubernetes")
+    assert store.fts_search(with_off_index, 10, operator="and") == []
+    assert [chunk_id for chunk_id, _ in store.fts_search(with_off_index, 10)] == [chunk.id]
+
+    # OR 结果对「零贡献 token」不敏感：含标点/库外词的 MATCH 串与清洗后的结果逐项一致。
+    cleaned = segment("令牌刷新")
+    assert store.fts_search(with_off_index, 10) == store.fts_search(cleaned, 10)
+    assert store.fts_search(punctuated, 10) == store.fts_search(cleaned, 10)
+
+
 def test_fts_syntax_characters_in_query_are_not_operators(
     store: Store, make_parsed: Callable[..., ParsedFile], make_chunk: Callable[..., ChunkDef]
 ) -> None:
