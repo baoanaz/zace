@@ -52,7 +52,7 @@
 | [TASK-031](TASK-031-core接入.md) | core 接入（EngineManager + BlobSource + 项目 API + `ingest(source=)` 契约实现） | TASK-030 | `service/zace_service/{runtime,blobstore,sync_state,deps}.py`、`core/zace_core/engine.py` | done |
 | [TASK-032](TASK-032-查询API.md) | 查询 API（search 渲染 + ask 降级包 + `meta` 字段集冻结给 client） | TASK-031 | `service/zace_service/{routers/query,packmeta}.py` | done |
 | [TASK-033](TASK-033-同步API.md) | 同步 API（batch-upload / checkpoint / deletions / status；CF-05 幂等语义） | TASK-032 | `service/zace_service/routers/sync.py` | done |
-| [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | pending |
+| [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | review |
 | [TASK-034](TASK-034-本地单用户模式.md) | 本地单用户模式（attach 本地仓库 + 一键起 + 后台索引进度 + 懒重扫） | TASK-035 | `service/zace_service/{runtime,indexer,__main__,config}.py` | pending |
 | [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | pending |
 

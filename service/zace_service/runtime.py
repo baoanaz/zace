@@ -10,10 +10,13 @@
 不做 per-project 引擎实例缓存：``Store`` / ``VectorStore`` 都是 per-call 打开，
 ``Engine`` 本身无状态句柄（卡内明确"不要提前优化"）。
 
-已知契约缺口（详见任务卡执行记录"未决问题"）：CF-07 的 ``ingest`` 只返回 ``job_id``，
-而同步 API 需要 ``IngestReport``（added/skipped/errors 等）。为不在本卡改动 core 的公开面
-（卡内只允许 §A 一处 core 改动），:meth:`EngineManager.ingest` 转调 ``Engine._ingest`` 取回
-报告；建议后续在 core 侧把"ingest 并返回报告"纳入公开面。
+已知契约缺口（TASK-035 §C 已收敛）：CF-07 的 ``ingest`` 只返回 ``job_id``，而同步 API 需要
+``IngestReport``（added/skipped/errors 等）。现改调 core 的**公开** ``Engine.apply_changes``
+（TASK-035 §C 方案 1），service 侧不再出现 ``engine._ingest``。
+
+provider 健康（TASK-035 §A/§B）：:meth:`EngineManager.provider_health` 供 sync/query 的
+错误分支使用；它**不加载模型、不做推理**，只用两个信号：①最近一次 provider 故障记忆
+（每次 ingest/search 后更新）②``Engine.provider`` 的构造（配置合法性 + 本地模型文件定位）。
 """
 
 from __future__ import annotations
@@ -23,13 +26,15 @@ import logging
 import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from zace_core.engine import PROJECT_META_FILENAME, Engine, EngineError, SearchTrace
 from zace_core.pipeline import IngestReport
 from zace_core.types import ChangeSet, ProjectHandle
 
 from zace_service.blobstore import BlobSource, BlobStore
+from zace_service.errors import embedding_failure_reason
+from zace_service.logging import redact_text
 from zace_service.sync_state import SyncState
 
 __all__ = ["EngineManager"]
@@ -38,6 +43,8 @@ logger = logging.getLogger("zace_service.runtime")
 
 #: 引擎工厂（测试注入假 embedding provider 的接缝）。
 EngineFactory = Callable[[Path], Engine]
+
+_T = TypeVar("_T")
 
 
 class EngineManager:
@@ -48,6 +55,8 @@ class EngineManager:
         self._engine = engine
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        #: 最近一次 provider 故障摘要（脱敏）；成功后清空。见 provider_health。
+        self._provider_error: str | None = None
 
     @classmethod
     def open(
@@ -153,9 +162,10 @@ class EngineManager:
         """索引一次变更集（同 project 串行；source 用账本快照，见卡内 §A/§B）。"""
         with self._lock_for(project_id):
             source = self.blob_source(project_id)
-            # ``_ingest`` 是 core 内部入口（返回 IngestReport）；CF-07 的 ``ingest`` 只回 job_id。
-            # 见模块 docstring 的"已知契约缺口"。
-            return self._engine._ingest(project_id, changes, full=False, source=source)  # noqa: SLF001
+            # TASK-035 §C：调 core 的公开 ``apply_changes``（不再跨包调 ``Engine._ingest``）。
+            return self._observe_provider(
+                lambda: self._engine.apply_changes(project_id, changes, source=source)
+            )
 
     def sync_status(self, project_id: str) -> dict[str, Any]:
         """core ``sync_status`` 全字段（camelCase，CF-05）+ 同步侧追加字段（TASK-033 口径）。"""
@@ -179,7 +189,57 @@ class EngineManager:
 
     def search(self, project_id: str, query: str, max_tokens: int = 10_000) -> SearchTrace:
         """Fast 模式检索（core ``search_with_trace``：通道健康度/候选计数给 meta 用，R33）。"""
-        return self._engine.search_with_trace(project_id, query, max_tokens)
+        return self._observe_provider(
+            lambda: self._engine.search_with_trace(project_id, query, max_tokens),
+            # 降级（如向量通道失败）不是"provider 恢复了"：保留故障记忆，不谎报健康。
+            recovered=lambda trace: not trace.degraded,
+        )
+
+    # ------------------------------------------------------------------ provider 健康（§A/§B）
+
+    def provider_health(self) -> tuple[bool, str | None]:
+        """provider 健康快照 ``(ok, reason)``（TASK-035 §A/§B）。
+
+        **不加载模型、不做真实推理**，只用两个信号：
+
+        1. 故障记忆：最近一次 ingest/search 是否因 provider 挂掉失败（成功即清空）——
+           连接类故障（如 API 地址不可达）只有在真实调用时才暴露，光看配置看不出来；
+        2. 配置合法性 + 已加载状态：``Engine.provider`` 的构造（``EMBED_*`` 合法？本地模型文件
+           可定位？）。已构造过（``provider`` 属性已缓存）→ 直接 ok。
+
+        调用方（query/sync 的错误分支）据此把根因放在首位：provider 坏了就要报 503，
+        而不是让客户端看到"请先同步"去无限重试（TASK-035 §B）。
+        """
+        if self._provider_error is not None:
+            return False, self._provider_error
+        try:
+            _ = self._engine.provider  # 构造（不推理）：配置非法/模型文件不可用在此暴露
+        except Exception as exc:  # EngineError（包装 EmbeddingError）/ EmbeddingError
+            reason = embedding_failure_reason(exc) or redact_text(
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False, reason
+        return True, None
+
+    def _observe_provider(
+        self, call: Callable[[], _T], *, recovered: Callable[[_T], bool] | None = None
+    ) -> _T:
+        """执行一次可能触碰 provider 的 engine 调用，记录/清除 provider 故障记忆。
+
+        ``recovered`` 判定"这次调用算不算 provider 正常"（缺省：没抛异常就算）；
+        ``search`` 传 ``not trace.degraded``——向量通道降级时 provider 其实没恢复。
+        """
+        try:
+            result = call()
+        except Exception as exc:
+            reason = embedding_failure_reason(exc)
+            if reason is not None:
+                self._provider_error = reason
+                logger.warning("embedding provider 故障：%s", reason)
+            raise
+        if recovered is None or recovered(result):
+            self._provider_error = None
+        return result
 
     def close(self) -> None:
         self._engine.close()
