@@ -100,7 +100,9 @@ def test_reapply_same_change_is_idempotent(
     assert delta.removed_chunk_ids == ()
     assert store.counts()["chunks"] == 2
     # FTS 行随 chunks 重建，不重复累积。
-    assert len(store.fts_search(segment("return 2"), 10)) == 1
+    # 语义变更（R11/TASK-016）：fts_search 默认改为 OR，这里要断言“不重复累积”必须显式用
+    # operator="and"（否则两个 chunk 都含 token "return"，计数无法区分累积与多命中）。
+    assert len(store.fts_search(segment("return 2"), 10, operator="and")) == 1
 
 
 def test_chunk_with_foreign_file_path_rejected(

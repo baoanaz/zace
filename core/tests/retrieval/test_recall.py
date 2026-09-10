@@ -72,7 +72,9 @@ def test_recall_merges_three_channels(store, seed_file, sym, provider, vector_cl
     assert result.candidates[0].chunk_id == service.chunk_id
 
     cache = by_id["src/cache.py:refreshToken:5"]
-    assert cache.channel_ranks == {CHANNEL_INFERRED: 1}
+    # R11/TASK-016：fts_search 默认 OR → 只含查询词之一（refreshToken）的块也进 BM25 候选
+    # （旧断言假设隐式 AND，只有同时含 TokenService.refresh 与 refreshToken 的块才入池）。
+    assert cache.channel_ranks == {CHANNEL_INFERRED: 1, CHANNEL_BM25: 2}
     assert cache.tier == 1
 
     panel = by_id["src/ui/refresh_panel.py:refreshPanel:3"]
