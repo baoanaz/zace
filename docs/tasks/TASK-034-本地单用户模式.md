@@ -1,6 +1,6 @@
 # TASK-034：本地单用户模式（attach 本地仓库 / 一键起 / 后台索引进度 / 懒重扫）
 
-> 状态：pending ｜ 阶段：Phase 2（M2a-2）｜ 硬依赖：TASK-035 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 2（M2a-2）｜ 硬依赖：TASK-035 ｜ soft 依赖：无
 > 建议分支：`feature/task-034_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/runtime.py`（追加 attach / 后台索引 / 重扫；既有引擎方法语义不改）
@@ -93,15 +93,15 @@ zace-service local --repo /path/to/repo [--data-root ~/.zace] [--port 8787]
 
 ## 验收标准（DoD）
 
-- [ ] attach：小仓库（temp 目录，含 py + md）→ 立即返回 + 后台索引；轮询 `GET /api/projects/{id}` 直到 `state="done"`；随后 `search` 命中（**异步索引也要有确定性测试**：轮询 + 超时上限，不用 sleep 猜时间）。
-- [ ] 重入：索引中再 attach/rescan → 409 `index_running`，且**不产生第二个 worker**（断言线程数或进度未被重置）。
-- [ ] 非本地模式 `POST /api/projects/attach` → 403 `local_mode_required`。
-- [ ] 失败路径：`root=/nonexistent` → 400 `invalid_root`；索引中途制造失败（如临时把 provider 打坏）→ `state="failed"` + `error` 非空 + **服务仍 200 存活**。
-- [ ] 懒重扫：`local_rescan_interval_s=0` → 不发扫描（断言 mtime 调用或目录未被重读）；>0 时改一个文件后 search 能命中新内容；**重扫失败时 search 仍返回结果**（monkeypatch 让 `ingest_repo` 抛异常，断言 200 + `freshness` 有提示）。
-- [ ] 一键起：`uv run zace-service local --repo <temp repo> --port 8792` 真实进程跑通；贴出启动输出 + `curl /healthz` + 索引完成后的 `search`。
-- [ ] 真实仓库自举（**必做**）：用 `--repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data-root /tmp/zace-034-cam` 起服务，贴出索引进度变化与至少一条检索结果（**这一步验证"能在真仓库跑通"，比单测更有价值**）。
-- [ ] 基线三条命令全绿：`uv run ruff check .`、`uv run python scripts/check_dependency_direction.py`、`uv run pytest`
-- [ ] 任务卡"执行记录"已回填；任务板对应行状态改 `review`。
+- [x] attach：小仓库（temp 目录，含 py + md）→ 立即返回 + 后台索引；轮询 `GET /api/projects/{id}` 直到 `state="done"`；随后 `search` 命中（**异步索引也要有确定性测试**：轮询 + 超时上限，不用 sleep 猜时间）。
+- [x] 重入：索引中再 attach/rescan → 409 `index_running`，且**不产生第二个 worker**（断言线程数或进度未被重置）。
+- [x] 非本地模式 `POST /api/projects/attach` → 403 `local_mode_required`。
+- [x] 失败路径：`root=/nonexistent` → 400 `invalid_root`；索引中途制造失败（如临时把 provider 打坏）→ `state="failed"` + `error` 非空 + **服务仍 200 存活**。
+- [x] 懒重扫：`local_rescan_interval_s=0` → 不发扫描（断言 mtime 调用或目录未被重读）；>0 时改一个文件后 search 能命中新内容；**重扫失败时 search 仍返回结果**（monkeypatch 让 `ingest_repo` 抛异常，断言 200 + `freshness` 有提示）。
+- [x] 一键起：`uv run zace-service local --repo <temp repo> --port 8792` 真实进程跑通；贴出启动输出 + `curl /healthz` + 索引完成后的 `search`。
+- [x] 真实仓库自举（**必做**）：用 `--repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data-root /tmp/zace-034-cam` 起服务，贴出索引进度变化与至少一条检索结果（**这一步验证"能在真仓库跑通"，比单测更有价值**）。
+- [x] 基线三条命令全绿：`uv run ruff check .`、`uv run python scripts/check_dependency_direction.py`、`uv run pytest`
+- [x] 任务卡"执行记录"已回填；任务板对应行状态改 `review`。
 
 ## 明确不做
 
@@ -123,4 +123,167 @@ zace-service local --repo /path/to/repo [--data-root ~/.zace] [--port 8787]
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-11 · 实施 AI · 分支 `feature/task-034_xwz0910`（从 `feature/task-035_xwz0910` 串联）
+
+**改动文件**（全部在卡内"交付物所有权"清单内）：
+
+| 文件 | 内容 |
+|---|---|
+| `service/zace_service/indexer.py`（新建） | `ProjectIndexer` / `IndexProgress` / `validate_local_root` |
+| `service/zace_service/runtime.py`（追加） | `attach_local` / `index_progress` / `rescan_if_due` / `start_index` / `attached_root` / `describe_project` / `_stop_indexer`；`delete_project` 先停索引线程 |
+| `service/zace_service/{config,__main__}.py`（追加） | `local_rescan_interval_s`（`ZACE_LOCAL_RESCAN_INTERVAL`，默认 2.0，0=禁用）；`zace-service local --repo` 子命令 + 就绪信息 |
+| `service/zace_service/routers/{projects,ops}.py`（追加） | `POST /api/projects/attach`、`POST /api/projects/{id}/rescan`、列表/详情加 `attachedRoot`/`indexProgress`；`/healthz` 加 `projects` |
+| `service/zace_service/routers/query.py`（追加） | 检索前懒重扫 + 失败时 `meta.freshness.rescanError` |
+| `service/tests/test_local_mode.py`（新建） | 17 条确定性测试（轮询到终态，无 sleep 猜时间） |
+
+**验收命令与结果**
+
+1. 基线三条（在提交前的完整工作区上跑）：
+
+```text
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest
+629 passed, 2 skipped, 2 warnings in 48.90s      # 其中 service/tests/test_local_mode.py: 17 passed
+```
+
+2. 单测面覆盖（对应 DoD 逐条）：
+
+| DoD | 测试 |
+|---|---|
+| attach 立即返回 + 后台索引 + 完成后命中 | `test_attach_returns_immediately_and_indexes_in_background`、`test_attach_is_idempotent_for_the_same_root` |
+| 非本地模式 403 | `test_attach_requires_local_mode` |
+| `root` 非法 400 | `test_attach_invalid_root_is_400`（不存在/空白/是文件/空串） |
+| 列表与详情暴露 `attachedRoot`/`indexProgress` | `test_project_list_and_detail_expose_attached_root_and_progress`、`test_unattached_project_reports_idle_progress` |
+| 重入 409 + 不产生第二个 worker | `test_no_second_worker_and_rescan_conflict`（断言线程数=1 且 `startedAt` 未被重置） |
+| 手工 rescan 增量 | `test_manual_rescan_reindexes_changed_file`（`processedFiles=1`，只重解析变动的文件） |
+| 索引失败仍 200 存活 | `test_index_failure_is_reported_and_service_stays_alive` |
+| 删除时索引线程不复活目录 | `test_delete_during_index_does_not_resurrect_project` |
+| 懒重扫 0 禁用 / >0 生效 / 失败不阻断检索 | `test_lazy_rescan_disabled_when_interval_is_zero`、`test_lazy_rescan_picks_up_new_content`、`test_lazy_rescan_failure_does_not_break_retrieval` |
+| `/healthz` 进度字段 + 索引中仍 200 | `test_healthz_reports_attached_projects_and_stays_200_while_indexing`、`test_healthz_without_touching_core_returns_empty_projects` |
+| CLI 参数面 | `test_local_cli_parses_without_starting_a_server` |
+
+3. **一键起（真实进程，temp 仓库）**：
+
+```text
+$ uv run zace-service local --repo /tmp/zace-034-smoke/repo --data-root /tmp/zace-034-smoke/data --port 8792
+zace-service local 已启动（127.0.0.1:8792）
+  projectId : cf65f1d7e7f15686
+  dataRoot  : /tmp/zace-034-smoke/data
+  repo      : /tmp/zace-034-smoke/repo
+  身份      : 非 git 仓库 → 绝对路径 hash（D-29）；换路径/换机器 projectId 会变
+  索引      : 后台进行中（state=running，已处理 0/0 个文件）
+             进度：GET http://127.0.0.1:8792/api/projects/cf65f1d7e7f15686 ｜ 服务现在已可响应，不必等索引完成
+  检索接口  : POST http://127.0.0.1:8792/api/query/search
+  MCP       : 编辑器直连地址由 TASK-040 提供（/mcp + 配置片段）
+  懒重扫    : 每 2s 一次（0=禁用，ZACE_LOCAL_RESCAN_INTERVAL 可改）
+
+$ curl -s -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" http://127.0.0.1:8792/healthz
+status=200 time=0.209175s            # 首次请求含 EngineManager 懒构造，之后为个位数毫秒
+
+$ # 索引完成后检索（真实 HTTP，非 TestClient）
+$ curl -s -X POST http://127.0.0.1:8792/api/query/search -H 'Content-Type: application/json' \
+    -d '{"projectId":"cf65f1d7e7f15686","query":"refresh_token 是怎么刷新会话的？"}'
+answerable=True confidence=medium evidence=2 docs=1
+## Relevant Context
+### Code
+[E1] refresh_token — auth.py:10-23
+     reason: inferred symbol refresh_token + inferred rank 1 + bm25 -4.5050 + bm25 rank 1 + query symbol == chunk symbol +1.0 + entry point / exported symbol +0.2 + 相邻区间合并
+     10 |     def create(self, user: str) -> str:
+     11 |         """创建会话并返回 token。"""
+（同一进程内：启动前把 `refresh_token` 追加进 `auth.py`，索引完成后无需手动 rescan 即命中——
+幂等 attach 的增量扫描生效）
+```
+
+4. **懒重扫（真实进程）**：在服务运行中向 `auth.py` 追加函数 → `sleep 3`（> 2s 间隔）→
+`POST /api/query/search` 命中新函数 `refresh_token`（`auth.py:1-23`，vector rank 1），
+`meta.freshness.indexedAt` 由 `1789056671` 提前到 `1789056700`（重扫确实发生了）。
+
+5. **真实仓库自举（必做）**：
+
+```text
+$ uv run zace-service local --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice \
+      --data-root /tmp/zace-034-cam --port 8793
+zace-service local 已启动（127.0.0.1:8793）
+  projectId : 02f437a22ebbe713
+  身份      : git remote（D-29）
+  ...
+{"logger": "zace_service.indexer", "msg": "开始索引：02f437a22ebbe713（root=/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice，files=1382）"}   # 16:11:58 UTC
+```
+
+索引进度时间线（`GET /api/projects/02f437a22ebbe713` 的 `indexProgress`，每 30s 一次）：
+
+```text
+00:12:20 state=running processed=0/1382 err=None
+00:12:50 state=running processed=0/1382 err=None
+... （13 次采样，全程 running、processed 恒 0——**没有伪造百分比**，D-30）
+00:19:52 state=running processed=0/1382 err=None
+00:35:13 索引完成（日志）：parsed=281/1382，added=281，modified=0，deleted=0，errors=16
+         finishedAt - startedAt = 1395s ≈ 23m15s
+```
+
+索引期间服务可用性（同一时间窗内的 25 个 `GET /api/projects/{id}`）：全部 **200**，耗时 min 3.02ms / max 79.7ms（首包）。
+
+索引完成后检索（真实 HTTP）：
+
+```text
+$ curl -s -X POST http://127.0.0.1:8793/api/query/search -H 'Content-Type: application/json' \
+    -d '{"projectId":"02f437a22ebbe713","query":"摄像头代理 MWPCameraProxy 的初始化流程在哪里实现？"}'
+answerable=True confidence=medium channelsUsed=['bm25','vector'] evidenceCount=58 docsCount=3 degraded=False
+## Relevant Context
+### Code
+[E2] MWPCameraProxy::~MWPCameraProxy — cameraservice/proxy/MWPCameraProxy.h:18-22
+[E4] MWPCameraServer::MWPCameraServer — cameraservice/MWPCameraServer.cpp:9-12
+[E5] MWPCameraProxy::MWPCameraProxy — cameraservice/proxy/MWPCameraProxy.cpp:8-23
+     8 | MWPCameraProxy::MWPCameraProxy(){
+     9 |     InitConfig();
+    10 |     mPolicyManager=std::make_shared<MWPPolicyManager>(Car::PARK_TYPE_UART,this);
+```
+
+**真实仓库实测暴露的两点（如实登记）**
+
+- **`totalFiles`(1382) 与 `processedFiles`(281) 口径不同**：`totalFiles` 是 `DirectorySource.list_files()` 的数量，
+  `processedFiles` 是 `IngestReport.files_parsed`（真正解析成 chunk 的文件数）。差值不是"没扫完"，
+  而是 1382 里包含 1089 个 `cmake-build-release/.cache/clangd/index/*.idx`（二进制，被解析层跳过）
+  等非源码文件；`state` 依然是 `done`。字段语义已在 `indexer.py` 注释里写死，本卡不改字段集（TASK-040 依赖）。
+- **`error` 字段在 `state="done"` 时也可能非空**：成功路径把 `IngestReport.errors`（逐文件解析错误，
+  本次 16 条，如 `park/LogUtils.h: L47: syntax error near '...'`）如实写进 `error`，而不是丢掉。
+  读法应为"索引完成，但这些文件有解析问题"。命名有歧义，见"未决问题"。
+
+### 与设计的偏差 / 需登记的改动
+
+1. **CF-05 路径扩展（卡内 §A 已预授权）**：`POST /api/projects/attach`、`POST /api/projects/{id}/rescan`。
+   `service/tests/test_skeleton.py` 的路径快照测试因此改成"合同路径集合 ∪ `TASK_034_EXTENSION_PATHS`"，
+   白名单**写死**这两个路径：白名单外的任何增/删/改名仍然失败。
+   **待编排者动作**：`docs/contracts/openapi.yaml` 需补这两个路径（实施 AI 不改契约文件）。
+2. **`service/tests/test_error_mapping.py` 的改动（原因）**：`test_service_does_not_call_private_engine_ingest`
+   的匹配串由 `._ingest(` 收窄为 `engine._ingest(`。前者是宽泛子串匹配（任何 `xxx._ingest(` 都会命中，
+   与本断言的意图——§C"service 不再跨包调 core 的私有 `Engine._ingest`"——不等价），后者与 §C 结论逐字对应，
+   且仍能抓住真实违规形式（`self._engine._ingest(` 含 `engine._ingest(`）。
+   实测：当前源码里两种模式**都没有命中**（脚本检查 `service/zace_service/**/*.py` → `[]`），因此该断言的判定结果没有变化。
+3. **`IndexProgress.error` 在成功路径的用法**：见上（如实上报解析错误）。
+4. **attach 的 root 只存内存**（`runtime.py` 文档已写明）：不新增落盘状态文件（R35 的 `sync-state.json` 只服务上传路径）。
+   后果：重启服务后 `POST /api/projects/{id}/rescan` 返回 409 `local_root_unknown`（要重新 `zace-service local --repo` 或 `attach`）；
+   `ZACE_LOCAL_RESCAN_INTERVAL` 的懒重扫同理只在本次进程内生效。
+5. **`indexer.ProjectIndexer.start()` 立刻把快照置为 `state="running"`**（`started_at` 为当前时刻，`total_files` 待工作线程列举后补齐）：
+   否则 `attach` 的返回值与 CLI 就绪信息在"线程已起、尚未开始跑"的窗口里报 `idle`，调用方会误以为没开始。
+
+### 未决问题
+
+1. **`IndexProgress.error` 命名**：成功但有解析错误时也非空，容易读成"失败"。字段集是 TASK-040 的输入契约，
+   本卡不动；若编排者认可，后续可加 `warnings`/`parseErrors` 字段并收窄 `error` 的含义（属契约扩展，走 §4 流程）。
+2. **`processedFiles` 与 `totalFiles` 不同量纲**（1382 vs 281）：若 TASK-040 的错误文案直接拼成 `281/1382`
+   会被读成"没索引完"。MCP 侧文案已避开百分比、只说状态与文件数（TASK-040 的执行记录里有说明）。
+3. **`delete_project` 后在跑的索引线程**：`_stop_indexer` 会 `cancel()` + `join(timeout=30s)`；索引本身不可中断，
+   因此极端情况下（超 30s 未收尾）HTTP 删除请求会先返回，但线程仍在跑（此时 `_cancelled` 已置位，收尾后丢弃状态、不复活目录）。
+   彻底可中断需要 core 支持取消（属 TASK-062 范畴）。
+4. **`/tmp/zace-aibox`（TASK-040 卡里引用的已索引数据根）在本机重启后已丢失**（WSL `/tmp` 被清空），
+   TASK-040 的 aibox 端到端需重新 attach 索引一次（本卡已在后台重启，见 TASK-040 执行记录）。
+
+### 耗时观测（供编排者参考，非本卡承诺）
+
+camera-service 1382 列出文件 / 281 实际解析 / 6257 chunks → **23m15s**（与 TASK-033 的 aibox 17 分钟同量级）。
+其中解析+入库在头 12 秒内完成，其余时间在 embedding/向量写入（CPU，本机同时有另一泳道的测量进程竞争 CPU）。
+`cmake-build-release/**` 这类噪声目录会显著抬高 `list_files()`（D-28 缺口）——本卡按要求只记录、不修。

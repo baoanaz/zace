@@ -17,6 +17,12 @@
 provider 健康（TASK-035 §A/§B）：:meth:`EngineManager.provider_health` 供 sync/query 的
 错误分支使用；它**不加载模型、不做推理**，只用两个信号：①最近一次 provider 故障记忆
 （每次 ingest/search 后更新）②``Engine.provider`` 的构造（配置合法性 + 本地模型文件定位）。
+
+本地单用户模式（TASK-034）：:meth:`EngineManager.attach_local` 绑一个本地仓库 + 起
+:class:`~zace_service.indexer.ProjectIndexer` 后台索引（不阻塞启动），:meth:`rescan_if_due`
+在检索前做增量懒重扫。**绑定的 root 只存内存**：本地模式由 ``zace-service local --repo``
+每次重新绑定（``resolve_repo`` 幂等，D-29 身份不变），因此不新增落盘状态文件
+（R35 的同步账本只服务上传路径；M2c 引入 ``zace-meta.db`` 时再统一）。
 """
 
 from __future__ import annotations
@@ -24,20 +30,28 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from zace_core.engine import PROJECT_META_FILENAME, Engine, EngineError, SearchTrace
+from zace_core.engine import PROJECT_META_FILENAME, Engine, EngineError, RepoIdentity, SearchTrace
 from zace_core.pipeline import IngestReport
+from zace_core.storage.db import DB_FILENAME
 from zace_core.types import ChangeSet, ProjectHandle
 
 from zace_service.blobstore import BlobSource, BlobStore
 from zace_service.errors import embedding_failure_reason
+from zace_service.indexer import (
+    IndexProgress,
+    ProjectIndexer,
+    validate_local_root,
+)
 from zace_service.logging import redact_text
 from zace_service.sync_state import SyncState
 
-__all__ = ["EngineManager"]
+__all__ = ["AttachResult", "EngineManager"]
 
 logger = logging.getLogger("zace_service.runtime")
 
@@ -45,6 +59,42 @@ logger = logging.getLogger("zace_service.runtime")
 EngineFactory = Callable[[Path], Engine]
 
 _T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class AttachResult:
+    """``attach_local`` 的结果（TASK-034 的冻结接口；TASK-040 依赖）。"""
+
+    project_id: str
+    created: bool
+    root: str
+    identity: RepoIdentity
+    index_progress: IndexProgress
+
+    @property
+    def identity_key(self) -> str:
+        return self.identity.identity_key
+
+    @property
+    def is_git(self) -> bool:
+        """是否有 git remote 身份（False = D-29 退化为绝对路径 hash，需在响应里如实提示）。"""
+        return self.identity.remote_url is not None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "projectId": self.project_id,
+            "created": self.created,
+            "root": self.root,
+            "identityKey": self.identity_key,
+            "rootKind": "git" if self.is_git else "directory",
+            "note": None
+            if self.is_git
+            else (
+                "该目录不是带 remote 的 git 仓库：项目身份按 D-29 退化为绝对路径 hash，"
+                "换路径/换机器会得到不同 projectId"
+            ),
+            "indexProgress": self.index_progress.to_json(),
+        }
 
 
 class EngineManager:
@@ -57,6 +107,10 @@ class EngineManager:
         self._locks_guard = threading.Lock()
         #: 最近一次 provider 故障摘要（脱敏）；成功后清空。见 provider_health。
         self._provider_error: str | None = None
+        #: 本地模式（TASK-034）：projectId → 已绑定的仓库根 / 后台索引任务 / 上次重扫时刻。
+        self._local_roots: dict[str, Path] = {}
+        self._indexers: dict[str, ProjectIndexer] = {}
+        self._last_rescan: dict[str, float] = {}
 
     @classmethod
     def open(
@@ -125,11 +179,30 @@ class EngineManager:
                 continue
             meta = self.project_meta(directory.name)
             if meta is not None:
-                found.append(meta)
+                found.append(self.describe_project(directory.name, meta))
         return sorted(found, key=lambda item: (-item["createdAt"], item["projectId"]))
 
+    def describe_project(
+        self, project_id: str, meta: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """项目摘要 + 本地模式字段（``attachedRoot`` / ``indexProgress``；TASK-034 冻结）。"""
+        base = dict(meta) if meta is not None else self.project_meta(project_id)
+        if base is None:  # pragma: no cover - 调用方先判存在性
+            base = {"projectId": project_id, "displayName": "", "createdAt": 0}
+        root = self._local_roots.get(project_id)
+        return {
+            **base,
+            "attachedRoot": str(root) if root is not None else None,
+            "indexProgress": self.index_progress(project_id).to_json(),
+        }
+
     def delete_project(self, project_id: str) -> bool:
-        """级联删除（core 目录 rm -rf，含 ``blobs/`` 与 ``sync-state.json``）；不存在返回 False。"""
+        """级联删除（core 目录 rm -rf，含 ``blobs/`` 与 ``sync-state.json``）；不存在返回 False。
+
+        TASK-034 §B：先取消并等后台索引线程收尾，再拿 per-project 锁删除——否则索引线程
+        可能在 ``rm -rf`` 之后重建项目目录（"删除后不复活目录"）。
+        """
+        self._stop_indexer(project_id)
         with self._lock_for(project_id):
             if not self.project_exists(project_id):
                 return False
@@ -241,8 +314,131 @@ class EngineManager:
             self._provider_error = None
         return result
 
+    # ------------------------------------------------------------------ 本地单用户模式（TASK-034）
+
+    def attach_local(
+        self, root: str | Path, *, display_name: str = "", index: bool = True
+    ) -> AttachResult:
+        """绑定一个本地目录并（可选）启动后台索引（TASK-034 §A 的冻结接口）。
+
+        - ``resolve_repo`` 幂等：同目录重复 attach → 同 projectId（D-29 身份）；
+        - ``index=True`` 时**立即返回**，索引在后台线程跑（不阻塞启动；§B）；
+          **已在索引中时不重复启动**（返回当前进度，HTTP 层据此 409）；
+        - root 不存在/不是目录 → :class:`~zace_service.indexer.LocalRootError`（HTTP 400）。
+        """
+        path = validate_local_root(root)
+        handle, identity = self._engine.resolve_repo(path)
+        project_id = handle.project_id
+        self._local_roots[project_id] = path
+        self._initialize_project(project_id)
+
+        indexer = self._indexer_for(project_id, path)
+        if index and not indexer.running:
+            indexer.start()
+        return AttachResult(
+            project_id=project_id,
+            created=handle.created,
+            root=str(path),
+            identity=identity,
+            index_progress=indexer.progress(),
+        )
+
+    def attached_root(self, project_id: str) -> str | None:
+        """该实例已绑定的本地仓库根（未绑定/重启后未再 attach → ``None``）。"""
+        root = self._local_roots.get(project_id)
+        return str(root) if root is not None else None
+
+    def index_progress(self, project_id: str) -> IndexProgress:
+        """后台索引进度（TASK-034 的冻结接口；无任务 → ``state="idle"``）。"""
+        indexer = self._indexers.get(project_id)
+        return indexer.progress() if indexer is not None else IndexProgress()
+
+    def start_index(self, project_id: str, *, full: bool = False) -> bool:
+        """启动后台增量重扫（手动 ``/rescan``）；已在跑/未绑定 root → ``False``。"""
+        indexer = self._indexers.get(project_id)
+        if indexer is None or indexer.running:
+            return False
+        if full:  # 全量重建留给 TASK-062（本卡只做增量：卡内明确不做 full）
+            logger.warning("full=True 未实现，按增量处理：%s", project_id)
+        return indexer.start()
+
+    def rescan_if_due(self, project_id: str, *, min_interval_s: float) -> bool:
+        """本地模式懒重扫（TASK-034 §C 的冻结接口）：距上次扫描 ≥ 间隔则同步增量扫一次。
+
+        - ``min_interval_s <= 0`` → **禁用**（不发扫描，直接 False）；
+        - 未绑定本地 root（远端上传路径）→ False（远端靠客户端上传，不适用）；
+        - 已有后台索引在跑 → False（不叠加、不阻塞）；
+        - **同步执行**增量 ``ingest_repo``（不是全量）；失败**向上抛**，由调用方（检索路径）
+          记日志 + 如实上报，**不得**让检索失败（卡内 §C 纪律）。
+        """
+        if min_interval_s <= 0:
+            return False
+        root = self._local_roots.get(project_id)
+        if root is None:
+            return False
+        indexer = self._indexers.get(project_id)
+        if indexer is not None and indexer.running:
+            return False
+        now = time.monotonic()
+        last = self._last_rescan.get(project_id)
+        if last is not None and now - last < min_interval_s:
+            return False
+        self._last_rescan[project_id] = now
+        with self._lock_for(project_id):
+            self._engine.ingest_repo(project_id, root)
+        return True
+
     def close(self) -> None:
+        for indexer in list(self._indexers.values()):
+            indexer.cancel()
+            indexer.join()
+        self._indexers.clear()
         self._engine.close()
+
+    # ------------------------------------------------------------------ 内部（本地模式）
+
+    def _initialize_project(self, project_id: str) -> None:
+        """首次建库（SQLite schema 初始化），已在建/已建好则**立即返回**（不取锁）。
+
+        **为什么必须做（TASK-034 实测发现的真实竞争）**：``Store.open`` 首次会跑
+        ``executescript(schema)``。后台索引线程与 HTTP 读请求（``GET /api/projects/{id}``
+        → ``sync_status``）同时首次打开同一项目时，两边都看到"表不存在"、都去建表，
+        后到的一方拿到 ``sqlite3.OperationalError: table index_config already exists``，
+        索引直接失败。本方法在**启动后台索引之前**、持项目锁把库建好。
+
+        快路径（文件已存在即返回，``不取锁``）是必须的：索引线程会长时间持锁
+        （实测 aibox 全量 ~17 分钟），attach 若每次都去抢锁就会被卡住。
+        """
+        directory = self._engine.project_dir(project_id)
+        if (directory / DB_FILENAME).exists():
+            return
+        with self._lock_for(project_id):
+            if not (directory / DB_FILENAME).exists():
+                self._engine.sync_status(project_id)  # 建库/建表（空库代价极小）
+
+    def _indexer_for(self, project_id: str, root: Path) -> ProjectIndexer:
+        lock = self._lock_for(project_id)  # 先取项目锁（它自己要拿 _locks_guard，不可嵌套）
+        with self._locks_guard:
+            indexer = self._indexers.get(project_id)
+            if indexer is None or indexer.root != root:
+                indexer = ProjectIndexer(
+                    project_id,
+                    root,
+                    ingest=lambda: self._engine.ingest_repo(project_id, root),
+                    lock=lock,
+                )
+                self._indexers[project_id] = indexer
+            return indexer
+
+    def _stop_indexer(self, project_id: str) -> None:
+        """取消并等后台索引收尾（删除项目前调用；见 :meth:`delete_project`）。"""
+        with self._locks_guard:
+            indexer = self._indexers.pop(project_id, None)
+            self._local_roots.pop(project_id, None)
+            self._last_rescan.pop(project_id, None)
+        if indexer is not None:
+            indexer.cancel()
+            indexer.join()
 
     # ------------------------------------------------------------------ 内部
 

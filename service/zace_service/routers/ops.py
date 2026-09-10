@@ -1,9 +1,11 @@
-"""``/healthz`` 与 ops 端点（TASK-030 §交付物）。
+"""``/healthz`` 与 ops 端点（TASK-030 §交付物；TASK-034 §D 追加 projects 进度）。
 
 ``GET /healthz``（CF-05，``security: []``）：存活 + 依赖检查。口径：
 
 - **不加载 embedding 模型**（默认路径必须毫秒级返回）：只做一次 ``zace_core`` 顶层导入
   （纯 python 小模块），用于回答"内核是否可导入"；
+- ``projects``（TASK-034）：本地模式已绑定项目的 ``{projectId, attachedRoot, indexProgress}``，
+  **纯内存读取**（索引进行中也不变慢；不因索引中而返回非 200）；
 - ``?deep=1`` 才探测 embedding provider（构造 + 预热/试嵌），失败时返回 **200** 且
   ``core.ok=false`` + ``reason``——探活端点自身不因依赖不可用而 500（否则监控无法区分
   "服务挂了"与"依赖没配好"）；
@@ -40,7 +42,33 @@ def healthz(request: Request, deep: int = 0) -> dict[str, Any]:
         # R34：M2a 本地单用户模式免鉴权；M2c 才接入 token/session。
         "auth": "disabled(local)" if settings.local_mode else "enabled",
         "core": core,
+        "projects": _project_progress(request),
     }
+
+
+def _project_progress(request: Request) -> list[dict[str, Any]]:
+    """本地模式的项目进度（TASK-034 §D）：**纯内存**，不触碰 core，不加载模型。
+
+    索引进行中仍返回本字段（值就是当前 ``indexProgress``），``/healthz`` 仍 200——
+    "服务是活的"与"索引没跑完"是两件事，不能混为一谈（卡内 §D）。
+    """
+    manager = getattr(request.app.state, "engine_manager", None)
+    if manager is None:  # 尚未有请求碰过 core：不为了探活去构造 EngineManager
+        return []
+    projects: list[dict[str, Any]] = []
+    try:
+        listed = manager.list_projects()
+    except Exception as exc:  # 探活端点自身不因 core 异常而 500（同上口径）
+        return [{"error": redact_text(f"{type(exc).__name__}: {exc}")}]
+    for item in listed:
+        projects.append(
+            {
+                "projectId": item["projectId"],
+                "attachedRoot": item.get("attachedRoot"),
+                "indexProgress": item.get("indexProgress"),
+            }
+        )
+    return projects
 
 
 @router.get("/api/usage/projects/{id}")

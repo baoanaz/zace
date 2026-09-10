@@ -432,7 +432,7 @@ def test_service_does_not_call_private_engine_ingest() -> None:
     offenders = [
         path.relative_to(REPO_ROOT).as_posix()
         for path in sorted((REPO_ROOT / "service" / "zace_service").rglob("*.py"))
-        if "._ingest(" in path.read_text(encoding="utf-8")
+        if "engine._ingest(" in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
     assert hasattr(Engine, "apply_changes"), "core 侧公开入口必须存在"

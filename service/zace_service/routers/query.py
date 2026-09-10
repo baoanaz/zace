@@ -33,17 +33,19 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from zace_core.contextpack import render_markdown
 
-from zace_service.deps import get_engine_manager, require_project_id
+from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import (
     CODE_EMBEDDING_UNAVAILABLE,
     PROVIDER_UNAVAILABLE_HINT,
     ApiError,
 )
-from zace_service.logging import redact_text
+from zace_service.logging import get_logger, redact_text
 from zace_service.packmeta import evidence_summary, pack_meta
 from zace_service.runtime import EngineManager
 
 router = APIRouter(tags=["query"])
+
+logger = get_logger("zace_service.routers.query")
 
 #: ``query`` / ``question`` 的最大字符数（卡内冻结；防超长输入拖垮检索）。
 MAX_QUERY_CHARS = 2000
@@ -84,6 +86,7 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
     _require_max_tokens(payload.maxTokens)
     _require_index(manager, project_id)
 
+    rescan = _rescan_before_query(manager, request, project_id)
     trace = manager.search(project_id, query, payload.maxTokens)
     meta = pack_meta(
         trace.pack,
@@ -96,6 +99,7 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
         checkpoint_id=payload.checkpointId,
         include_pack=payload.includePack,
     )
+    meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
     return {"markdown": render_markdown(trace.pack), "meta": meta}
 
 
@@ -107,6 +111,7 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
     question = _require_query(payload.question, field="question", code="invalid_question")
     _require_index(manager, project_id)
 
+    rescan = _rescan_before_query(manager, request, project_id)
     trace = manager.search(project_id, question, DEFAULT_MAX_TOKENS)
     pack = trace.pack
     meta = pack_meta(
@@ -118,12 +123,51 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         candidate_count=trace.candidate_count,
         checkpoint_id=payload.checkpointId,
     )
+    meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
     return {
         "status": "degraded",
         "answer": f"{DEGRADED_NOTICE}\n\n{render_markdown(pack)}",
         "evidenceSummary": evidence_summary(pack),
         "meta": meta,
     }
+
+
+# --------------------------------------------------------------------------- 懒重扫（TASK-034 §C）
+
+
+def _rescan_before_query(
+    manager: EngineManager, request: Request, project_id: str
+) -> str | None:
+    """本地模式：检索前做一次增量懒重扫（TASK-034 §C）；返回**失败摘要**（成功/跳过 → None）。
+
+    纪律（卡内 §C）：
+
+    - **只在本地模式**且间隔 > 0 时；远端模式走客户端上传，不适用；
+    - 重扫**失败不得让检索失败**：记日志 + 把失败摘要交给调用方写进 ``freshness``
+      （作为 ``staleFiles`` 的补充信号，D-30 如实报告），照常返回既有索引的检索结果。
+    """
+    settings = get_settings(request)
+    if not settings.local_mode:
+        return None
+    try:
+        manager.rescan_if_due(project_id, min_interval_s=settings.local_rescan_interval_s)
+    except Exception as exc:
+        reason = redact_text(f"{type(exc).__name__}: {exc}")
+        logger.warning("懒重扫失败（检索照常）：%s → %s", project_id, reason)
+        return reason
+    return None
+
+
+def _with_rescan_signal(freshness: dict[str, Any], error: str | None) -> dict[str, Any]:
+    """把懒重扫结果附在 ``meta.freshness`` 上（仅失败时多一个键；成功/跳过 → 原样）。
+
+    为什么不改 CF-03：``freshness`` 的子键属 CF-03（``additionalProperties: false``），
+    改 ``meta.pack`` 的形状会破契约；这里是**服务端 meta** 的附加子键（TASK-034 §C 要求），
+    只在重扫失败时出现，且不改变任何既有字段的含义。
+    """
+    if error is None:
+        return freshness
+    return {**freshness, "rescanError": error}
 
 
 # --------------------------------------------------------------------------- 校验
