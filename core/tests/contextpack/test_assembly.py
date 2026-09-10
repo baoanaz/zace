@@ -435,7 +435,7 @@ def test_index_signals_without_store_inputs(store, seed_file, sym, cand) -> None
 # --------------------------------------------------------------------------- 性能
 
 
-def test_assembly_under_50ms_for_200_candidates(store, seed_file, sym, cand) -> None:
+def test_assembly_under_200ms_for_200_candidates(store, seed_file, sym, cand) -> None:
     for index in range(20):
         seed_file(
             store,
@@ -453,5 +453,7 @@ def test_assembly_under_50ms_for_200_candidates(store, seed_file, sym, cand) -> 
     started = time.perf_counter()
     pack = assemble(store, "token 刷新", candidates, config=BudgetConfig(hard_cap=10_000))
     elapsed_ms = (time.perf_counter() - started) * 1000
-    assert elapsed_ms < 50, f"组装耗时 {elapsed_ms:.1f}ms ≥ 50ms"
+    # 阈值 50ms 在多泳道并发跑测试时会误报（编排者实测 3 泳道并发失败 1 次，TASK-017）；
+    # 放宽到 200ms 仍保留性能下限回归保护（断言不删）。
+    assert elapsed_ms < 200, f"组装耗时 {elapsed_ms:.1f}ms ≥ 200ms"
     assert pack.evidence

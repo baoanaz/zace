@@ -21,7 +21,10 @@ tier 不作为排序键（D-17）：只做配额与资格线
 - **skeleton 降级**只在"超单文件上限或超硬预算"时触发（>300 行是前置条件）；
 - **"命中行"**：RRF 只给 chunk 粒度 → 取**切片起始行**（符号定义行，即该切片锚点行）起
   ``context_lines`` 行，其余计入 ``elidedLines``；
-- **token 估算** = ``ceil(chars/4)``（近似，不引入 tokenizer，Module/03 §2 要点 3）。
+- **token 估算** = ``ceil(chars/4)``（近似，不引入 tokenizer，Module/03 §2 要点 3）；
+- **片段化存储（TASK-017 / R12）**：``_Slot`` 按 ``(start, end, 原文)`` 片段列表存正文，
+  合并按行号**有序插入**并去重重叠行；出口按片段行号升序编号拼接，省略区间**就地标注**
+  （``... （省略 N 行）``）；``elidedLines`` = 声明区间行数 − Σ片段行数（真实省略行数）。
 """
 
 from __future__ import annotations
@@ -53,7 +56,9 @@ __all__ = [
     "assemble",
     "budget_for",
     "collect_index_signals",
+    "elision_note",
     "estimate_tokens",
+    "has_elision_note",
     "numbered_lines",
     "to_json",
 ]
@@ -79,6 +84,21 @@ def numbered_lines(content: str, start_line: int) -> str:
     """切片正文 → 带行号原文（``45 | def refresh(self):``）。"""
     lines = content.splitlines()
     return "\n".join(f"{start_line + offset} | {line}" for offset, line in enumerate(lines))
+
+
+#: 省略区间标注（证据块正文与渲染层共用同一措辞；Module/03 §6）。
+_ELISION_TEMPLATE = "... （省略 {count} 行）"
+_ELISION_PREFIX = "... （省略"
+
+
+def elision_note(count: int) -> str:
+    """省略标注文本（``... （省略 9 行）``）。"""
+    return _ELISION_TEMPLATE.format(count=count)
+
+
+def has_elision_note(content: str) -> bool:
+    """正文里是否已**就地**标注了省略区间（合并区间的间隙 / 降级尾部）。"""
+    return any(line.strip().startswith(_ELISION_PREFIX) for line in content.splitlines())
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,14 +164,40 @@ def _symbol_name_from_id(symbol_id: str) -> str:
 
 
 @dataclass(slots=True)
+class _Segment:
+    """证据块内的一个连续行区间：``text`` 为该区间的**原始**正文（渲染时加行号）。
+
+    真实 chunk 的 ``content`` 行数与 ``[start_line, end_line]`` 等长；测试夹具允许二者不等
+    （符号声明区间与正文长度不一致），此时按行号裁剪原文可能取到空文本（不渲染，只记行账）。
+    """
+
+    start: int
+    end: int
+    text: str
+
+    @property
+    def line_count(self) -> int:
+        """该区间覆盖的行数（按行号算，elidedLines 的账）。"""
+        return self.end - self.start + 1
+
+
+@dataclass(slots=True)
 class _Slot:
-    """已装填的一项（含行区间与 token 账，供合并/降级用）。"""
+    """已装填的一项（片段列表 + 声明末行 + token 账，供合并/降级用）。"""
 
     candidate: Candidate
     item: EvidenceItem
     base_reason: str
-    span: tuple[int, int]
+    segments: list[_Segment]
+    #: 声明覆盖的末行（≥ 末个片段 end）：skeleton 降级只保留前 N 行时，尾部省略记在这里。
+    elision_upper: int
+    prelude: str = ""  # skeleton 降级的签名（带行号），置于首个片段之前
     aggregated: int = 0
+
+    @property
+    def span(self) -> tuple[int, int]:
+        """片段包围盒（首片段 start, 末片段 end）。"""
+        return self.segments[0].start, self.segments[-1].end
 
     @property
     def tokens(self) -> int:
@@ -315,7 +361,7 @@ def _build_slot(store: Store, candidate: Candidate, signals: IndexSignals) -> _S
         id="E0",  # 装填顺序确定后统一编号
         type="spec" if is_spec else ("test" if candidate.kind == "test" else "code"),
         path=chunk.file_path,
-        content=numbered_lines(chunk.content, chunk.start_line),
+        content="",  # 由 _sync 按片段列表统一生成（TASK-017）
         score=candidate.score,
         evidence_tier=candidate.tier,
         reason=reason,
@@ -326,12 +372,15 @@ def _build_slot(store: Store, candidate: Candidate, signals: IndexSignals) -> _S
         elided_lines=0,
         stale_refs=tuple(signals.stale_doc_refs.get(candidate.chunk_id, ())),
     )
-    return _Slot(
+    slot = _Slot(
         candidate=candidate,
         item=item,
         base_reason=reason,
-        span=(chunk.start_line, chunk.end_line),
+        segments=[_Segment(chunk.start_line, chunk.end_line, chunk.content)],
+        elision_upper=chunk.end_line,
     )
+    _sync(slot)
+    return slot
 
 
 def _degrade(
@@ -349,35 +398,111 @@ def _degrade(
         return None
     kept_end = min(start + config.skeleton_context_lines, end)
     head = chunk.content.splitlines()[: config.skeleton_context_lines + 1]
-    body = numbered_lines("\n".join(head), start)
-    signature = numbered_lines(chunk.signature, start) if chunk.signature else ""
-    slot.item.content = f"{signature}\n{body}" if signature else body
-    slot.item.lines = (start, kept_end)
-    slot.item.elided_lines = max(0, end - kept_end)
-    slot.span = (start, kept_end)
+    slot.prelude = numbered_lines(chunk.signature, start) if chunk.signature else ""
+    slot.segments = [_Segment(start, kept_end, "\n".join(head))]
+    _sync(slot)
     return slot
 
 
 def _try_merge(slots: list[_Slot], slot: _Slot, tokens: int) -> int | None:
-    """相邻区间合并（去重第 1 招）：返回本次新增的 token 数，未合并返回 ``None``。"""
-    start, end = slot.span
+    """相邻区间合并（去重第 1 招）：返回本次新增的 token 数，未合并返回 ``None``。
+
+    合并后片段按行号升序排列（不再是“分数顺序拼接”），重叠行去重、相邻区间归并。
+    """
     for existing in slots:
         if existing.item.path != slot.item.path or existing.item.lines is None:
             continue
         if (existing.item.type == "spec") != (slot.item.type == "spec"):
             continue
-        old_start, old_end = existing.item.lines
-        gap = _gap_lines(old_start, old_end, start, end)
-        if gap > ADJACENT_GAP_LINES:
+        if _segments_distance(existing.segments, slot.segments) > ADJACENT_GAP_LINES:
             continue
         before = existing.tokens
-        existing.item.lines = (min(old_start, start), max(old_end, end))
-        existing.item.elided_lines += gap
-        existing.item.content = f"{existing.item.content}\n{slot.item.content}"
-        existing.span = (existing.item.lines[0], existing.item.lines[1])
+        _merge_segments(existing, slot.segments)
         existing.item.reason = f"{existing.base_reason} + {_MERGE_NOTE}"
         return existing.tokens - before
     return None
+
+
+def _merge_segments(slot: _Slot, incoming: Sequence[_Segment]) -> None:
+    """把 ``incoming`` 片段按行序并入 ``slot``（重叠行去重，相邻区间归并）。"""
+    for segment in incoming:
+        slot.segments.extend(_uncovered_pieces(segment, slot.segments))
+    slot.segments.sort(key=lambda segment: segment.start)
+    slot.segments = _coalesce(slot.segments)
+    _sync(slot)
+
+
+def _uncovered_pieces(segment: _Segment, existing: Sequence[_Segment]) -> list[_Segment]:
+    """``segment`` 中未被 ``existing`` 覆盖的子区间（原文按行号裁剪，可能为空文本）。"""
+    pieces = [(segment.start, segment.end)]
+    for other in existing:
+        remaining: list[tuple[int, int]] = []
+        for start, end in pieces:
+            if other.end < start or other.start > end:
+                remaining.append((start, end))
+                continue
+            if other.start > start:
+                remaining.append((start, other.start - 1))
+            if other.end < end:
+                remaining.append((other.end + 1, end))
+        pieces = remaining
+    return [_Segment(start, end, _slice_text(segment, start, end)) for start, end in pieces]
+
+
+def _slice_text(segment: _Segment, start: int, end: int) -> str:
+    """取 ``segment`` 原文中 ``[start, end]`` 行的子串（行号超出原文时返回已可用部分）。"""
+    lines = segment.text.splitlines()
+    low = max(start - segment.start, 0)
+    return "\n".join(lines[low : end - segment.start + 1])
+
+
+def _coalesce(segments: Sequence[_Segment]) -> list[_Segment]:
+    """相邻（行距 0）片段归并为一个片段；区间合并语义不变（连续区间不拆块）。"""
+    merged: list[_Segment] = []
+    for segment in segments:
+        if merged and segment.start <= merged[-1].end + 1:
+            previous = merged[-1]
+            text = "\n".join(part for part in (previous.text, segment.text) if part)
+            merged[-1] = _Segment(previous.start, max(previous.end, segment.end), text)
+            continue
+        merged.append(segment)
+    return merged
+
+
+def _segments_distance(left: Sequence[_Segment], right: Sequence[_Segment]) -> int:
+    """两组片段间的最小未覆盖行数（重叠/相邻 → 0）——合并阈值按最近片段算。"""
+    return min(_gap_lines(a.start, a.end, b.start, b.end) for a in left for b in right)
+
+
+def _sync(slot: _Slot) -> None:
+    """片段列表 → ``item.content`` / ``item.lines`` / ``item.elided_lines``（唯一出口）。"""
+    segments = slot.segments
+    first, last = segments[0].start, segments[-1].end
+    slot.elision_upper = max(slot.elision_upper, last)
+    covered = sum(segment.line_count for segment in segments)
+    slot.item.lines = (first, last)
+    slot.item.elided_lines = max(slot.elision_upper - first + 1 - covered, 0)
+    slot.item.content = _render_content(slot)
+
+
+def _render_content(slot: _Slot) -> str:
+    """按片段行号升序拼接带行号正文，省略区间**就地**标注（间隙与尾部）。"""
+    parts: list[str] = []
+    if slot.prelude:
+        parts.append(slot.prelude)
+    previous: _Segment | None = None
+    for segment in slot.segments:
+        if previous is not None:
+            gap = segment.start - previous.end - 1
+            if gap > 0:
+                parts.append(elision_note(gap))
+        if segment.text:
+            parts.append(numbered_lines(segment.text, segment.start))
+        previous = segment
+    tail = slot.elision_upper - slot.segments[-1].end
+    if tail > 0:
+        parts.append(elision_note(tail))
+    return "\n".join(parts)
 
 
 def _gap_lines(old_start: int, old_end: int, start: int, end: int) -> int:
