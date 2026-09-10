@@ -1,6 +1,6 @@
 # TASK-011：图扩展（calls + spec_references）+ 确定性 rerank
 
-> 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010 ｜ soft 依赖：无
 > 建议分支：`feature/task-011_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/retrieval/expand.py`、`core/zace_core/retrieval/rerank.py`、`core/tests/retrieval/test_expand.py`、`test_rerank.py`
 > （`exact.py`/`bm25.py`/`vector.py`/`rrf.py`/`fusion.py` 与 `retrieval/__init__.py` 归 TASK-010，不得改；需要导出时由调用方直接 import 子模块）
@@ -87,4 +87,73 @@ seeds = 候选池 top 20（按 score）
 
 ## 执行记录
 
-（实施 AI 在此填写。"测试意图查询"的最终判定规则、caller 截断排序的最终实现必须记录。）
+### 2026-09-10 / feature/task-011_xwz0910（泳道 E，本地分支交付，基于 feature/task-010_xwz0910）
+
+**完成报告**
+
+- 分支：`feature/task-011_xwz0910`
+- 验收：
+  - `uv run pytest core/tests/retrieval/test_expand.py core/tests/retrieval/test_rerank.py -q` →
+    44 passed（扩展配额 30 / 300 caller 爆炸截断 20 且入口点优先 / spec_references 双向 /
+    12 条特征各正负例 / reasons 可解释 / §4.6 组合回归 / flows 顺序、环、超深）；
+  - 基线三条：`uv run ruff check .` → All checks passed；
+    `uv run python scripts/check_dependency_direction.py` → 通过；`uv run pytest` → 328 passed, 2 skipped。
+- 关键产物：`core/zace_core/retrieval/expand.py`、`core/zace_core/retrieval/rerank.py`、
+  `core/tests/retrieval/test_expand.py`、`core/tests/retrieval/test_rerank.py`。
+  未改动 `exact/bm25/vector/rrf/fusion.py` 与 `retrieval/__init__.py`（本卡边界）。
+- 契约影响：无（`Candidate` / `Flow` / `FlowNode` / `MissingEvidence` 均按冻结字段使用）。
+- 与设计偏差：无实质偏差；三处卡内明确要求的"最终口径"及一处量级裁定见下。
+- 建议复核点：① `RRF_BASE_SCALE` 量级裁定（决定特征表是否真正生效）；
+  ② "测试意图"与 caller 截断排序口径（下）；③ `files.generated` 的数据源缺口（未决问题）。
+
+**"测试意图查询"最终判定规则（V1 确定性，无需 LLM）**
+
+```
+test_intent = 查询命中测试词表（不区分大小写）
+              OR 查询符号（Explicit + Inferred）能解析到 tests/ 路径
+词表：test / tests / pytest / unittest / fixture / 测试 / 单测 / 用例
+路径判定：复用 retrieve.fusion.is_test_path（tests|testdata|fixtures 目录 / test_* / *_test）
+```
+
+命中时取消 `−0.5 test fixture` 惩罚（不产生额外加分）；未命中且 `candidate.kind == test` 时扣分。
+
+**caller 截断排序的最终实现（单符号 callers > 200 时保留 top 20）**
+
+```
+排序键 = (是入口点 0/1, 被导出 0/1, fqn)
+入口点 = is_exported 且 edges(kind=calls) 中无 target == fqn 的入边（无内部调用者）
+不足 200 时不截断（全部保留，只受全局扩展上限 30 约束）
+```
+
+**图扩展口径（冻结，TASK-012 依赖）**
+
+- 扩展候选：`tier=3`、`graph_depth=1`、`channel_ranks={}`、**`rrf_score = 0.0`**
+  （它们从未进 RRF 池；其最终分完全由 rerank 特征决定——这正是特征表里
+  "+0.5 与 top-1 种子图连通"存在的理由）；
+- 来源写进 `reasons`：`graph-expanded from <seed_chunk_id>`（rerank 据此判定 1 跳连通）、
+  `synthesized edge`（provenance=synthesized，供 −0.2）；
+- `stale` 的 spec 引用**不**作为扩展证据（只进 03 的 MissingEvidence，G4 口径）；
+- 符号无切片（仅声明/未建 chunk）时不编造候选；
+- 种子 = 候选池按 score 降序 top 20；flows 取其中 top 3 的代码 seed。
+
+**基准分量级裁定（本卡最重要的实现决定）**
+
+`score = rrf_score × RRF_BASE_SCALE(100.0) + Σ特征`。原因：`rrf_score = Σ1/(60+rank) ∈ (0, 0.033]`，
+与特征表（±0.2..2.0）差两个数量级；直接相加则单个 `+2.0` 恒压过任意 RRF 差异，特征表实际失效，
+Module/02 §4.6 的反例（"Explicit 命中无关 UI 模块 vs 三通道共识的强相关符号 → 共识者胜"）
+也不可能成立。缩放不改 RRF 内部排序（单调变换），只把基准换算到与特征可比的量级；
+特征结构与分值**逐项未改**。TASK-015 校准建议同时审视该常量。
+
+**未决问题**
+
+1. **`files.generated` 无读 API且 W1 恒为 0**（TASK-010 已提出，本卡受阻）：`−1.0 generated`
+   特征无索引数据源（`apply_file_change` 写死 `generated = 0`，Store 也无 files 读路径）。
+   本卡用 `rerank.is_generated_path`（Module/01 §4.2 的**文件名约定**）做临时代理，
+   并保留 `collect_signals(generated_paths=...)` 覆盖入口。建议编排者裁决给 Store 增
+   `files_metadata(paths)` 读 API（L2，TASK-001 文件所有权）；切换时只改 `collect_signals` 一处。
+2. **doctype 未走索引信号而是重算**：`spec_blocks.doctype` 也无读 API，本卡直接复用索引侧
+   同一函数 `zace_core.parsing.markdown.classify_doctype(path)`（纯函数、两侧规则一致，风险低）；
+   若后续允许新增 Store 读 API，建议改为读索引值以免规则漂移。
+3. **本卡未做的扩展**（符合卡内"明确不做"）：不做 2-hop 常规扩展（仅 G1 二轮用，Phase 3）、
+   不接 cross-encoder/LLM reranker（接口留白）、不改通道与 RRF。
+
