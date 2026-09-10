@@ -1,6 +1,6 @@
 # TASK-019：spec 保底块重复装填修复（U2）+ 预算不变量测试
 
-> 状态：review ｜ 阶段：Phase 1（W3c）｜ 硬依赖：TASK-017（已合并）｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1（W3c）｜ 硬依赖：TASK-017（已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-019_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/`
 > 其它文件不得改动（尤其 `core/zace_core/parsing/`、`chunking/`、`pipeline/`，那是 TASK-018 的范围）。

@@ -1,6 +1,6 @@
 # TASK-018：兜底切分行号修复（U1，阻断级）+ chunk id 唯一性防御 + 单文件失败隔离
 
-> 状态：review ｜ 阶段：Phase 1（W3c，**阻断 M1**）｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1（W3c，**阻断 M1**）｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-018_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/parsing/fallback.py`、`core/tests/parsing/test_fallback.py`、
 > `core/zace_core/chunking/splitter.py`、`core/tests/chunking/`、`core/zace_core/pipeline/indexer.py`、`core/tests/pipeline/`

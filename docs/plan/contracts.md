@@ -76,6 +76,18 @@
 | R18 | `IngestReport.ambiguous_refs` 在零变更增量里仍报 200（为状态量而非 delta） | **归 TASK-007 口径澄清**（非阻断）：建议改名为 `ambiguous_refs_total` 或在增量里置 0；具体在下次涉及该模块的卡里处理 | — |
 | R19 | 跨模块 E2E 测试位置：TASK-016 建了 `core/tests/integration/`，TASK-013 的 E2E 在 `core/tests/cli/` | **保留两者**：`core/tests/integration/` 为跨模块集成测试的规范位置（承载 M1 级断言）；`core/tests/cli/` 保留 CLI 命令行层面的测试。后续跨模块测试统一进 `integration/` | — |
 
+### 3.5 真实靶场实测裁定（编排者在 aibox-super-sdk 上实测，2026-09-10）
+
+首个真实靶场（`aibox-super-sdk`，434 文件 / 5760 chunks，索引耗时 1004s）跑用户种子问题
+「workflow 在记忆系统里是怎么定义和使用的？」暴露 BM25 判别力失真：
+
+| # | 议题 | 裁定 | 影响 |
+|---|---|---|---|
+| R20 | **BM25 判别力被高频词淹没**：OR 语义下 9 个高频虚词（在/是/的/和/使用/记忆系统/定义…）的 BM25 贡献之和远超单个稀有意图词 `workflow`（DF=22）→ 代码中唯一提到 workflow 的 `maintenance.py` 从 BM25 top3 跌出 top50；另：标点 `？` 被分词产出且 DF=0，使 `AND` 语义恒为空（实测 AND 命中数=0） | **修复**：查询侧 token 过滤（纯标点 + DF=0）+ **IDF 加权重排**（保留 OR 召回率，排序改为按判别力加权）；**仍不做停用词表**（IDF 是通用解法；停用词违反 R4「少规则」纪律） | TASK-020 |
+| R21 | **装填层 Docs/Code 严重失衡**：同一查询最终包 Docs 35 块 / Code 1 块，代码目标被文档淹没 | **观察项，暂不修**：装填层配额（Code/Docs 平衡）若在 TASK-020 修复后仍失衡，另行开卡；现不预改（避免与 TASK-015 校准冲突） | TASK-015 观测 |
+| R22 | **负例返回弱证据**：查询「Kubernetes operator 的部署协调逻辑在哪里实现？」（库中 0 命中）返回 11 个文档块且无 `missingEvidence` | **观察项**：根因与 R20 同源；若 TASK-020 后仍不改善，则属 `answerable`/`confidence` 规则范畴（Module/03 §4.4），需用户拍板是否收紧 | TASK-014 负例口径 |
+| R23 | 泳道工作区基点差异（如 lane 分支比 main 少 `benches/golden/aibox-seed.jsonl`） | **合并时无差异不是误删**（3-way merge 保留 main 版）；已在合并后校验文件存在 | — |
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。

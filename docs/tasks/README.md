@@ -36,15 +36,17 @@
 | [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | review |
-| [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | review |
+| [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
+| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧判别力修复（token 噪声过滤 + IDF 加权重排） | TASK-016 | — | `retrieval/bm25.py`、`storage/store.py`（新增 DF 原语） | pending |
 
 ### 开卡批次历史（并行安全）
 
 1. 批 1（W1）：TASK-001、002、005、008、009 → 002 之后接 003、004
 2. 批 2（W2）：TASK-006 → 007；TASK-010 → 011 → 012
 3. 批 3（W3a）：TASK-016（BM25 修复）、TASK-017（行序修复）、TASK-013（CLI + eval）
-4. 批 4（W3c，**阻断修复，优先**）：TASK-018（lane A）、TASK-019（lane C）
-5. 批 5（W3b，必须在批 4 合并后）：TASK-014 → TASK-015（基线/校准；基线必须建立在修复后的主干上）
+4. 批 4（W3c）：TASK-018（lane A）、TASK-019（lane C）—— **已完成**（阻断解除）
+5. 批 5（W3d，**检索质量关键**）：TASK-020（lane B）—— 真实靶场实测发现的 BM25 判别力失真（R20）
+6. 批 6（W3b，最后）：TASK-014 → TASK-015（基线/校准；必须在 020 合并后跑）
 
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
 > 自举（dogfooding）从现在起列入每波收尾动作。
