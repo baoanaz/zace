@@ -1,6 +1,6 @@
 # TASK-030：service 骨架（FastAPI 应用 / 配置 / 日志 / 错误信封 / healthz）
 
-> 状态：pending ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-030_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/{__init__,__main__,app,config,logging,errors}.py`（新建）
@@ -82,4 +82,75 @@
 
 ## 执行记录
 
-（实施 AI 在此填写：日期、分支、验收命令与结果、契约影响、与设计偏差、未决问题。）
+- **日期 / 分支**：2026-09-10 ｜ `feature/task-030_xwz0910`（从 `main` @ `97a92f5` 创建）
+- **关键产物**：`service/zace_service/{config,logging,errors,deps,app,__main__}.py`、
+  `service/zace_service/routers/{__init__,auth,projects,sync,query,ops}.py`、
+  `service/tests/{__init__,conftest,test_skeleton}.py`、`service/pyproject.toml`（仅新增 `[project.scripts]`）。
+
+### 验收命令与结果
+
+```text
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest
+521 passed, 2 skipped, 2 warnings in 12.93s      # 基线 501+2 → 本卡新增 20 条
+$ uv run pytest service/tests -q
+20 passed
+```
+
+行为验收（真实进程 + curl；`--data-root /tmp/zace-t030` 避免污染 `~/.zace`）：
+
+```text
+$ uv run zace-service --port 8787 --data-root /tmp/zace-t030
+$ curl -s localhost:8787/healthz
+{"status":"ok","version":"0.0.1","dataRoot":"/tmp/zace-t030","localMode":true,
+ "auth":"disabled(local)","core":{"importable":true}}
+
+$ curl -si -X POST localhost:8787/api/query/search -H 'content-type: application/json' -d '{}'
+HTTP/1.1 501 Not Implemented
+X-Request-Id: 5c36254fa7744404
+{"error":{"code":"not_implemented","message":"POST /api/query/search（Fast 检索）尚未实现
+（由 TASK-032 交付）：本版本为 M2a 骨架，该端点为占位。"}}
+```
+
+stderr 结构化日志（同一 requestId 可在日志中检索；headers/body 从不落盘）：
+
+```json
+{"ts": "2026-09-10T12:52:06.181+00:00", "level": "info", "logger": "zace_service.app",
+ "msg": "request", "requestId": "b275ec61e7c74ffa", "durationMs": 3.97,
+ "method": "GET", "path": "/healthz", "status": 200}
+{"ts": "2026-09-10T12:52:06.200+00:00", "level": "info", "logger": "zace_service.app",
+ "msg": "request", "requestId": "5c36254fa7744404", "durationMs": 3.56,
+ "method": "POST", "path": "/api/query/search", "status": 501}
+```
+
+### CF-05 路径一致性（本卡地基）
+
+- `test_openapi_paths_match_cf05_contract`：`set(app.openapi()["paths"])` 必须与 `docs/contracts/openapi.yaml` 的路径集合（16 条）完全相等，失败时分别打印多/少两侧；
+- `test_openapi_methods_match_cf05_contract`：逐路径比对方法集合（GET/POST/DELETE）；
+- 合同解析**不用 PyYAML**（service 未声明该依赖）：按缩进提取 `paths:` 段下 2 空格的路径键与 4 空格的方法键，仍是直接读合同文件本身（能抓到双向漂移）。
+
+### 契约影响
+
+无。未改 `docs/contracts/**`；只消费 CF-05（路径 + Error 信封）与 R34（本地模式免鉴权）。
+
+### 与设计偏差
+
+1. **`deps.py` 在本卡新建**：卡内「冻结接口」就要求产出 `zace_service.deps.get_settings`，但交付物表未列该文件（TASK-031 的清单里写的是“新增 engine_manager 依赖”）。同一泳道串联，故本卡建文件+`get_settings`，TASK-031 就地追加 `get_engine_manager`；未改任何既有语义。
+2. **healthz 的 `?deep=1` 探测**：本地模式下调用 `provider.ensure_loaded()`（会触碰模型文件）。自动化测试只覆盖“provider 不可用”路径（`EMBED_MODE=api` 且无 model/base_url → 离线即失败），真实模型加载不在 CI 内（离线纪律）。
+3. **500 兜底放在 middleware 而非仅异常处理器**：Starlette 的 `ServerErrorMiddleware` 回完响应后仍会 re-raise，只靠 `add_exception_handler(Exception, ...)` 会“已回包又抛异常”。两个都装了，middleware 先接住（异常不逃出应用，响应始终是 CF-05 信封），处理器作兜底。
+4. **uvicorn 自身的启动/关闭日志未接管**（仍是 uvicorn 纯文本）；访问日志已由 middleware 以 JSON 输出且 `access_log=False`。应用自身日志 100% JSON。
+5. `--reload` 模式下配置经环境变量递给子进程，`--log-level` 只影响 uvicorn 自身日志（服务 JSON 日志沿用默认 `info`）——开发便利开关，不影响生产路径。
+
+### 未决问题
+
+1. 本地模式下的 `?deep=1` 真实探测（模型加载）无自动化测试（离线约束）；需要时人工跑 `curl 'localhost:8787/healthz?deep=1'`。
+2. healthz 的 `auth` 字段在 `local_mode=false` 时输出 `"enabled"`，但 M2c 前并无真实鉴权（仅字段占位）——待 TASK-060 复核文案。
+3. `/api/auth/*` 与 `/api/usage/projects/{id}` 仍为 501 占位（属 M2c/Phase 3），符合本卡「路径冻结、实现可迟到」口径。
+
+### 建议复核点
+
+① CF-05 一致性测试的合同解析方式（不依赖 PyYAML，但依旧是“读合同文件本身”）；
+② 500 兜底位置与「响应无堆栈」断言；③ 日志脱敏双保险（不记 headers/body + 文本级 filter）。
