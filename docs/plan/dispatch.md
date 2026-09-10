@@ -11,21 +11,26 @@
    ```
    它会在 `/home/xuwenzheng/2_github/AI/ACE/` 下建出 `zace-lane-a` … `zace-lane-f` 六个独立工作区（互不干扰，可同时开工）。
 2. **开会话**：每一波按下方表格开对应数量的 AI 会话，**会话的工作目录必须是对应的工作区**（如泳道 A 用 `zace-lane-a`），然后把该泳道的提示词整段粘贴进去。
-3. **收报告**：AI 做完会输出"完成报告"。把这些报告复制粘贴回总览会话（我），我评审+跑集成测试+合并，然后给你下一波的提示词。
+3. **收报告**：AI 做完会输出“完成报告”。把这些报告复制粘贴回总览会话（我），我评审+跑集成测试+合并，然后给你下一波的提示词。
 
 > 若某个 AI 中途提问题、卡住或报错：把它的原话复制给我，我判断后给你处理方式。
 
+### 已知事项（2026-09-10）
+
+- **远程推送需要你的凭据**：本机没有 git 凭据助手（Windsurf 的 askpass 在非 IDE 终端里无响应），所以“推送 GitHub”这一步可能需要你在 Windsurf 的源代码管理面板里点一下。但这**不影响开发**：各泳道从本地 main 分支即可，评审与合并全部在本地完成；需要同步到线上时我会提醒你。
+- **工作区里的“main”是本地 main**：不要自行 `git pull`（远端旧一步，会把已合并的代码拉回去）。开工前按提示词里的核验命令确认 main 包含 W1 提交即可。
+
 ## 1. 波次表（谁和谁可以同时做）
 
-| 波次 | 同时开几个会话 | 泳道（工作区） | 任务卡（按序做） | 为什么这样排 |
+| 波次 | 同时开几个会话 | 泳道（工作区） | 任务卡（按序做） | 状态 |
 |---|---|---|---|---|
-| W1 | 4 | A `zace-lane-a` | TASK-001 | 存储是所有下游的地基 |
-| W1 | | B `zace-lane-b` | TASK-002 → 003 → 004 | 解析器一条线，内部有依赖所以串行 |
-| W1 | | C `zace-lane-c` | TASK-005 → 009 | Markdown 与向量存储互不依赖 |
-| W1 | | D `zace-lane-d` | TASK-008 | embedding 需下载模型，单独一条线 |
-| W2 | 2 | A `zace-lane-a` | TASK-006 → 007 | 需要 W1 的解析器与向量 |
-| W2 | | E `zace-lane-e` | TASK-010 → 011 → 012 | 需要 W1 的存储/向量/embedding |
-| W3 | 1 | F `zace-lane-f` | TASK-013 → 014 → 015 | 需要 W2 的流水线与检索 |
+| W1 | 4 | A `zace-lane-a` | TASK-001 | 已完成并合并 |
+| W1 | | B `zace-lane-b` | TASK-002 → 003 → 004 | 已完成并合并 |
+| W1 | | C `zace-lane-c` | TASK-005 → 009 | 已完成并合并 |
+| W1 | | D `zace-lane-d` | TASK-008 | 已完成并合并 |
+| W2 | 2 | A `zace-lane-a` | TASK-006 → 007 | **当前波次** |
+| W2 | | E `zace-lane-e` | TASK-010 → 011 → 012 | **当前波次** |
+| W3 | 1 | F `zace-lane-f` | TASK-013 → 014 → 015 | 等 W2 合并 |
 
 并行安全的前提：各泳道的文件所有权互不重叠（见各任务卡"交付物"节），且都只在自己工作区里提交。
 
@@ -175,52 +180,83 @@
 
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 A 续：Chunk 模型与索引流水线】。
-上一波（TASK-001）已由总览 AI 合并进 main，本波从最新 main 开始。
+上一波（TASK-001）已由总览 AI 合并进本地 main，本波从本地 main 开始。
 
 【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
-先执行 `git switch -c feature/task-006_xwzMMDD main` 确认能拿到最新主干；若目录或主干不对，先停下提醒我。
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】本地 main 已含 W1 全部产出（TASK-001/002-004/005/008/009）。执行：
+  git log --oneline -1 main     # 应看到 “Close W1 lanes: record drift rulings...”
+  ls core/zace_core/storage core/zace_core/embedding core/zace_core/vectors core/zace_core/parsing
+两个都不对就先停下报告，不要自行 git pull（远端比本地旧）。
+开分支：git switch -c feature/task-006_xwzMMDD main
 
 【开工】
-1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"节、docs/tasks/README.md。
+1. 读：AGENTS.md、docs/plan/orchestration.md 的“泳道模式”一节、docs/tasks/README.md、
+   以及 docs/plan/contracts.md §3.2（R1-R10 实现口径——本波两张卡都直接受影响）。
 2. 按顺序完成 2 张任务卡（做完一张立刻做下一张）：
    docs/tasks/TASK-006-Chunk模型与解析.md
    docs/tasks/TASK-007-索引流水线.md
-   （TASK-007 需要 TASK-008/009 的 embedding 与向量实现，此时已在 main 上，直接使用真实实现，不要用桩。）
+   TASK-007 需要 embedding/向量真实实现，此时已在 main 上，直接使用，不要用桩。
 3. 工艺（每张卡重复一遍）：
-   a) 开分支：`git switch -c feature/task-006_xwzMMDD main`；第二张从第一张创建：`git switch -c feature/task-007_xwzMMDD feature/task-006_xwzMMDD`。
-   b) 只修改该卡"交付物（文件所有权）"清单里的文件；其他文件一律不动。
-   c) 跑通该卡"验收标准"的全部命令 + 基线三条：uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest。
-   d) 回填该卡"执行记录"节；任务板对应行状态改 review。
-   e) git add -A && git commit（"task-006: " / "task-007: " 前缀）。
-4. 输出报告（每张卡一段）：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题。
+   a) 开分支：第一张 `git switch -c feature/task-006_xwzMMDD main`；
+      第二张从第一张创建：`git switch -c feature/task-007_xwzMMDD feature/task-006_xwzMMDD`。
+   b) 只修改该卡“交付物（文件所有权）”清单里的文件；其他文件一律不动。
+   c) 跑通该卡“验收标准”的全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   d) 回填该卡“执行记录”节，并把 docs/tasks/README.md 对应行状态改为 review。
+   e) git add -A && git commit（“task-006: ” / “task-007: ” 前缀）。
+4. 输出报告（每张卡一段）。
 
-【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
 ```
 
 ### W2-2 · 泳道 E（TASK-010 → 011 → 012 检索线）
 
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 E：检索线（通道融合 → 图扩展/rerank → ContextPack）】。
-W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已由总览 AI 合并进 main。
+W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已由总览 AI 合并进本地 main。
 
 【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-e
-先执行 `git switch -c feature/task-010_xwzMMDD main` 确认能拿到最新主干；若目录或主干不对，先停下提醒我。
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】本地 main 已含 W1 全部产出。执行：
+  git log --oneline -1 main     # 应看到 “Close W1 lanes: record drift rulings...”
+  ls core/zace_core/storage core/zace_core/embedding core/zace_core/vectors
+两个都不对就先停下报告，不要自行 git pull（远端比本地旧）。
+开分支：git switch -c feature/task-010_xwzMMDD main
 
 【开工】
-1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"节、docs/tasks/README.md。
+1. 读：AGENTS.md、docs/plan/orchestration.md 的“泳道模式”一节、docs/tasks/README.md、
+   以及 docs/plan/contracts.md §3.2（R1-R10 实现口径，尤其 R2 的 embed_query）。
 2. 按顺序完成 3 张任务卡（做完一张立刻做下一张）：
    docs/tasks/TASK-010-检索通道与RRF.md
    docs/tasks/TASK-011-图扩展与Rerank.md
    docs/tasks/TASK-012-ContextPack组装.md
 3. 工艺（每张卡重复一遍）：
    a) 开分支：第一张 `git switch -c feature/task-010_xwzMMDD main`；后续卡从上一张卡的分支创建。
-   b) 只修改该卡"交付物（文件所有权）"清单里的文件（注意：011 不得改 retrieval/__init__.py；012 可在 core/pyproject.toml 的 dev extra 加 jsonschema）。
-   c) 跑通该卡"验收标准"的全部命令 + 基线三条：uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest。
-   d) 回填该卡"执行记录"节；任务板对应行状态改 review。
-   e) git add -A && git commit（"task-010: " / "task-011: " / "task-012: " 前缀）。
-4. 输出报告（每张卡一段）：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题。
+   b) 只修改该卡“交付物（文件所有权）”清单里的文件（注意：011 不得改 retrieval/__init__.py；012 可在 core/pyproject.toml 的 dev extra 加 jsonschema）。
+   c) 跑通该卡“验收标准”的全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   d) 回填该卡“执行记录”节，并把 docs/tasks/README.md 对应行状态改为 review。
+   e) git add -A && git commit（“task-010: ” / “task-011: ” / “task-012: ” 前缀）。
+4. 输出报告（每张卡一段）。
 
-【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
 ```
 
 ### W3-1 · 泳道 F（TASK-013 → 014 → 015 出口与评测）
