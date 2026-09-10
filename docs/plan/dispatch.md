@@ -30,7 +30,8 @@
 | W3d | 2 | B / F | TASK-020（零成本版）/ TASK-014（基线） | 已完成 |
 | W4a | 1 | A `zace-lane-a` | TASK-021 → TASK-022（质量修复） | 已完成 |
 | W5a | 1 | A `zace-lane-a` | TASK-030 → 031 → 032 → 033（Phase 2 M2a-1：service 外壳） | 已完成 |
-| **W5b** | **1** | **A `zace-lane-a`** | **TASK-035 → 034 → 040**（Phase 2 M2a-2：错误映射 → 本地模式 → **MCP 端点，demo 收口**） | **当前波次** |
+| W5b | 1 | A `zace-lane-a` | TASK-035 → 034（进行中）→ 040 → 045 | 进行中 |
+| **W5c** | **3** | **A / B / C** | A：续做 TASK-034 → 040 → 045（demo 收口）；B：TASK-015A（模型选型）；C：TASK-036 → 037（规模自举 + 索引范围） | **当前波次（整夜并行）** |
 
 ## 2. 提示词（整段复制）
 
@@ -562,6 +563,171 @@ core/zace_core/{types,interfaces,hashing}.py；遇到契约/设计冲突先停�
 【报告格式】（每张卡一段）
 - 卡号 / 分支：
 - 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
+```
+
+### W5c-1 · 泳道 A（续做：TASK-034 → 040 → 045，**demo 收口**）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 A 续做：完成本地单用户模式 → service 侧 MCP 端点 → 验收手册】。
+上一轮已经写完 TASK-034 的代码（未提交），本会话从当前工作区接着做完。做完就能在编辑器里用真实问题验证系统。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前先看清现状】
+  git log --oneline -1            # 应为 "task-035: map engine/dependency errors to 503/507 ..."
+  git branch --show-current       # 应为 feature/task-034_xwz0910
+  git status --short              # 会看到 TASK-034 的未提交改动（这是上一轮的成果，别丢）
+  uv run pytest 2>&1 | tail -3    # 应为 629 passed, 2 skipped
+先读 docs/tasks/TASK-034-本地单用户模式.md 的"验收标准"，逐条对照现状，把没做的补齐。
+
+【开工顺序】三张卡串联：
+  1) TASK-034（续做）：docs/tasks/TASK-034-本地单用户模式.md
+     - 剩余：卡内标"必做"的真实仓库自举 + 执行记录回填 + 任务板改 review + 提交
+     - 已知偏差要登记：service/tests/test_skeleton.py 的 CF-05 路径白名单（新增 attach/rescan 路径）；
+       service/tests/test_error_mapping.py 的改动也要在执行记录里说明原因
+     - 提交一个 task-034 的 commit（把上一轮的改动一并提交）
+  2) TASK-040（新）：docs/tasks/TASK-040-service侧MCP端点.md
+  3) TASK-045（新）：docs/tasks/TASK-045-M2a验收手册.md
+  第二、三张卡从上一张的分支串联。
+
+【本波特别提醒】
+1. TASK-040 卡里有"已验证的实现要点"5 条——那是我实测 mcp==2.2.0 得到的结论，**照做**：
+   导入是 mcp.server.mcpserver.MCPServer（fastmcp 在 2.x 已移除，导入即 ImportError）；
+   挂载必须传 streamable_http_path="/"（否则路径叠加成 /mcp/mcp，全 404）；
+   session manager 的 lifespan 必须跑（否则 initialize 建不了会话）。
+2. TASK-040 的 Origin 防护默认已生效（恶意 Origin 返 403）——**不要为了"跑通"关掉它**。
+3. 本波唯一允许的新依赖是 service/pyproject.toml 里的 mcp>=2.2。
+4. MCP 工具必须 async + 线程池执行（core 调用是阻塞的），不要在事件循环里直接跑。
+5. TASK-040 必须复用 TASK-032 的 packmeta 与 render_markdown，不要另写一份。
+6. 不要基于当前 60 条测试集调检索质量参数（R29/R30 冻结）。
+7. TASK-045 的手册里每一条命令与输出都必须是**你真跑过的**，不要凭想象写。
+
+【工艺】（每张卡重复）
+  a) 只修改该卡"交付物所有权"清单里的文件；
+  b) 跑通该卡"验收标准"全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+  c) 回填该卡"执行记录"；任务板对应行状态改为 review；
+  d) git add -A && git commit（"task-034: " / "task-040: " / "task-045: " 前缀）。
+
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
+```
+
+### W5c-2 · 泳道 B（TASK-015A：embedding 模型选型，长任务）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 B：embedding bake-off（模型选型）】。
+这是长任务：模型下载 + 多个模型各自独立建索引 + 评测，预计数小时，**不要为了快而抽掉候选模型或缩小靶场**，
+但要把每一步的中间结果落盘，便于断点续跑。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-b
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 "Merge branch 'feature/task-035_xwz0910'"
+  git switch -c feature/task-015a_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】完成 docs/tasks/TASK-015-Bakeoff与校准.md（**只做 A 部分**）。
+
+【本波最重要的纪律】
+1. 这是"**选型**"卡，不是"调优"卡：**不得**修改 rerank 权重、FTS 列权重、前缀匹配开关、
+   RecallLimits、docs_ratio、CONSENSUS_SCORE_RATIO 中的任何一个（R30 冻结；卡内也写明了）。
+   唯一变量是 embedding provider。报告里要贴 git diff 证明这一点。
+2. TASK-023 的真实调用数据还没有，所以**不许**基于当前 60 条 smoke 集去调任何参数（R29/R30）。
+   本卡允许用 smoke 集比较"模型之间"的差异——那是模型选型，不是参数调优。
+3. 每个模型的索引要用**独立数据根**，中间结果落 JSON，支持断点续跑（重跑一次几小时不可接受）。
+4. 时间与体积同样重要：报告必须给出索引耗时与向量库体积的真实数字（VPS 选型与分发体积要用）。
+5. 首次下载模型会联网（HuggingFace）。记录：下载了什么、多大、放在哪、耗时多少；
+   **不要**把模型文件提交进仓库。
+6. 若某模型在本机跑不动（体积/内存/耗时不可接受），如实记录并继续下一个，不要卡死。
+
+【可复用的现成资源（不要重建）】
+- golden 用例：benches/golden/{zace,aibox-super-sdk,linux-mtk-mw-cameraservice}/*.jsonl（60 条）
+- 评测命令：uv run zace-core eval --repo <路径> --data <数据根> --golden <用例目录> --report <输出.md>
+- 已有索引（默认 e5-small）：/tmp/zace-aibox、/tmp/zace-verify-main、/tmp/zace-cam
+  （这些是"基线模型"的现成结果，可直接读它们的 eval 报告，但**换模型的索引必须重建**）
+- 模型缓存目录：/tmp/zace-embedding-cache
+
+【工艺】
+  a) 只修改卡内"交付物所有权"清单里的文件；
+  b) 跑通卡内"验收标准"全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+  c) 回填"执行记录"（含模型对比表）；任务板对应行状态改为 review；
+  d) git add -A && git commit（"task-015a: " 前缀）。
+
+【报告格式】
+- 卡号 / 分支：
+- 候选模型与数据根：
+- 对比表（每个模型：recall@5/@10、MRR、索引耗时、查询延迟、向量库体积）：
+- 推荐默认模型与理由（含不选更大模型的原因）：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；不改任何排序/装填参数；冲突先停下写进"未决问题"。
+```
+
+### W5c-3 · 泳道 C（TASK-036 → 037：规模自举与索引范围，长任务）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 C：多仓库规模自举与健壮性 → 索引范围策略】。
+这是长任务：要在本机多个真实仓库（最大 4400+ 文件 / 880 MB / 含 308MB 二进制）上跑全量索引并修 bug。
+上一次同类自举发现了阻断 M1 的崩溃（chunk id 冲突），这次靶场规模大一个数量级，请认真对待。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 "Merge branch 'feature/task-035_xwz0910'"
+  git switch -c feature/task-036_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】按顺序完成 2 张任务卡（做完一张立刻做下一张）：
+  docs/tasks/TASK-036-多仓库规模自举与健壮性.md
+  docs/tasks/TASK-037-索引范围策略.md（从 task-036 分支串联）
+
+【本波最重要的纪律】
+1. **时间预算**：单仓库 ingest 用 timeout 限制 90 分钟，超时就记"超时 + 已处理进度"继续下一个。
+   按卡内表格从小到大跑。**先在全部靶场跑完 §A 拿到事实，再回头修 §B 的 bug。**
+2. 所有靶场仓库都是**只读**参考：只读源码，不改它们、不在它们里面建文件（数据根放 /tmp）。
+3. TASK-036 只做"测量 + 修崩溃"：**不要顺手改忽略规则/大小阈值**（那是 TASK-037），
+   发现这类问题就在报告里给证据 + 交接。
+4. TASK-037 会改索引范围（以前被索引的文件以后不索引）——**这必须如实前后对照报告**，
+   并且要抽查检索是否变差（卡内 §D）；不许为了让 eval 数字好看而放宽规则（R30 冻结）。
+5. 报告要贴**完整输出**（耗时、chunks、errors、skipped），不要只写"通过"。
+6. 若发现"该不该索引"这类需要产品判断的问题，写进报告让编排者裁定，不要自己拍。
+
+【可复用资源】
+- 已索引：/tmp/zace-aibox、/tmp/zace-verify-main、/tmp/zace-cam
+- golden 用例：benches/golden/{zace,aibox-super-sdk,linux-mtk-mw-cameraservice}（cameraservice 16 条用于 §D 回归）
+- ingest 命令：uv run zace-core ingest --repo <路径> --data /tmp/zace-scale-<n>
+- 检索命令：uv run zace-core search "<查询>" --repo <路径> --data <数据根>
+
+【工艺】（每张卡重复）
+  a) 只修改该卡"交付物所有权"清单里的文件；
+  b) 跑通该卡"验收标准"全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+  c) 回填该卡"执行记录"；任务板对应行状态改为 review；
+  d) git add -A && git commit（"task-036: " / "task-037: " 前缀）。
+
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 六靶场汇总表（文件数 / chunks / 耗时 / errors / skipped）：
+- 修复清单（每条：现象 / 复现 / 根因 / 修复 / 回归测试）：
 - 契约影响（无 / 说明）：
 - 与设计偏差（无 / 说明）：
 - 未决问题（无 / 说明）：

@@ -123,6 +123,16 @@
 
 > R38 是**形态分期**裁定：不推翻 D-39（client = Rust），只是把 Rust client 的实现时点后移到它真正必需的场景。
 
+### 3.9 Phase 2 服务化裁定（续）（编排者，2026-09-10；TASK-035/036/037 开卡时定）
+
+| # | 议题 | 裁定 |
+|---|---|---|
+| R39 | **CF-05 状态码扩展**：TASK-035 引入 `503 embedding_unavailable` / `503 embedding_unreachable` / `507 storage_error` / `500 index_failed`（CF-05 原文只有 `Error` 信封与 401，未列这些码） | **接受为扩展**（不破坏既有契约：新增状态码 + 既有 `Error` 信封不变）。语义：依赖不可用（503，客户端可重试）与存储故障（507）必须与"请求有问题"（4xx）区分；`index_failed` = 有账本但索引为空（上次索引失败），**不得**再报 `index_in_progress`（那会让客户端无限重试"先同步"） |
+| R40 | **本地模式下秘密不进响应**：core 的 `degradedReason` 会把 provider 原始报错（含 `api_key=...`）透传进响应体 | **接受 TASK-035 的修法**：错误响应与 `degradedReason` 统一过 `redact_text`，secret 只进服务端日志。**推广为纪律**：任何把 core/第三方异常文本透给客户端的路径都必须过脱敏 |
+| R41 | **TASK-035 未决问题的裁定**：provider 在 embed 阶段失败、但索引非空（`chunks>0`）时，检索返回 **200 + `degraded=true`**（仅 BM25 通道），不返回 503 | **接受**。理由：有部分索引时给出带诚实降级标注的结果，严格优于硬错误；503 只用于"完全无法服务"（空索引 + provider 坏）。**附注（观察项）**：`chunks>0 且 vectors=0`（TASK-031 的静默清空形态）目前**不可见**——该状态应可被探测并如实上报，列入 TASK-036 §D |
+| R42 | **D-28 忽略规则在本地模式的落点**：设计把 `.gitignore` 真实解析放在 **client**（Rust `ignore` crate），但 M2a 本地模式**没有 client**（R38），且实测 `DirectorySource` 只用了内置目录名跳过 | **在 core 落地 Python 实现**（TASK-037）：`{repo}/.zaceignore` > `.gitignore`（含否定规则）> 内置默认。**契约是"忽略语义"而不是库**：将来 client 用 `ignore` crate 时，两侧行为须一致（TASK-037 需给出语义清单与对照测试） |
+| R43 | **索引范围阈值**（Module/05 §3.1 只对 client 规定了 `>128KB` 跳过与 `>10% 不可打印字符`判二进制） | **同口径下推到 core**（TASK-037）：本地/服务端索引走同一阈值，参数可配置；跳过必须**如实进入 `skipped_files` 并带原因**（D-30）。实测依据：`linux-mtk-hw-hmi` 的 `cmake-build-release/**` 与 `lib/libcv.a`（308MB）当前都会被索引 |
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。

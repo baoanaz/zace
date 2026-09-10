@@ -32,7 +32,7 @@
 | [TASK-012](TASK-012-ContextPack组装.md) | ContextPack 组装 + Markdown 渲染 | TASK-010, TASK-011 | — | `core/zace_core/contextpack/` | done |
 | [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | done |
 | [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | done |
-| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（**仅模型选型**；rerank 校准推迟至 TASK-050） | TASK-013 | — | `benches/bakeoff/` | pending |
+| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（**仅模型选型**；禁碰排序与装填参数） | TASK-013 | — | `benches/bakeoff/` | pending |
 | [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
@@ -55,16 +55,29 @@
 | [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | review |
 | [TASK-034](TASK-034-本地单用户模式.md) | 本地单用户模式（attach 本地仓库 + 一键起 + 后台索引进度 + 懒重扫） | TASK-035 | `service/zace_service/{runtime,indexer,__main__,config}.py` | pending |
 | [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | pending |
+| [TASK-045](TASK-045-M2a验收手册.md) | M2a 验收手册与彩排脚本（用户照做即可跑起来） | TASK-040 | `docs/plan/m2a-acceptance.md`、`scripts/demo-rehearsal.sh` | pending |
 
 | 波次 | 泳道 | 任务卡 | 说明 |
 |---|---|---|---|
 | M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API —— **已完成** |
-| M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 | 错误映射 → 本地模式（attach/一键起/懒重扫）→ **MCP 端点（demo 收口）** |
-| M2b | 视情况 | TASK-023 → TASK-050；TASK-015A 可并行 | 真实数据采集 → 质量调优 |
+| M2a-2 | `zace-lane-a` | TASK-034 → TASK-040 → TASK-045 | 本地模式（**续做**）→ **MCP 端点（demo 收口）** → 验收手册 |
+| M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行） |
+| M2b-2 | `zace-lane-c` | TASK-036 → TASK-037 | 多仓库规模自举与健壮性 → 索引范围策略（长任务） |
+| M2b | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
 > 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
+
+### M2b 卡片
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | pending |
+| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | pending |
+| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | TASK-036 | `core/zace_core/pipeline/{ignore,source,indexer}.py` | pending |
+| [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
+| TASK-050 | 质量调优（R21/R24/rerank/装填参数，**必须基于 TASK-023 真实数据**） | TASK-023 | — | 未开卡 |
 
 ### 开卡批次历史（并行安全）
 
@@ -76,7 +89,8 @@
 6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
 7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **当前波次**
 8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040（lane A 串行，三张卡）—— **当前波次**
-9. 批 10（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）；TASK-015A 可并行
+9. 批 10（W5c，**整夜并行三泳道**）：lane A 续做 TASK-034 → 040 → 045（demo 收口）；lane B TASK-015A（模型选型）；lane C TASK-036 → 037（规模自举 + 索引范围）
+10. 批 11（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
 10. 批 11（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
 
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
