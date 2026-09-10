@@ -1,6 +1,6 @@
 # TASK-032：查询 API（`/api/query/search` + `/api/query/ask` 降级包）
 
-> 状态：pending ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：TASK-031 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：TASK-031 ｜ soft 依赖：无
 > 建议分支：`feature/task-032_<你的缩写><MMDD>`（从 TASK-031 分支串联）
 > 交付物所有权：
 > - `service/zace_service/routers/query.py`（替换占位实现）
@@ -112,4 +112,96 @@ M1 实测检索 ~0.5s 级；client 侧整体超时 15s（D-32）。`meta` 里**�
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+- **日期 / 分支**：2026-09-10 ｜ `feature/task-032_xwz0910`（从 `feature/task-031_xwz0910` 串联）
+- **关键产物**：`service/zace_service/packmeta.py`（meta 的唯一转换点）、
+  `service/zace_service/routers/query.py`（替换占位）、`service/tests/test_query_api.py`。
+
+### 验收命令与结果
+
+```text
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest
+575 passed, 2 skipped, 2 warnings in 14.69s   # 031 后为 552+2 → 本卡新增 23 条
+$ uv run pytest service/tests
+71 passed                                     # 030/031 的 48 条 + 本卡 23 条
+```
+
+### 真实 markdown 输出（HTTP 端点的实测响应片段）
+
+```text
+HTTP 200
+meta: {"projectId": "a10cece14ec01e49", "query": "令牌过期后在哪里刷新", "mode": "fast",
+ "checkpointId": null, "answerable": true, "confidence": "medium",
+ "channelsUsed": ["bm25", "vector"], "degraded": false, "degradedReason": null,
+ "candidateCount": 5, "freshness": {"indexedAt": 1789045325, "staleFiles": [], "indexingFiles": []},
+ "budget": {"usedTokens": 578, "hardCap": 10000, "truncated": false, "omittedCount": 0},
+ "evidenceCount": 1, "docsCount": 1, "flowsCount": 0, "missingEvidence": []}
+--- markdown ---
+## Relevant Context
+### Code
+[E2] TokenService — src/token_service.py:1-9
+     reason: bm25 rank 4 + vector 0.3175 + vector rank 4 + entry point / exported symbol +0.2 + 相邻区间合并
+     1 | """令牌服务模块。"""
+     ... （省略 1 行）
+     4 | class TokenService:
+     7 |     def refresh_token(self) -> str:
+     8 |         """续期令牌：过期后由本方法负责刷新，签发细节见设计文档。"""
+     9 |         return "old"
+### Docs
+[E1] docs/design/token.md > 令牌设计（design）
+     reason: bm25 rank 1 + vector 0.5470 + vector rank 1 + high-value doctype +0.8 + 相邻区间合并
+     1 | # 令牌设计
+     3 | 令牌过期时由 `refresh_token` 刷新。
+--- ask ---
+status: degraded | answer 前 3 行:
+Deep 模式（LLM 总结）尚未接入（Phase 3）；以下为检索与组装结果，可直接作为上下文使用。
+
+## Relevant Context
+evidenceSummary[0]: {"id": "E1", "type": "code", "path": "src/token_service.py", "lines": [1, 9], "tier": 0, "score": 8.33}
+```
+
+（证据行确实是 ``path:行号`` 形态（``src/token_service.py:1-9`` 标题 + ``7 | def refresh_token`` 正文），
+行号与源文件逐行对应：可直接给 agent 对齐 Edit。）
+
+### 契约影响
+
+无。未改 `docs/contracts/**`；消费 CF-05（两路径与响应字段）与 CF-03（``to_json`` 后送 schema 校验）。
+本卡**产出**的 `meta` 字段集是 TASK-040 的输入契约（已冻结在 `packmeta.py` 的 ``meta_field_names()``，
+测试断言字段集与实现一致）。
+
+### 与设计偏差
+
+1. **`meta` 增加 `checkpointId`**：卡内“端点行为”明确要求“checkpointId 只透传记录进 meta”，
+   但卡内的 meta 字段清单漏列该字段。按“只增不改”处理（对 TASK-040 是加法，不破坏冻结集）。
+2. **`ask` 的 `meta.mode` = `"fast"`**（取 ``pack.mode``，即实际组装模式），而非 `"deep"`：
+   降级由 `status="degraded"` + `meta.degraded=true` 表达。Phase 2 确实只跑了 Fast 组装，
+   写 `"deep"` 会掩盖实际行为（D-26 的诚实性要求）。
+3. **“必然缺失的查询”测试换了实现口径（重要）**：实测“查询仓库里不存在的符号”
+   （`ZzqxwvNotARealSymbol` / `NonexistentSymbolXYZ123` / 自然语言负例）在 M1/M2a **恒**返回
+   1 evidence + 1 docs、`missingEvidence` 为空——向量通道总会给出候选，`no_context_match`
+   在组装层不可达（正是 R22 登记的诚实性缺口）。因此改用**可复现**的缺失来源：删掉被文档引用的
+   代码文件（G4）→ `stale_doc_reference`；另加一条 `retrieval_truncated`（极小 maxTokens）。
+   未越界修检索/组装（R30 参数冻结）。
+4. **空索引判定**用 `sync_status()["chunks"] == 0`（core 的 ``Store.counts()``），不另做统计。
+5. **`ask` 的检索预算**固定用 `DEFAULT_MAX_TOKENS`（10K）：CF-05 的 ask 入参没有 `maxTokens`。
+6. `includePack` 只在 search 上支持（ask 的响应里没有 pack 字段位；CF-05 亦然）。
+
+### 未决问题
+
+1. **`no_context_match` 在真实链路不可达**（负例诚实性，R22/R24 已登记）：属检索质量范畴，
+   需真实数据到位后评估（TASK-023 → TASK-050），本卡不碰参数（R30）。
+2. **`jsonschema` 由 core 的 dev extra 提供**（卡内明确允许 service 测试直接用）。若将来
+   service 单独建 CI（只装 service extras）会缺该依赖；建议编排者决定是否将其加入 service dev extra
+   （本卡不擅自新增依赖）。
+3. `checkpointId` 目前只记录不校验（TASK-033 登记 checkpoint；与检索的强校验属 client 侧优化）。
+4. `answerable=false` 时 `ask` 仍返回 `status="degraded"`（而非 `insufficient_evidence`）：
+   Phase 2 根本没有 LLM，把“无 LLM”写成“证据不足”是误导；Phase 3 接入后再区分。
+
+### 建议复核点
+
+① `packmeta.pack_meta` 是否真是唯一转换点（路由里不得再拼 meta 字段）；
+② `ask` 的降级文案与“绝不 500”的断言；③ 409 空索引语义（不返回 200 空包）；
+④ `meta` 字段集的冻结方式（`meta_field_names()` + 测试断言）。
