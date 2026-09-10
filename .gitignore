@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Rust (client/) ---
+target/
+
+# --- Node (web/) ---
+node_modules/
+web/dist/
+.pnpm-store/
+
+# --- zace 运行时产物（本地调试可能落在仓库内）---
+.zace/
+data/
+*.db-wal
+*.db-shm
+
+# --- 编辑器 / 系统 ---
+.idea/
+.vscode/
+.DS_Store

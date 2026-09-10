@@ -1,0 +1,195 @@
+openapi: 3.1.0
+info:
+  title: zace-service REST API（冻结合同 CF-05）
+  version: 0.0.1
+  description: >
+    来源 docs/design/Module/06-服务化与部署.md §2.1（D-37）。client 走 Bearer token，web 走 session cookie。
+    幂等语义：batch-upload 重复 blobHash 返回 accepted；deletions 重复删除返回成功；resolve-project 幂等。
+    V1 不加 /v1 前缀（同仓同步发版；公开 API 化时再版本化）。
+servers:
+  - url: https://{host}
+    variables: { host: { default: zace.example.com } }
+tags: [{ name: auth }, { name: projects }, { name: sync }, { name: query }, { name: ops }]
+
+components:
+  securitySchemes:
+    bearerToken: { type: http, scheme: bearer, bearerFormat: zace_api_token }
+    sessionCookie: { type: apiKey, in: cookie, name: zace_session }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: object, properties: { code: { type: string }, message: { type: string } } }
+    Project:
+      type: object
+      properties:
+        projectId: { type: string }
+        displayName: { type: string }
+        createdAt: { type: integer }
+    SyncStatus:
+      type: object
+      properties:
+        projectId: { type: string }
+        filesIndexed: { type: integer }
+        chunks: { type: integer }
+        symbols: { type: integer }
+        edges: { type: integer }
+        pendingJobs: { type: integer }
+        indexingFiles: { type: array, items: { type: string } }
+        lastIndexedAt: { type: integer, nullable: true }
+    SearchResponse:
+      type: object
+      description: ContextPack 的 Markdown 渲染在服务端完成（D-21 / Module/05 §5）
+      properties:
+        markdown: { type: string }
+        meta: { type: object, additionalProperties: true }
+    AskResponse:
+      type: object
+      properties:
+        answer: { type: string, description: "状态为 insufficient_evidence/degraded 时也非空（D-24/D-26）" }
+        status: { enum: [answered, insufficient_evidence, degraded] }
+        evidenceSummary: { type: array, items: { type: object } }
+        meta: { type: object, additionalProperties: true }
+  responses:
+    Unauthorized: { description: 401, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+security:
+  - bearerToken: []
+  - sessionCookie: []
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: 注册（默认关闭；register 环境变量开启后可用）
+      security: []
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [name, password], properties: { name: { type: string }, password: { type: string } } } } }
+      responses: { '201': { description: Created }, '403': { description: 注册未开启 } }
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: 登录（web/CLI 通用；签发 session cookie）
+      security: []
+      responses: { '200': { description: OK }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      responses: { '204': { description: No Content } }
+  /api/auth/tokens:
+    post:
+      tags: [auth]
+      summary: 创建 API token（明文仅此一次返回）
+      responses: { '201': { description: '{ id, token, prefix }' } }
+    get:
+      tags: [auth]
+      summary: 列出 token（不含明文）
+      responses: { '200': { description: OK } }
+  /api/auth/tokens/{id}:
+    delete:
+      tags: [auth]
+      summary: revoke token（软删）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content } }
+
+  /api/projects/resolve:
+    post:
+      tags: [projects]
+      summary: 按 identityKey（D-29）幂等解析/创建项目
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [identityKey], properties: { identityKey: { type: string }, displayName: { type: string } } } } }
+      responses: { '200': { description: '{ projectId, created }' } }
+  /api/projects:
+    get:
+      tags: [projects]
+      responses: { '200': { description: Project[] } }
+  /api/projects/{id}:
+    get:
+      tags: [projects]
+      responses: { '200': { description: Project + SyncStatus } }
+    delete:
+      tags: [projects]
+      summary: 级联删除（rm -rf 项目目录 + 元数据行；审计留痕）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content } }
+
+  /api/sync/batch-upload:
+    post:
+      tags: [sync]
+      summary: 批量上传源码 blob（每批 ≤1MB；按 blobHash 幂等）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, blobs]
+              properties:
+                projectId: { type: string }
+                branch: { type: string }
+                commit: { type: string }
+                blobs:
+                  type: array
+                  items:
+                    type: object
+                    required: [path, blobHash, contentB64]
+                    properties:
+                      path: { type: string }
+                      blobHash: { type: string }
+                      contentB64: { type: string, description: base64(文件原始字节)；JSON 传输二进制安全编码，冻结）
+      responses: { '200': { description: '{ accepted: [blobHash], skipped: [path] }（skipped=服务端裁决忽略，客户端尊重）' } }
+  /api/sync/checkpoint:
+    post:
+      tags: [sync]
+      summary: 提交 scope blob 集合，换取 checkpointId（检索请求携带，避免每次传全量名单）
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [projectId, blobHashes], properties: { projectId: { type: string }, blobHashes: { type: array, items: { type: string } } } } } }
+      responses: { '200': { description: '{ checkpointId }' } }
+  /api/sync/deletions:
+    post:
+      tags: [sync]
+      summary: 通知删除路径（按 (projectId,path) 幂等；级联删索引 + spec_references.stale=1）
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [projectId, paths], properties: { projectId: { type: string }, paths: { type: array, items: { type: string } } } } } }
+      responses: { '200': { description: OK } }
+  /api/sync/status/{projectId}:
+    get:
+      tags: [sync]
+      parameters: [{ name: projectId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: SyncStatus } }
+
+  /api/query/search:
+    post:
+      tags: [query]
+      summary: Fast 模式（Module/02+03）；返回服务端渲染的 Markdown 与 meta
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, query]
+              properties:
+                projectId: { type: string }
+                checkpointId: { type: string }
+                query: { type: string }
+                maxTokens: { type: integer, default: 10000 }
+      responses: { '200': { description: SearchResponse } }
+  /api/query/ask:
+    post:
+      tags: [query]
+      summary: Deep 模式（Module/02+03+04）；LLM 未配置/失败时走 D-26 降级包
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [projectId, question], properties: { projectId: { type: string }, checkpointId: { type: string }, question: { type: string } } } } }
+      responses: { '200': { description: AskResponse } }
+
+  /healthz:
+    get:
+      tags: [ops]
+      security: []
+      summary: 存活 + 依赖检查
+      responses: { '200': { description: OK } }
+  /api/usage/projects/{id}:
+    get:
+      tags: [ops]
+      summary: 查询审计（Module/04 §8 存档的读取口）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }

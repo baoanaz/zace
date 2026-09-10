@@ -1,0 +1,33 @@
+{
+  "$comment": "zace MCP 工具 schema 冻结合同（CF-06，来源 docs/design/Module/05-MCP与同步.md §2.1，D-12）。description 文案可由 client 任务打磨，但工具名/参数名/类型/默认值/上限冻结。",
+  "tools": [
+    {
+      "name": "search_context",
+      "description": "在当前项目工作区检索与问题最相关的上下文（代码/调用链/文档证据包）。适合'XX 在哪里实现/谁在调用它'这类需要跨文件定位的问题；已知精确标识符的全量引用请用 grep，已知文件请直接 read。返回 ContextPack 的 Markdown 渲染（含证据 id、行号与 Missing Evidence）。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query", "project_root"],
+        "properties": {
+          "query": { "type": "string", "minLength": 1, "description": "自然语言或符号混合查询，中英均可" },
+          "project_root": { "type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠" },
+          "max_tokens": { "type": "integer", "minimum": 1, "maximum": 16000, "default": 10000 }
+        }
+      }
+    },
+    {
+      "name": "ask_project",
+      "description": "就当前项目提出调查性问题，返回基于证据包（含代码与设计文档）的带引用回答，并在证据不足时给出缺口说明与改问建议。需要直接结论（'为什么/如何设计/实现与设计是否一致'）时用它；只想要原始上下文时用 search_context。",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "project_root"],
+        "properties": {
+          "question": { "type": "string", "minLength": 1, "description": "需要项目级回答的问题，中英均可" },
+          "project_root": { "type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠" },
+          "max_tokens": { "type": "integer", "minimum": 1, "description": "answer 输出上限（token）" }
+        }
+      }
+    }
+  ]
+}

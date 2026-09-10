@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zace.dev/contracts/contextpack.schema.json",
+  "title": "ContextPack（zace 统一返回合同，CF-03）",
+  "description": "来源 docs/design/Module/03-上下文组装.md §2（D-21 双层合同）。内部 JSON 合同；对外 Markdown 由同一 formatter 渲染。字段名冻结，禁止改名。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query", "mode", "answerable", "confidence", "freshness", "evidence", "docs", "flows", "missingEvidence", "nextQueries", "budget"],
+  "properties": {
+    "query": { "type": "string" },
+    "mode": { "enum": ["fast", "deep"] },
+    "answerable": { "type": "boolean" },
+    "confidence": { "enum": ["high", "medium", "low"] },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["indexedAt"],
+      "properties": {
+        "indexedAt": { "type": ["integer", "null"], "description": "unix seconds" },
+        "staleFiles": { "type": "array", "items": { "type": "string" } },
+        "indexingFiles": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "代码/测试证据（type=code|test）",
+      "items": { "$ref": "#/$defs/evidenceItem" }
+    },
+    "docs": {
+      "type": "array",
+      "description": "spec 证据；与 evidence 共用 E 编号空间（D-21）",
+      "items": { "$ref": "#/$defs/docItem" }
+    },
+    "flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "nodes", "truncated"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F\\d+$" },
+          "nodes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["symbol", "path", "line"],
+              "properties": {
+                "symbol": { "type": "string" },
+                "path": { "type": "string" },
+                "line": { "type": "integer" }
+              }
+            }
+          },
+          "truncated": { "type": "boolean" }
+        }
+      }
+    },
+    "missingEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "enum": ["index_stale", "indexing_pending", "graph_boundary", "symbol_ambiguous", "unresolved_reference", "stale_doc_reference", "retrieval_truncated", "no_context_match"]
+          },
+          "message": { "type": "string" },
+          "symbol": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "nextQueries": { "type": "array", "items": { "type": "string" } },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usedTokens", "hardCap", "truncated", "omittedCount"],
+      "properties": {
+        "usedTokens": { "type": "integer" },
+        "hardCap": { "type": "integer" },
+        "truncated": { "type": "boolean" },
+        "omittedCount": { "type": "integer" }
+      }
+    }
+  },
+  "$defs": {
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "path", "content", "score", "evidenceTier", "reason"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^E\\d+$" },
+        "type": { "enum": ["code", "test"] },
+        "path": { "type": "string" },
+        "symbol": { "type": ["string", "null"] },
+        "lines": { "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+        "content": { "type": "string", "description": "带行号原文" },
+        "score": { "type": "number" },
+        "evidenceTier": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "reason": { "type": "string" },
+        "elidedLines": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "docItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "path", "headingPath", "doctype", "content", "reason"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^E\\d+$" },
+        "type": { "const": "spec" },
+        "path": { "type": "string" },
+        "headingPath": { "type": "string" },
+        "doctype": { "enum": ["agent-instructions", "readme", "design", "adr", "api", "changelog", "guide"] },
+        "lines": { "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+        "content": { "type": "string" },
+        "reason": { "type": "string" },
+        "staleRefs": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
