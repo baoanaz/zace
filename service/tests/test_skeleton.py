@@ -95,12 +95,15 @@ def test_healthz_deep_reports_provider_failure_without_500(
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("post", "/api/query/search"),
-        ("post", "/api/query/ask"),
-        ("get", "/api/projects"),
-        ("post", "/api/sync/checkpoint"),
+        # M2a-1 期间保持占位的端点：鉴权归 M2c，审计读取口归 M2c/Phase 3。
+        # （projects / query / sync 的真实行为由 TASK-031..033 的测试覆盖，不再是占位。）
+        ("post", "/api/auth/register"),
+        ("post", "/api/auth/login"),
+        ("post", "/api/auth/logout"),
+        ("post", "/api/auth/tokens"),
         ("get", "/api/auth/tokens"),
-        ("get", "/api/sync/status/abc"),
+        ("delete", "/api/auth/tokens/abc"),
+        ("get", "/api/usage/projects/abc"),
     ],
 )
 def test_placeholder_routes_return_501_envelope(

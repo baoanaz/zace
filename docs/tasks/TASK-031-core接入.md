@@ -1,6 +1,6 @@
 # TASK-031：core 接入（EngineManager + BlobSource + 项目 API + `ingest(source=)` 实现）
 
-> 状态：pending ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：TASK-030 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 2（M2a-1）｜ 硬依赖：TASK-030 ｜ soft 依赖：无
 > 建议分支：`feature/task-031_<你的缩写><MMDD>`（从 TASK-030 分支串联）
 > 交付物所有权：
 > - `service/zace_service/{runtime,blobstore,sync_state}.py`（新建）
@@ -130,4 +130,108 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+- **日期 / 分支**：2026-09-10 ｜ `feature/task-031_xwz0910`（从 `feature/task-030_xwz0910` 串联）
+- **关键产物**：`service/zace_service/{runtime,blobstore,sync_state}.py`、`service/zace_service/deps.py`（追加 engine_manager / require_project_id）、`service/zace_service/routers/projects.py`（替换占位）、`core/zace_core/engine.py`（仅 §A）、`core/tests/integration/test_ingest_source.py`、`service/tests/{conftest,test_engine_manager,test_projects_api}.py`。
+
+### 验收命令与结果
+
+```text
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest
+552 passed, 2 skipped, 2 warnings in 12.74s     # 030 后为 521+2 → 本卡新增 31 条
+$ uv run pytest service/tests
+48 passed                                       # 030 的 20 条 + 本卡 28 条
+$ uv run pytest core/tests/integration/test_ingest_source.py -q
+3 passed
+```
+
+### §A 最小复现的前后对照（实测输出）
+
+```text
+chunks(before): 5 vectors: 5
+source=None   → chunks: 5 vectors: 0 answerable: False
+source=Blob   → chunks: 5 vectors: 5 answerable: True
+```
+
+**对卡内描述的一处实测修正（重要）**：卡内写“_run 清掉全部 chunk”，实测并非如此——
+FULL_REPARSE 下 SQLite 侧没有任何文件被重处理，所以 ``files``/``chunks``/``symbols`` **原样保留**；
+真正的损失是 ``_rebuild_vectors()`` 先重建向量表、再因 ``list_files()`` 为空而重嵌 0 行，结果是
+**向量索引被清空**（5 → 0），检索从 3 通道退化为单通道，``answerable`` 由 ``True`` 掉到 ``False``。
+更坏的一点：结束后 ``write_fingerprint`` 把指纹改写成“一致”，因此**错误不会被重试也不会被发现**
+——回归测试把这一点也断言在内（``test_fingerprint_invalidation_without_source_wipes_vector_index``）。
+两条断言（清空 / 重建）都在 ``core/tests/integration/test_ingest_source.py``。
+
+### 端到端小闭环（service 内部 API：上传 → 索引 → 检索）
+
+```text
+=== ① upload → ingest report ===
+{'added': 2, 'chunks_new': 5, 'files_parsed': 2, 'vectors_upserted': 5, 'spec_refs': 2,
+ 'languages': ('markdown', 'python')}
+=== ② sync_status ===
+{"projectId": "2cfc521b099a1e37", "filesIndexed": 2, "chunks": 5, "symbols": 2, "edges": 0,
+ "pendingJobs": 0, "indexingFiles": [], "lastIndexedAt": 1789045160, "branch": null,
+ "commit": null, "blobs": {"count": 2, "bytes": 414}, "checkpoints": 0}
+=== ③ search 命中上传文件里的符号 ===
+channelsUsed: ('exact', 'bm25', 'vector') | candidates: 5 | answerable: True high
+## Relevant Context
+### Code
+[E1] TokenService.refresh_token — src/token_service.py:1-9
+     reason: explicit symbol TokenService.refresh_token + exact rank 1 + bm25 rank 2 + vector 0.5635 + explicit symbol/path hit +2.0 + query symbol == chunk symbol +1.0 + 3-channel consensus +0.5 + 相邻区间合并
+     1 | """令牌服务模块。"""
+     ... （省略 1 行）
+     4 | class TokenService:
+     6 |     def refresh_token(self) -> str:
+     8 |         return "old"
+```
+
+（上传 2 个文件均为 service 内部路径：blob 镜像 → 账本 → ``ingest(source=BlobSource)``；
+HTTP 面在 TASK-033。markdown 也进索引：``spec_refs: 2`` 证明 design 文档的 spec 块落库。）
+
+### 越界改动声明（清单外文件 1 个）
+
+`service/tests/test_skeleton.py`（TASK-030 的文件）：本卡把 `GET /api/projects` 从占位 501 换成了真实实现，
+该文件的“占位路由 → 501”参数化列表因此必然失败。最小修改：列表改为“M2a-1 期间仍占位的端点”
+（`/api/auth/*` 6 条 + `/api/usage/projects/{id}`），并在注释里指明 projects/query/sync 的真实行为由 031..033 的测试覆盖。
+改动仅限该参数化列表，不影响 TASK-030 的任何断言语义（错误信封/requestId/脱敏/CF-05 路径快照全保留）。
+
+### 契约影响
+
+无契约文件改动（`docs/contracts/**` 未动）。按编排者在 main 上已冻结的 CF-07 新增参数实现 core 侧；
+新增的 service 侧产出面（`EngineManager` / `BlobStore` / `SyncState` / `BlobSource` /
+`deps.require_project_id`）属实现细节，TASK-032/033 依赖它们。
+
+### 与设计偏差
+
+1. **`EngineManager.ingest` 转调 `Engine._ingest`（私有方法）**：CF-07 的 ``ingest`` 只回 ``job_id``，
+   而同步 API 的 ``batch-upload`` 必须如实上报 ``added/skipped/errors``（D-30）→ 非拿到
+   ``IngestReport`` 不可。卡内只允许 §A 一处 core 改动，故未在 core 新增公开方法；
+   已在模块 docstring 与“未决问题”里写明这个契约缺口。
+2. **`deps.py` 追加 `require_project_id`**：R37（本地模式可省略 projectId）需要一个共享实现点，
+   而 TASK-032/033 的文件清单里没有 ``deps.py``（它们的授权只含 routers/query.py、routers/sync.py 等），
+   故在此落地，供后续两卡直接复用。
+3. **`sync_status` 返回 camelCase dict**（core 字段 + ``branch/commit/blobs/checkpoints``）：
+   直接对齐 CF-05 的 ``SyncStatus`` 与 TASK-033 的追加字段，避免路由层再做一次映射。
+4. **`BlobStore` 目录用 ``blobs/{hash[:2]}/{hash}``**（与 §B 一致）；`put` 额外校验
+   ``path`` 的仓库相对路径安全性（与 ``SourcePathError`` 同一口径），不只校验 hash。
+5. **并发测试的锁断言方式**：不断言“真的发生过竞争”，而是断言“两线程同时 ingest 不抛异常且
+   最终 chunk 数正确”（core 是单写者假设，锁是防止互踩而非提升吞吐）。
+
+### 未决问题
+
+1. **core 缺“ingest 并返回 IngestReport”的公开面**（建议编排者裁决）：当前 service 以
+   `Engine._ingest` 取报告，属跨包访问私有方法。可选出路：① 在后续卡把 `Engine.ingest` 的返回值
+   （或一个 `ingest_report()`）纳入 CF-07；② 长期不管（同 monorepo 同版本演进，R33 已允许用 core 公开类）。
+2. **确定性假 provider 在 core 与 service 的测试里各有一份**（`core/tests/integration/conftest.py`
+   与 `service/tests/conftest.py`）：`core/tests` 不是可导入包，service 测试不能反向依赖它。
+   若后续出现第三处，建议把假 provider 提到 `zace_core.testing`（需单独评估是否污染生产包）。
+3. **`checkpointId` 与检索的强校验不在本卡**（TASK-033 也只需登记，client 侧优化）；本轮无遗留缺陷。
+4. 上传路径的 `.gitignore` 解析仍归 client（TASK-041）；service 只接收客户端给的文件集（D-28）。
+
+### 建议复核点
+
+① §A 的 core 改动是否真是“一行语义”（`source or self._source_for(project_id)`）+ 回归测试的两侧断言；
+② `EngineManager` 的锁粒度与 `delete_project` 的锁内 rm -rf；③ `require_project_id` 的 R37 语义
+（0 个项目 404 / 多项目 409，不隐式选一个）；④ `sync_state` 的损坏容忍与原子写测试。
