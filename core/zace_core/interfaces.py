@@ -71,9 +71,13 @@ class ContextEngine(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingProfile:
-    """embedding 指纹（写入 index_config；变更触发 D-07 二级失效）。"""
+    """embedding 指纹（写入 index_config；变更触发 D-07 二级失效）。
 
-    model_id: str                 # 如 "local:onnx:multilingual-e5-small" / "api:bge-m3"
+    ``model_id`` 命名（TASK-008 口径）：``local:<model_slug>`` / ``api:<model_name>``。
+    该串会落库，改名等于换模型（触发全量重嵌），需谨慎。
+    """
+
+    model_id: str                 # 如 "local:multilingual-e5-small" / "api:bge-m3"
     dim: int
     max_input_tokens: int         # 超长输入由 provider 内部截断（Module/01 §2.4：默认 ≤2048）
 
@@ -84,7 +88,20 @@ class EmbeddingProvider(Protocol):
     def profile(self) -> EmbeddingProfile: ...
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """批量嵌入；输入为完整文本，截断策略由 provider 按 profile.max_input_tokens 执行。"""
+        """索引侧（passage）批量嵌入。
+
+        输入为完整文本，截断策略由 provider 按 ``profile.max_input_tokens`` 执行；
+        返回单位向量（已 L2 归一化）。消费者：TASK-007（索引期分片嵌入）。
+        """
+        ...
+
+    def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """检索侧（query）批量嵌入（2026-09-10 升格为契约，原 TASK-008 卡内实现约定）。
+
+        存在的理由：e5 等模型对 query / passage 要求不同前缀，缺前缀会显著掉质量；
+        无前缀约定的模型（bge / arctic）本方法等价于 ``embed``。
+        消费者：TASK-010（检索向量通道）。索引侧一律用 ``embed``，不得混用。
+        """
         ...
 
 

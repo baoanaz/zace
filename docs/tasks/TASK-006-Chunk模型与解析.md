@@ -18,6 +18,10 @@
 
 ## 交付内容
 
+### 0. 可直接使用的上游原语（TASK-001 已合并，不要重写）
+
+两阶段解析使用 `Store` 的：`upsert_unresolved` / `unresolved_refs` / `resolve_refs(RefResolution[])` / `mark_refs_failed` / `unresolved_edges` / `retarget_edges` / `add_spec_refs` / `apply_deletions`（已含级联 stale）。语义口径见 `docs/plan/contracts.md` §3.2 R4/R5。
+
 ### A. Chunk 切分（输入 ParsedFile → 输出 ChunkDef 列表）
 
 | 语言 | 规则 |

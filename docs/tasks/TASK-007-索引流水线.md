@@ -18,6 +18,8 @@
 
 ## 交付内容
 
+- **语言识别策略（R1 口径，2026-09-10 编排者裁定）**：调 `detect_language(path)` 前先做仓库级抬升——若本仓库已见任意 C++ 扩展名文件（`.cc/.cpp/.cxx/.hpp/.hh/.hxx/.ipp/.tpp`；取"本次变更集 ∪ files 表已索引语言"的并集），则 `.h` 按 `cpp` 解析（C++ 仓库里 `.h` 语义上就是 C++ 头），否则沿用 registry 默认（`.h` → C）。判定实现放本卡（pipeline 是唯一知道仓库文件集的地方），registry 不改。
+
 ```text
 ingest(changes: ChangeSet) -> IngestReport
   1. deleted   → store.apply_deletions（级联删 + spec_references.stale）
@@ -45,6 +47,13 @@ ingest(changes: ChangeSet) -> IngestReport
 | `core/zace_core/pipeline/indexer.py` | `Indexer`（上述 ingest 流程 + 指纹执行） |
 | `core/zace_core/pipeline/source.py` | `SourceProvider` 协议 + 目录实现 |
 | `core/tests/pipeline/` | 测试（含 fake provider / 内存向量桩） |
+
+## 已就绪的上下游接口（W1 已合并，直接使用，不要重写）
+
+- `Store`（TASK-001）：`apply_file_change` 返回 `FileDelta`（语义见 R4：复用键是 **content_hash** 不是 id）；unresolved 原语 `upsert_unresolved` / `unresolved_refs` / `resolve_refs` / `mark_refs_failed` / `unresolved_edges` / `retarget_edges` / `add_spec_refs`、`counts()`、`freshness()`；`apply_deletions` 已含 spec 引用级联 stale（R5）。
+- `splitter` / `resolver` / `fingerprint`（TASK-006）：本卡不重复实现。
+- `EmbeddingProvider`：索引侧一律 `embed()`（不要用 `embed_query()`）。
+- `VectorStore`（TASK-009）：`upsert/delete/get_hashes/search`；相似度语义见 R10。
 
 ## 验收标准（DoD）
 

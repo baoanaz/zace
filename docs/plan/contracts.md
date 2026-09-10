@@ -17,6 +17,8 @@
 | CF-08 | 索引侧数据类型（ParsedFile/Symbol/Edge/Chunk/FileDelta） | `core/zace_core/types.py` | Module/01 §2 | 002..007/009 |
 | CF-09 | Provider 接口（Embedding/Answer/Parser） | `core/zace_core/interfaces.py` | Module/01/04、D-44 | 002..005/008；Phase 3 |
 
+> CF-09 变更（2026-09-10，L2，编排者）：`EmbeddingProvider` 新增 `embed_query()`——e5 类模型 query/passage 前缀不同，检索侧必须走专用方法；索引侧一律 `embed()`。实现（TASK-008）已含此方法，本次仅补契约；同时统一 `model_id` 命名示例为 `local:<slug>`。
+
 ## 2. 跨文件不变式（写代码时不得违反）
 
 1. `chunk_id = {path}:{symbol_fqn}:{start_line}`（spec 块的 `symbol_fqn = heading_path`），代内唯一即可（D-04）。
@@ -28,12 +30,29 @@
 7. `spec_references.provenance` 永远 `inferred`（D-06）。
 8. 所有面向 agent 的时间/预算语义：`freshness` 如实报告，缺证据必须有 `missingEvidence`（D-30、A5）。
 
-## 3. 规划期裁定（2026-09-10，编排者；需在对应 Module 文档下次修订时回记）
+## 3. 规划期与实现期裁定（编排者；需在对应 Module 文档下次修订时回记）
+
+### 3.1 规划期裁定（2026-09-10）
 
 1. **chunks_fts 采用独立 FTS5 表（非 external content）**：D-20/D-45 要求索引侧写入预分词文本，与 external-content 直读 `chunks.content` 冲突；写入器与 chunks 同事务维护，渲染一律用原文。DDL 见 CF-01 文件头。
 2. **SpecBlock 双表同 id**：检索单元同时写入 `chunks(symbol_kind='spec_block')` 与 `spec_blocks`（结构字段：doctype/heading_path/code_fences）；保证单一 RRF 池、单一向量表、单一 E 编号空间（D-42 的"不新增检索通道"由此落地）。
 3. **batch-upload 的 blob 内容编码 = base64（`contentB64`）**：JSON 传输二进制安全；gzip 是否叠加留待 Phase 2 实测（Module/05 §9-2 开放问题不变）。
 4. **MCP 工具 description 文案可由 client 任务打磨，但 schema（名字/参数/类型/默认值/上限）冻结**（CF-06 文件头声明）。
+
+### 3.2 实现期裁定（W1 泳道评审，2026-09-10；均已核对代码与测试）
+
+| # | 议题 | 裁定 | 影响 |
+|---|---|---|---|
+| R1 | `.h` 的 C/C++ 归属 | 默认归 C（TASK-002 registry）；**仓库级策略归 TASK-007 实现**：当仓库已见任意 C++ 扩展名文件（.cc/.cpp/.cxx/.hpp/.hh/.hxx/.ipp/.tpp）时，`.h` 改由 C++ 解析器处理（在 C++ 仓库里 `.h` 语义上就是 C++ 头） | TASK-007 卡片已补口径；V1 已知限制：先索引 `.h` 后出现 `.cpp` 时旧 `.h` 需等下次变更才重解析 |
+| R2 | `EmbeddingProvider.embed_query()` | 升格为契约（见 CF-09 说明） | TASK-010 检索侧必须调用；TASK-007 索引侧用 `embed()` |
+| R3 | `model_id` 命名 | `local:<slug>` / `api:<model_name>`（落库→改名等于换模型），修订 interfaces.py 示例 | — |
+| R4 | `FileDelta` 三集合语义 | 两两不重叠：`new` = hash 新增/变化（需嵌入），`reused` = hash 未变（可复用向量，**复用键是 hash 不是 id**），`removed` = 旧 id 消失（删向量）；下游 upsert/delete 顺序无关 | TASK-007 按此对账 |
+| R5 | edges 归属与重挂 | 边按 **source 侧**文件归属（文件变更只清 source ∈ 本文件的边，防误删入边）；符号行号漂移时 spec 引用从旧 id 重挂新 id，fqn 消失才 stale=1 | TASK-006 消费 |
+| R6 | C++ MISSING 容忍（TASK-004 偏差申请） | 接受：**仅** 全部错误均为 MISSING 且 ≤5 条时照常抽取（错误入 parse_errors、宏生成声明入 unresolved）；出现任何 ERROR 或超限仍整体 fallback | 仅 cpp.py 内实现 |
+| R7 | 函数原型不成符号（TASK-003） | 接受：仅声明的头文件只产出 include-guard 宏；定义处成符号，解析层按 fqn 匹配 | TASK-014 出题时避免只靠声明定位 |
+| R8 | imports 边 target_name 形态 | 接受现有形态（如 `.service.Service` / `x.*`）；fqn 化与跨文件匹配算法全部归 TASK-006（含相对导入/包语义） | TASK-006 需要处理该形态 |
+| R9 | SpecBlock 结构口径（TASK-005 补充） | 前言块 heading_path=`(preamble)`、level=0；front matter 单独成块；fence 归属最内层 SpecBlock；content 用 splitlines 归一 | TASK-006 切片按此 |
+| R10 | 向量相似度语义（TASK-009） | `search()` 返回余弦相似度（越大越相关，按分降序）；`rebuild(dim)` 用 `create_table(mode='overwrite')` 原子替换（LanceDB OSS 无 rename_table）；单写者假设 | TASK-010 直接消费 |
 
 ## 4. 契约的验证方式（集成保障）
 

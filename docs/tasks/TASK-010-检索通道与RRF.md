@@ -24,7 +24,7 @@ RRF(K=60) 纯融合、不加通道权重（D-16）。路由四分支属 Phase 3�
 | Exact-Explicit | 反引号包裹标识符 / 含扩展名路径 / `::` 与 `.` 标识符链 → `Store.exact_symbols` 精确/fqn 匹配，全量进池（≤20）；候选标记 `explicit=True` 语义（写在 `reasons`/`tier`） |
 | Exact-Inferred | 正则抽取驼峰/蛇形/SCREAMING（codegraph 模式）→ top 20，普通种子；**它只是召回种子不是精确证据**（D-15） |
 | BM25 | `Store.fts_search(segment(query), top 50)`；查询侧必须与索引侧同一分词器（D-45）；generated 文件不排除（rerank 降权） |
-| Vector | query embedding（**同 query 60s 内复用**，进程内 TTL 缓存）→ `vector_store.search(top 50)`；超时/异常 → 降级为 Exact+BM25 双通道并如实标记 `degraded=True`（Module/02 §5） |
+| Vector | query embedding —— **必须调用 `provider.embed_query()`**（CF-09 契约：e5 类模型 query/passage 前缀不同，用 `embed()` 会显著掉质量；同 query 60s 内复用，进程内 TTL 缓存）→ `vector_store.search(top 50)`；超时/异常 → 降级为 Exact+BM25 双通道并如实标记 `degraded=True`（Module/02 §5） |
 | 融合 | `rrf_score = Σ 1/(60+rank)`；chunk_id 去重；输出 ~120 候选，含 `channel_ranks` / `tier`（Exact-Explicit=0、BM25=1、Vector=2）/ `reasons` |
 
 - 三通道并行（可先串行实现，接口按并行语义设计：`recall_*` 返回列表，fusion 统一收集）。
@@ -41,6 +41,13 @@ RRF(K=60) 纯融合、不加通道权重（D-16）。路由四分支属 Phase 3�
 | `core/zace_core/retrieval/rrf.py` | RRF 实现（纯函数） |
 | `core/zace_core/retrieval/fusion.py` | 去重与候选合并 |
 | `core/tests/retrieval/` | 测试 |
+
+## 可直接使用的上游实现（W1 已合并）
+
+- `Store`（TASK-001）：`exact_symbols` / `fts_search(segmented_query, limit)` / `chunk_by_id` / `chunks_by_ids` / `edges_for` / `spec_refs_*` / `freshness`；FTS 返回 **bm25 原始分（越小越相关）**，转排名前留意方向。
+- `zace_core.text.segment()`：CJK 预分词（查询侧必用，与索引侧同一分词器）。
+- `EmbeddingProvider`（TASK-008）：`embed_query()` 用于检索侧；`profile.dim` 决定向量库维度。
+- `VectorStore`（TASK-009）：`search(vector, top_k)` 返回**余弦相似度（越大越相关）**。
 
 ## 验收标准（DoD）
 
