@@ -57,6 +57,7 @@ from zace_core.embedding import EmbeddingConfig, create_provider
 from zace_core.hashing import blob_hash, file_content_hash
 from zace_core.interfaces import ContextEngine, EmbeddingProvider
 from zace_core.pipeline import DirectorySource, Indexer, IngestReport
+from zace_core.pipeline.source import SourceProvider
 from zace_core.retrieval import RecallLimits, recall
 from zace_core.retrieval.expand import ExpansionLimits, expand
 from zace_core.retrieval.rerank import collect_signals, rerank
@@ -354,9 +355,18 @@ class Engine:
         self._repo_roots[handle.project_id] = Path(root).expanduser().resolve()
         return handle, identity
 
-    def ingest(self, project_id: str, changes: ChangeSet) -> str:
-        """写入变更集并完成索引（本卡同步语义），返回 job id（已完成的 job）。"""
-        self._ingest(project_id, changes, full=False)
+    def ingest(
+        self, project_id: str, changes: ChangeSet, *, source: SourceProvider | None = None
+    ) -> str:
+        """写入变更集并完成索引（本卡同步语义），返回 job id（已完成的 job）。
+
+        ``source``（CF-07 的 ``source`` 参数，TASK-031 §A）：服务端上传模式下由 service 传入
+        源码读取实现（``list_files()`` 必须是项目已知全部文件）。**必须传**：配置指纹一级/二级失效
+        （D-07）会走 ``full_reparse`` / ``reembed``，该路径遍历 ``source.list_files()`` 重建；
+        不传则内部退化为 ``_EmptySource``，结果是在库里已有文件的情况下重建出空集合，
+        **向量索引被静静清空且不报错**（回归测试：``core/tests/integration/test_ingest_source.py``）。
+        """
+        self._ingest(project_id, changes, full=False, source=source)
         return f"job-sync-{uuid.uuid4().hex[:12]}"
 
     def ingest_repo(self, project_id: str, root: str | Path, *, full: bool = False) -> IngestReport:
@@ -490,9 +500,16 @@ class Engine:
         root = self._repo_roots.get(project_id)
         return DirectorySource(root) if root is not None else _EmptySource()
 
-    def _ingest(self, project_id: str, changes: ChangeSet, *, full: bool) -> IngestReport:
+    def _ingest(
+        self,
+        project_id: str,
+        changes: ChangeSet,
+        *,
+        full: bool,
+        source: SourceProvider | None = None,
+    ) -> IngestReport:
         with self._open_project(project_id) as (store, vectors, provider):
-            indexer = Indexer(store, provider, vectors, self._source_for(project_id))
+            indexer = Indexer(store, provider, vectors, source or self._source_for(project_id))
             return indexer.full_reparse(changes) if full else indexer.ingest(changes)
 
     @contextmanager
