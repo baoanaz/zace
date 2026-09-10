@@ -1,6 +1,6 @@
 # TASK-012：ContextPack 组装 + Markdown 渲染
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010、TASK-011 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010、TASK-011 ｜ soft 依赖：无
 > 建议分支：`feature/task-012_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/contextpack/`、`core/tests/contextpack/`
 > 允许并在卡内预期：在 `core/pyproject.toml` 的 `dev` extra 增加 `jsonschema`（schema 校验测试用），其余依赖不动。

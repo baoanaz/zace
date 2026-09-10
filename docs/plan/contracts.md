@@ -54,6 +54,17 @@
 | R9 | SpecBlock 结构口径（TASK-005 补充） | 前言块 heading_path=`(preamble)`、level=0；front matter 单独成块；fence 归属最内层 SpecBlock；content 用 splitlines 归一 | TASK-006 切片按此 |
 | R10 | 向量相似度语义（TASK-009） | `search()` 返回余弦相似度（越大越相关，按分降序）；`rebuild(dim)` 用 `create_table(mode='overwrite')` 原子替换（LanceDB OSS 无 rename_table）；单写者假设 | TASK-010 直接消费 |
 
+### 3.3 集成期裁定（编排者 E2E 实测发现，2026-09-10）
+
+| # | 议题 | 裁定 | 影响 |
+|---|---|---|---|
+| R11 | **BM25 多词召回语义**：TASK-001 的 `fts_search` 用 FTS5 隐式 AND，中文自然语言查询（分词后 7+ token）恒零命中 → Vector 单通道 → `answerable` 恒 False | **修复**：`fts_search(..., operator="or")` 为默认（OR 连接、每词引号包裹），`"and"` 保留供高精度调用；同时引入 bm25 列权重 `(content=1.0, signature=5.0, docstring=1.0)`。依据 codegraph `queries.ts:1505-1513`（OR + 列加权）【已验证·快照 2025-09】 | TASK-016；前缀匹配列为 TASK-015 校准项 |
+| R12 | **证据块行号非单调**：`_try_merge` 按分数顺序拼接 content、lines 取包围盒 → 渲染出行号回跳（9→6→14→1），误导 agent 对齐编辑；`elidedLines` 语义失真 | **修复**：片段化存储 + 按行序渲染，`elidedLines` = 真实省略行数 | TASK-017 |
+| R13 | 跨模块集成回归缺位 | **补齐**：新增 `core/tests/integration/` 承载 M1 级端到端回归（真实 Store+Vector+Indexer+retrieval+contextpack，embedding 用确定性假 provider） | TASK-016 交付该目录；TASK-013/014 在此基础上扩展 |
+
+> 教训（记入流程）：逐模块测试全绿不等于产品可用——R11/R12 均为逐层测试无法暴露的集成缺陷。
+> 故 W3 起，任何检索/组装类任务卡的 DoD 必须含跨模块 E2E 断言（已在 TASK-013/014 卡补充）。
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。

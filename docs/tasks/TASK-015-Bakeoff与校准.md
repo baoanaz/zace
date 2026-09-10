@@ -17,6 +17,16 @@
 
 ## 交付内容
 
+### 0. 前置与校准清单（W3 补充，编排者；依据 contracts.md §3.3 R11）
+
+- 前置：TASK-016（BM25 OR + 列权重）、TASK-017（行序）已合并，TASK-014 基线报告已出；未合并先停下报告。
+- **校准维度（逐项给前后对比，不允许只报最终值）**：
+  1. `Store` 的 FTS 列权重三元组（content / signature / docstring；TASK-016 初始 1.0/5.0/1.0）；
+  2. **FTS 前缀匹配开关**（`"term"*` vs 精确 token；TASK-016 列为本卡校准项）；
+  3. `RerankWeights` 各特征值（网格/坐标下降，只改默认值不改结构）；
+  4. `RecallLimits` 各通道配额（top-N）—— 只作对照实验，改动需编排者裁定（可能触及 Module/02 配额口径）。
+- 前两项结论若与 TASK-016 默认值不同，需在报告给出推荐值并说明是否建议改默认。
+
 ### A. embedding bake-off（`benches/bakeoff/embed_compare.py`）
 
 - 候选：`multilingual-e5-small` / `bge-small-zh-v1.5` / `arctic-embed-xs`（对照）+（可选，若有 API key）`api:bge-m3`。

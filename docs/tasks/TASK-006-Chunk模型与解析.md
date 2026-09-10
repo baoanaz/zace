@@ -1,6 +1,6 @@
 # TASK-006：Chunk 模型 + unresolved 两阶段解析 + 配置指纹
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001 ｜ soft 依赖：TASK-002..005（解析器用 fake `ParsedFile` 即可先行，合并前对齐真实输出）
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001 ｜ soft 依赖：TASK-002..005（解析器用 fake `ParsedFile` 即可先行，合并前对齐真实输出）
 > 建议分支：`feature/task-006_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/chunking/`、`core/tests/chunking/`
 

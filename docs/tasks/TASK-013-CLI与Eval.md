@@ -3,7 +3,6 @@
 > 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-007、TASK-012 ｜ soft 依赖：无
 > 建议分支：`feature/task-013_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/cli/`、`core/zace_core/engine.py`、`benches/run.py`、`core/tests/cli/`
-
 ## 目标
 
 把索引、检索、组装装配成 `ContextEngine`（CF-07），并交付 `zace-core` CLI：
@@ -52,6 +51,9 @@ zace-core eval --golden <DIR|FILE> --repo <PATH> --report <FILE>   # 跑 golden�
   - `eval` 对 3 条内置样例 gold 输出指标报告文件；
   - D-29 identity：同一 repo 路径两次 resolve → 同 project_id；`.git` 目录存在但无 remote → 路径 hash 分支。
 - [ ] 手动验收（写入执行记录）：对本仓库 `zace/` 自身 `ingest` + 2 条中文查询 `search`，贴输出。
+- [ ] **跨模块 E2E 断言（W3 起强制，见 contracts.md §3.3 R13）**：`ingest → search` 的端到端路径必须有一条测试，
+      断言中文自然语言查询（≥5 token）能在**至少两个通道**命中目标符号且 `ContextPack.answerable is True`；
+      不允许只测单层（本卡发现的 R11/R12 类缺陷只能由 E2E 暴露）。
 - [ ] 基线三条命令全绿。
 
 ## 参考源码锚点（只读）

@@ -1,6 +1,6 @@
 # TASK-007：索引流水线（ChangeSet → 增量失效 → 向量对账）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001、TASK-006 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩开发，合并前切换真实实现）
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001、TASK-006 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩开发，合并前切换真实实现）
 > 建议分支：`feature/task-007_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/pipeline/`、`core/tests/pipeline/`
 

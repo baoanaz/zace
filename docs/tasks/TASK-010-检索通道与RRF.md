@@ -1,6 +1,6 @@
 # TASK-010：检索通道（Exact / BM25 / Vector）+ RRF + 降级
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩，合并前切真实实现）
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-001 ｜ soft 依赖：TASK-008、TASK-009（可先用 fake provider / 内存向量桩，合并前切真实实现）
 > 建议分支：`feature/task-010_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/retrieval/exact.py`、`bm25.py`、`vector.py`、`rrf.py`、`fusion.py`、`core/tests/retrieval/`
 > （`retrieval/expand.py`、`rerank.py` 归 TASK-011；本卡不得改这两个文件）

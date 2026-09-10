@@ -1,6 +1,6 @@
 # TASK-011：图扩展（calls + spec_references）+ 确定性 rerank
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-010 ｜ soft 依赖：无
 > 建议分支：`feature/task-011_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/retrieval/expand.py`、`core/zace_core/retrieval/rerank.py`、`core/tests/retrieval/test_expand.py`、`test_rerank.py`
 > （`exact.py`/`bm25.py`/`vector.py`/`rrf.py`/`fusion.py` 与 `retrieval/__init__.py` 归 TASK-010，不得改；需要导出时由调用方直接 import 子模块）
