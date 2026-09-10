@@ -461,7 +461,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
-  git log --oneline -1     # 应为 "docs(phase2): freeze quality tuning, add service cards and M2a wave plan"
+  git log --oneline -1     # 应为 "Add M2a service cards and extend ingest contract with source provider"
   git switch -c feature/task-030_xwzMMDD main   ← MMDD 换成今天月日
 
 【开工】按顺序完成 4 张任务卡：
