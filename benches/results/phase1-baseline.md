@@ -419,3 +419,83 @@ print(render_report(report), end=""); write_report(report, report_path)
   该仓库文档稀薄，属份额上限的预期代价，不改代码）；
   ③ 本卡未做"按文档文件限制切片数"（卡内"明确不做"），若 TASK-015 认为仍不足再议；
   ④ `aibox-0004`/`0012` 的目标代码在候选池 #91+，装填层最多抬到第 5–12 位，进 top-5 需要 R24 的排序判别力。
+
+---
+
+## 9. 修复后复测（TASK-022：answerable / confidence 判定收紧，R22）
+
+> 生成：2026-09-10 ｜ 分支：`feature/task-022_xwz0910`（jump 自 `feature/task-021_xwz0910`）
+> 改动：`core/zace_core/contextpack/assembly.py::_assess`（新增辅助函数
+> `_is_inferred` / `_consensus_files` / `_consensus_peak`）；详见 TASK-022 执行记录。
+> 原始报告：`benches/results/raw-fix022-{zace,aibox,cameraservice}-e2e.md`。本节只追加。
+
+### 9.1 最终口径
+
+```text
+answerable = explicit 命中 >= 1                      # 原口径保留
+           | inferred 命中 >= 1                      # 新增：符号级命中（02 Exact-Inferred 通道）
+           | structural_result                      # 原口径保留
+           | corroborated                           # 替换原 `consensus >= 2`
+corroborated = 双通道共识候选跨 >=2 个不同文件
+               且（① 池内最高分候选被 >=2 通道命中
+                   或 ② 共识最高分 >= 2.15 × 候选池分数中位数）
+answerable = False → confidence 一律 low             # 不用中等把握掩盖不可回答
+```
+
+参数 `MIN_CONSENSUS_FILES=2`、`CONSENSUS_SCORE_RATIO=2.15` 均为 TASK-015 校准项。
+
+### 9.2 候选规则对比表（同一 golden / 同一索引；answerable 不参与装填 → 召回不变）
+
+| # | 规则 | 负例通过 /6 | 非 dogfood /4 | 正例 answerable /54 | 结论 |
+|---|---|---|---|---|---|
+| — | 基线 `explicit \| consensus>=2 \| structural` | 1 | 1 | 52 | 现状 |
+| C1 | `explicit` only | 6 | 4 | **1**（不达标） | 53/54 正例无 explicit 命中 |
+| C1′ | C1 + `inferred` | 6 | 4 | **13**（不达标） | 仍远低于正例下限 52 |
+| C2 | `consensus>=2` 且 `peak >= 2.15×median` | 2 | 2 | 52 | 零正例损失 |
+| C2′ | C2 + 共识跨 ≥2 文件 | 2 | 2 | 52 | 与 C2 结果相同 |
+| C3 | 查询 token 在 top-10 证据中覆盖率 ≥0.9 | 4 | 4 | **20**（不达标） | 负例达标但误杀 32 条正例 |
+| C4 | C1 + C3 | 4 | 4 | **21**（不达标） | 同上 |
+| **选定** | `explicit \| inferred \| structural \| (top1 双通道 & 跨文件) \| C2′` | **2** | **2** | **52** | 正例达标、负例未达标（见 §9.4） |
+
+召回复核（三仓库合并 ② e2e）：**recall@5 0.593 / recall@10 0.704 / MRR 0.465**，
+与 §8.2 的修复后数字逐项相同（answerable 不改变装填与排序）。
+
+### 9.3 负例逐条对照（② e2e）
+
+| id | 仓库 | query | 修复前 | 修复后 | 说明 |
+|---|---|---|---|---|---|
+| `aibox-0008` | aibox | Kubernetes operator 的部署协调逻辑在哪里实现？ | answerable=true（不通过） | **answerable=false（通过）** | 池内最高分是**单通道** README 样板文；共识峰值仅 1.97× 中位数（< 2.15） |
+| `aibox-0020` | aibox | RabbitMQ 的消息确认（ack）机制在哪里实现？ | true（不通过） | true（不通过） | 共识跨 5 文件、峰值 2.84× 中位数、top-1 双通道 |
+| `cameraservice-0005` | cam | Terraform 的资源依赖图是在哪个文件里构建的？ | true（不通过） | true（不通过） | 峰值 5.08× 中位数，top-1 是 `CLAUDE.md`（双通道样板文） |
+| `cameraservice-0010` | cam | Where is the gRPC service definition for the parking assist module? | false（通过） | false（通过） | 无共识候选、无符号命中 |
+| `zace-0004`（dogfood） | zace | PaymentGateway 的重试退避逻辑在哪里实现 | true（不通过） | true（不通过） | R17：题面自身在索引内 |
+| `zace-0106`（dogfood） | zace | 支付网关的指数退避重试策略是在哪个文件里实现的？ | true（不通过） | true（不通过） | 同上 |
+
+**负例通过率：1/6 → 2/6；扣除 2 条 dogfood 后 1/4 → 2/4。**
+
+### 9.4 未达成项与归因（DoD 负例目标未达成，如实记录）
+
+任务卡负例目标（"6 条中 ≥5"、扣除 dogfood 后实为 4/4）**未达成**，原因不是实现缺陷，而是两条
+约束在本特征集上互相排斥：
+
+1. **正例口径是硬约束**（54 条正例 `answerable=True` 不得低于 52）：53/54 条正例**没有** explicit
+   命中，`consensus>=2` 事实上承担了几乎所有正例的可回答性。任何把共识门槛抬高到能拒绝
+   `aibox-0020`（峰值 2.84× 中位数）/`cameraservice-0005`（5.08×）的规则，都会同时拒绝 5–14 条
+   正例（阈值 2.6 起开始丢正例；C3 覆盖率规则达标负例却丢 32 条正例）。
+2. **剩余负例与可回答正例在所有确定性、且不违反 R20/R24 禁项（无停用词表、无词性过滤、无 IDF）
+   的特征上不可分**：`aibox-0020`/`cameraservice-0005` 的共识文件数、峰值倍数、覆盖率、池规模、
+   tier 分布、top-10 代码占比全部落在正例分布的中段。
+3. **真实根因在检索侧与索引侧**（本卡"明确不做"的范围）：这两条负例的 top 证据是**仓库样板文**
+   （`README.md` 的 GitLab 模板、`docs/API.md`、`CLAUDE.md`），其字面内容确实包含查询词
+   （"Kubernetes"/"Terraform"/"ack"）；`RabbitMQ` 则全仓 0 命中但仍靠通用词凑出共识。
+   → 建议编排者：D-28 忽略规则（排除样板文/`.claude`/`egg-info`）+ R24 排序判别力，
+   二者落地后本口径可再收紧一档（届时正例分布会随候选池质量上移，门槛才有空间）。
+
+### 9.5 契约影响 / 与设计偏差
+
+- **契约影响**：无。CF-03 字段名与结构未动；`answerable/confidence` 的**取值空间**不变，
+  只是判定口径收紧（`core/tests/contextpack/test_assembly.py` 中 3 条旧口径断言按新口径更新，
+  并在测试里写明理由：其中 1 条改名以反映新语义）。
+- **与设计偏差**：与 Module/03 §4.4 的条文文字不一致（§4.4 写的是 `consensus >= 2`）。
+  本卡按 C1–C4 候选逐条实测后收紧，**未改设计文档**；建议编排者按 L3 流程把 §4.4 条文更新为
+  本口径（或裁决回退）。这属于"实现先于文档"，已在任务卡"未决问题"登记。

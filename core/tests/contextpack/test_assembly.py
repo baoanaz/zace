@@ -300,9 +300,11 @@ def _pool(cand, *, explicit: int, consensus: int, plain: int, specs: int = 0):
         (1, 3, 0, 0, False, False, True, "high"),      # explicit + ≥3 共识
         (1, 1, 0, 0, False, False, True, "low"),       # explicit 但共识不足 → 其余
         (1, 3, 0, 0, False, True, True, "low"),        # graph_boundary 阻断 high
-        (0, 1, 1, 0, False, False, False, "medium"),   # 有共识无 explicit
+        # R22/TASK-022 口径更新：共识候选只覆盖 1 个文件 + 无 explicit → 不可回答
+        (0, 1, 1, 0, False, False, False, "low"),
         (0, 0, 2, 0, False, False, False, "low"),      # 仅单通道
-        (0, 2, 0, 0, False, False, True, "medium"),    # 双通道共识 ≥2 → answerable
+        # R22/TASK-022：双通道共识跨 2 个文件且最强候选被双通道命中 → 仍算有据
+        (0, 2, 0, 0, False, False, True, "medium"),
         (0, 0, 0, 0, True, False, True, "low"),        # 结构路由非空（接口预留）
     ],
 )
@@ -322,7 +324,14 @@ def test_answerable_confidence_matrix(
     assert pack.confidence == confidence
 
 
-def test_spec_only_hit_is_medium_confidence(store, seed_file, sym, cand) -> None:
+def test_spec_only_hit_is_not_answerable_and_reports_low_confidence(
+    store, seed_file, sym, cand
+) -> None:
+    """单条 spec（单通道、单文件）→ 不可回答，且 confidence 随之为 low（R22/TASK-022 口径）。
+
+    旧口径下这种包是 `answerable=False` 但 `confidence=medium`（spec-only → medium）；
+    TASK-022 要求 `answerable=False` 时不得用中等把握掩盖不可回答，故同步降为 low。
+    """
     seed_file(
         store,
         path="docs/auth.md",
@@ -332,7 +341,7 @@ def test_spec_only_hit_is_medium_confidence(store, seed_file, sym, cand) -> None
     candidates = [cand("docs/auth.md", "架构 > Token Refresh", 10, score=0.4, kind="spec")]
     pack = assemble(store, "q", candidates)
     assert pack.answerable is False
-    assert pack.confidence == "medium"
+    assert pack.confidence == "low"
 
 
 # --------------------------------------------------------------------------- 缺失证据与 nextQueries

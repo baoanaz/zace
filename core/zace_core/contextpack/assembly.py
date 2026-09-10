@@ -41,6 +41,7 @@ tier 不作为排序键（D-17）：只做配额与资格线
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -58,8 +59,10 @@ from zace_core.types import (
 
 __all__ = [
     "ADJACENT_GAP_LINES",
+    "CONSENSUS_SCORE_RATIO",
     "DEEP_BUDGET",
     "FAST_BUDGET",
+    "MIN_CONSENSUS_FILES",
     "MODE_DEEP",
     "MODE_FAST",
     "BudgetConfig",
@@ -141,6 +144,12 @@ DEEP_BUDGET = BudgetConfig(hard_cap=12_000)
 _SPEC_KIND = "spec"
 #: 被 spec 份额上限挡下的候选在 missingEvidence 里的统一措辞（R21 §C 观测要求）。
 _DOCS_RATIO_NOTE = "spec 份额上限"
+
+# R22（TASK-022）：answerable 判定收紧参数（均为 TASK-015 校准项，数据见任务卡执行记录）。
+#: 双通道共识必须覆盖的最少文件数（堵“同一长文档切片放大造成的伪共识”）。
+MIN_CONSENSUS_FILES = 2
+#: 共识最高分相对候选池分数中位数的最小倍数（堵“文档天然双通道命中”）。
+CONSENSUS_SCORE_RATIO = 2.15
 
 
 def budget_for(mode: str) -> BudgetConfig:
@@ -631,8 +640,45 @@ def _is_explicit(candidate: Candidate) -> bool:
     return "exact" in candidate.channel_ranks or "explicit path" in candidate.reasons
 
 
+def _is_inferred(candidate: Candidate) -> bool:
+    """Inferred 符号命中（02 的 Exact-Inferred 通道，tier 1）。
+
+    与 Explicit 同为**符号级**依据（查询词命中了仓库里真实存在的符号/类名），
+    与"两份文档都含这个词"有本质区别，因此 R22/TASK-022 把它作为独立硬依据。
+    """
+    return "inferred" in candidate.channel_ranks or "inferred symbol" in candidate.reasons
+
+
 def _consensus_count(candidates: Iterable[Candidate]) -> int:
     return sum(1 for candidate in candidates if len(candidate.channel_ranks) >= 2)
+
+
+def _consensus_files(candidates: Iterable[Candidate]) -> int:
+    """双通道共识候选覆盖的**不同文件**数（R22/TASK-022）。
+
+    同一份长文档切出的多个小节会在 BM25 与 Vector 上同时强命中（基线实测：6 个不同小节
+    同时占据 top-8），于是"共识候选数"被切片数量放大——按文件去重后才能反映"多来源互相印证"。
+    """
+    return len(
+        {
+            candidate.path or candidate.chunk_id
+            for candidate in candidates
+            if len(candidate.channel_ranks) >= 2
+        }
+    )
+
+
+def _consensus_peak(candidates: Iterable[Candidate]) -> float:
+    """双通道共识候选里的最高 rerank 分（无共识候选 → 0.0）。"""
+    return max(
+        (candidate.score for candidate in candidates if len(candidate.channel_ranks) >= 2),
+        default=0.0,
+    )
+
+
+def _is_corroborated_top(candidate: Candidate | None) -> bool:
+    """池内最高分候选是否被 **≥20 通道**同时命中（"最强证据有交叉印证，不是单通道运气"）。"""
+    return candidate is not None and len(candidate.channel_ranks) >= 2
 
 
 def _assess(
@@ -643,12 +689,31 @@ def _assess(
     structural_result: bool,
     graph_boundary: bool,
 ) -> tuple[bool, str]:
-    """answerable / confidence 确定性判定（Module/03 §4.4，照抄实现）。"""
+    """answerable / confidence 确定性判定（Module/03 §4.4 + R22/TASK-022 收紧）。
+
+    收紧口径（数据见 TASK-022 执行记录的候选规则对比表）：
+
+    - **Explicit / Inferred 符号级命中仍是硬依据**（原规则的 Explicit + 新增 Inferred）；
+    - `consensus >= 2` 改为三条**可交叉印证**的口径（任一成立即可）：
+      ① 池内最高分候选被 ≥2 通道命中，且共识候选覆盖 ≥2 个不同文件（最强证据有交叉印证）；
+      ② 共识候选覆盖 ≥2 个不同文件，且共识最高分 ≥ `CONSENSUS_SCORE_RATIO` × 候选池分数中位数
+      （存在显著强于池中位的共识）——堵住"文档密集仓库里文档天然双通道命中"；
+    - `answerable=False` 时 `confidence` 一律 `low`（不用中等把握掩盖不可回答）。
+    """
     explicit_hits = sum(1 for candidate in pool if _is_explicit(candidate))
+    inferred_hits = sum(1 for candidate in pool if _is_inferred(candidate))
     consensus = _consensus_count(pool)
-    answerable = explicit_hits >= 1 or consensus >= 2 or structural_result
+    consensus_files = _consensus_files(pool)
+    median = statistics.median([candidate.score for candidate in pool]) if pool else 0.0
+    corroborated = consensus_files >= MIN_CONSENSUS_FILES and (
+        _is_corroborated_top(pool[0] if pool else None)
+        or (median > 0.0 and _consensus_peak(pool) >= CONSENSUS_SCORE_RATIO * median)
+    )
+    answerable = explicit_hits >= 1 or inferred_hits >= 1 or structural_result or corroborated
 
     spec_only = bool(docs) and not evidence
+    if not answerable:
+        return False, "low"
     if explicit_hits >= 1 and consensus >= 3 and not graph_boundary:
         confidence = "high"
     elif (consensus > 0 and explicit_hits == 0) or spec_only:
