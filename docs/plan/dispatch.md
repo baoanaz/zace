@@ -24,13 +24,11 @@
 
 | 波次 | 同时开几个会话 | 泳道（工作区） | 任务卡（按序做） | 状态 |
 |---|---|---|---|---|
-| W1 | 4 | A/B/C/D | TASK-001 / 002→003→004 / 005→009 / 008 | 已完成 |
-| W2 | 2 | A `zace-lane-a` | TASK-006 → 007 | 已完成 |
-| W2 | | E `zace-lane-e` | TASK-010 → 011 → 012 | 已完成 |
-| W3a | 3 | B `zace-lane-b` | TASK-016（BM25 多词召回修复 + E2E 回归） | **当前波次** |
-| W3a | | C `zace-lane-c` | TASK-017（证据块行序修复） | **当前波次** |
-| W3a | | F `zace-lane-f` | TASK-013（CLI + eval runner） | **当前波次** |
-| W3b | 1 | F `zace-lane-f` | TASK-014 → TASK-015（必须在 016/017 合并后跑） | 等 W3a |
+| W1 / W2 | — | A/B/C/D/E | TASK-001..012 | 已完成 |
+| W3a | 3 | B / C / F | TASK-016 / TASK-017 / TASK-013 | 已完成 |
+| W3c | 2 | A `zace-lane-a` | **TASK-018**（兜底行号 + chunk id 唯一性，**阻断修复**） | **当前波次** |
+| W3c | | C `zace-lane-c` | **TASK-019**（spec 保底重复装填） | **当前波次** |
+| W3b | 1 | F `zace-lane-f` | TASK-014 → TASK-015（必须在 W3c 合并后跑，否则基线失真） | 等 W3c |
 
 ## 2. 提示词（整段复制）
 
@@ -368,6 +366,85 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
    d) 任务板对应行状态改 review。
    e) git add -A && git commit（"task-013: " 前缀）。
 5. 输出报告（格式：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题）。
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+```
+
+### W3c-1 · 泳道 A（TASK-018 兜底行号修复，阻断项）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 A：兜底切分行号修复 + chunk id 唯一性 + 单文件失败隔离】。
+背景：TASK-013 的自举实测发现，在真实 zace 仓库上执行 `zace-core ingest --repo .` 会直接崩溃
+（sqlite3.IntegrityError: UNIQUE constraint failed: chunks.id）。根因已由编排者定位并写在任务卡里。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1          # 应为 “Merge branch 'feature/task-013_xwz0910'” 之后的最新 main
+  git switch -c feature/task-018_xwzMMDD main
+
+【开工】
+1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
+   docs/tasks/TASK-018-兜底行号与ID唯一性修复.md（含完整根因分析、修复要求 A/B/C、DoD）、
+   docs/plan/contracts.md §3.4（R14）。
+2. 完成 TASK-018 一张卡。要点：
+   - §A 根因：parsing/fallback.py 的 _split 在分隔符分支递归时丢失基准偏移（顶层 offset=0 掩盖了它）。
+     卡内给了最小复现，先跑一遍确认，再修。
+   - §B 防御：chunking/splitter.py 出口检测重复 id → 抛带明细的 ValueError，**禁止静默去重/丢弃**。
+   - §C 隔离：pipeline/indexer.py 让单文件失败不中断整次 ingest，如实写进 report.errors。
+   - **核心验收**：`uv run zace-core ingest --repo . --data /tmp/zace-u1-check` 在 zace 仓库本体
+     （不剔除 uv.lock/.git）上跑通，把输出贴进执行记录。这是阻断解除的唯一凭证。
+3. 工艺：
+   a) 只修改卡内"交付物所有权"清单里的文件；其他一律不动（尤其 core/zace_core/contextpack/，那是 TASK-019 的范围）。
+   b) 跑通卡内"验收标准"全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   c) 回填"执行记录"（含 ingest 成功输出与最小复现回归测试）。
+   d) 任务板 docs/tasks/README.md 里 TASK-018 那行状态改为 review。
+   e) git add -A && git commit（提交信息以 "task-018: " 开头）。
+4. 输出报告。
+
+【报告格式】
+- 卡号 / 分支：
+- 验收命令与结果（含 zace 仓库本体 ingest 输出）：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
+```
+
+### W3c-2 · 泳道 C（TASK-019 spec 保底重复装填）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 C：spec 保底块重复装填修复 + 预算不变量测试】。
+背景：TASK-013 在真实仓库自举时发现同一 spec 块被装填两次（占两个 E 编号、吃掉约 1.4K token）。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1          # 应为最新 main（含 TASK-016/017/013 的合并）
+  git switch -c feature/task-019_xwzMMDD main
+
+【开工】
+1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
+   docs/tasks/TASK-019-spec保底重复装填修复.md（含根因代码定位、修复要求、DoD）、
+   docs/plan/contracts.md §3.4（R15）。
+2. 完成 TASK-019 一张卡。要点：
+   - 根因：assembly.py 里 `reserved not in slots` 用 _Slot 对象身份比较（无 __eq__）恒为 True；
+     贪心循环会先装填同一候选，随后保底分支又装一次。
+   - 修复方向：按 chunk_id 去重；保底语义（预留预算 + 至少 1-2 块 spec）与 E 编号=装填顺序均不得变。
+   - 卡内 DoD 有 4 条测试要求（去重/预算不变量/保底仍在/回归），其中"保底仍在"是防你修过头。
+3. 工艺：
+   a) 只修改卡内"交付物所有权"清单里的文件（core/zace_core/contextpack/、core/tests/contextpack/）；
+      其他一律不动（尤其 parsing/、chunking/、pipeline/，那是 TASK-018 的范围）。
+   b) 跑通卡内"验收标准"全部命令 + 基线三条：
+      uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+   c) 回填"执行记录"：贴该查询修复前后的 E 编号清单对比。
+   d) 任务板对应行状态改 review。
+   e) git add -A && git commit（"task-019: " 前缀）。
+4. 输出报告（格式：卡号 / 分支 / 验收命令与结果 / 契约影响 / 与设计偏差 / 未决问题）。
 
 【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
 ```

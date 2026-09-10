@@ -65,6 +65,17 @@
 > 教训（记入流程）：逐模块测试全绿不等于产品可用——R11/R12 均为逐层测试无法暴露的集成缺陷。
 > 故 W3 起，任何检索/组装类任务卡的 DoD 必须含跨模块 E2E 断言（已在 TASK-013/014 卡补充）。
 
+### 3.4 自举裁定（TASK-013 自举实测发现，2026-09-10）
+
+| # | 议题 | 裁定 | 影响 |
+|---|---|---|---|
+| R14 | **兜底切分行号回跳（阻断 M1）**：`fallback.py::_split` 在分隔符分支递归时忽略基偏移（顶层 offset=0 使既有测试全绿）；`uv.lock` 形状的文件产生两个 `{path}:(module):1` → `chunks.id` 主键冲突 → `zace-core ingest --repo .` 在真实仓库直接崩 | **修复**：修根因 + chunk id 唯一性防御（抛带明细的 ValueError，禁静默去重）+ 单文件失败隔离（进 `report.errors` 不中断整次 ingest） | TASK-018（阻断项，优先） |
+| R15 | **spec 保底块重复装填**：`reserved not in slots` 用 `_Slot` 对象身份比较（无 `__eq__`）恒为 True → 同一 spec chunk 占两个 E 编号，实测吃掉 ~1.4K token 并挤压代码证据 | **修复**：改按 chunk_id 去重；保底语义与 E 编号=装填顺序不变 | TASK-019 |
+| R16 | TASK-016 越界修改 `core/tests/retrieval/test_recall.py` 1 处断言（`channel_ranks` 由 `{inferred:1}` 改为 `{inferred:1, bm25:2}`） | **追认**：属语义变更的必然影响，且未弱化覆盖（仅新增通道）。后续同类情况应在卡内先申请 | — |
+| R17 | TASK-013 的 CLI 自举发现：`benches/golden/*.jsonl` 自身在被索引仓库内，负例被查询原文命中 → answerable=True | **TASK-014 出题纪律**：负例须用仓库内不存在的符号/描述，或把 golden 集排除出索引（由 TASK-014 定口径） | TASK-014 |
+| R18 | `IngestReport.ambiguous_refs` 在零变更增量里仍报 200（为状态量而非 delta） | **归 TASK-007 口径澄清**（非阻断）：建议改名为 `ambiguous_refs_total` 或在增量里置 0；具体在下次涉及该模块的卡里处理 | — |
+| R19 | 跨模块 E2E 测试位置：TASK-016 建了 `core/tests/integration/`，TASK-013 的 E2E 在 `core/tests/cli/` | **保留两者**：`core/tests/integration/` 为跨模块集成测试的规范位置（承载 M1 级断言）；`core/tests/cli/` 保留 CLI 命令行层面的测试。后续跨模块测试统一进 `integration/` | — |
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。

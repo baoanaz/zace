@@ -1,6 +1,6 @@
 # TASK-016：BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归
 
-> 状态：review ｜ 阶段：Phase 1（W3 质量修复）｜ 硬依赖：无（TASK-001/010 已合并）｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1（W3 质量修复）｜ 硬依赖：无（TASK-001/010 已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-016_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/storage/store.py`（仅 fts_search 与其常量）、`core/zace_core/storage/schema.sql` 不改、
 > `core/tests/storage/test_storage_fts.py`、`core/tests/storage/test_storage_incremental.py`（仅因语义变更需同步的用例）、

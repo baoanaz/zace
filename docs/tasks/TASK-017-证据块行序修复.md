@@ -1,6 +1,6 @@
 # TASK-017：ContextPack 合并区间的行号单调性与 elided 计数修复
 
-> 状态：review ｜ 阶段：Phase 1（W3 质量修复）｜ 硬依赖：无（TASK-012 已合并）｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1（W3 质量修复）｜ 硬依赖：无（TASK-012 已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-017_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/contextpack/assembly.py`、`core/zace_core/contextpack/render.py`（如需）、
 > `core/tests/contextpack/`（含快照）

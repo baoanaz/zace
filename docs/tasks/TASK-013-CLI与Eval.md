@@ -1,6 +1,6 @@
 # TASK-013：core CLI + engine 装配 + golden runner
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-007、TASK-012 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-007、TASK-012 ｜ soft 依赖：无
 > 建议分支：`feature/task-013_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/cli/`、`core/zace_core/engine.py`、`benches/run.py`、`core/tests/cli/`
 ## 目标
