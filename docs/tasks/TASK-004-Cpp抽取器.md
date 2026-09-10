@@ -1,6 +1,6 @@
 # TASK-004：C++ 抽取器（尽力而为 + 诚实标注）
 
-> 状态：pending ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-003（复用 include / 名称匹配工具） ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-003（复用 include / 名称匹配工具） ｜ soft 依赖：无
 > 建议分支：`feature/task-004_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/parsing/cpp.py`、`core/tests/parsing/samples/cpp/`、`core/tests/parsing/test_cpp.py`
 > **本卡是全项目最大风险项（D-08）：定位"尽力而为 + unresolved 如实标注"，宁可缺边不可错边。**
@@ -69,4 +69,64 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。"哪些语法形态进 unresolved"的最终口径必须在此列全，供文档漂移与 Missing Evidence 文案复用。）
+- 日期：2026-09-10 ｜ 分支：`feature/task-004_xwz0910`（自 `feature/task-003_xwz0910` 创建）
+- 关键产物：`core/zace_core/parsing/cpp.py`、`core/tests/parsing/test_cpp.py`、
+  `core/tests/parsing/samples/cpp/`（14 个语料文件：命名空间/重载/模板/继承/跨文件/宏生成/间接调用/语法错误）
+
+### 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest core/tests/parsing/test_cpp.py -q` | 11 passed |
+| `uv run pytest` | 70 passed |
+| `uv run ruff check .` | All checks passed |
+| `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过 |
+
+未修改 `c.py` / `registry.py` / `base.py` / `__init__.py`；`get_parser("cpp")` 已验证可懒加载到 `CppParser`。
+
+### 哪些语法形态进 unresolved（最终口径，必须评审；Missing Evidence 文案直接复用本表）
+
+| 形态 | 产出 | 理由 |
+|---|---|---|
+| 函数指针参数 / 无初始化的函数指针变量调用（`fn(x)`） | `unresolved(kind='call', name=变量名)` | 知道是间接调用但目标未知 |
+| lambda 变量调用（`auto g = [](...); g(x)`） | `unresolved(kind='call', name='g')` | 目标是匿名 lambda，无符号可连 |
+| `std::function` 变量调用 | `unresolved(kind='call', name=变量名)` | 目标运行时才定 |
+| 成员指针调用 `(obj.*pmf)()` / `(obj->*pmf)()` | `unresolved(kind='call', name='(obj.*pmf)')` | 指针值静态不可知（`->*` 形态 tree-sitter 直接报 ERROR → 整文件 fallback） |
+| 强制转换后的指针调用 `((int (*)(void*))raw)(x)` | `unresolved(kind='call', name=表达式)` | callee 不是 identifier/属性链 |
+| 模板特化 `template <> class Box<int> {...};` | 保留符号 + `unresolved(kind='reference', name='Box<int>')` | 不建模特化语义，但不静默丢弃 |
+| 宏生成的成员/变量声明（类型位置命中本文件宏名） | `unresolved(kind='reference', name=声明原文)` | 不展开宏，真实成员未知 |
+| `override` 方法找不到同文件基类方法 | `unresolved(kind='reference', name='Base::method')` | 两阶段查找不做；跨文件基类是常态 |
+| `<stdio.h>` 等解不开的 include | `unresolved(kind='import', name='<stdio.h>')` | 复用 TASK-003 口径 |
+
+**跳过（不产边也不产 unresolved，记录口径）**：显式实例化 `template class Box<double>;`
+——它不引入新声明实体，主模板符号已存在；仅在 `parse_errors` 记一条 `explicit template instantiation skipped`。
+
+### 其余口径
+
+1. **类内方法声明也成符号**（无 body，kind=method）：否则 header-only 类没有方法 chunk，
+   “类骨架 + 每方法 1 chunk”无法成立。文件/命名空间作用域的函数原型仍不成符号（与 TASK-003 一致）。
+2. **fqn** 用 `::` 连接（`outer::inner::Widget::run`）；重载不额外消歧（`start_line` 天然唯一，D-04）。
+3. **kind**：`class_specifier`→class，`struct/union_specifier`→struct，`enum_specifier`→enum，
+   `namespace_definition`→namespace，using 别名与 typedef 同 kind=typedef（设计 kind 表无 alias）。
+4. **overrides**：仅同文件、仅名字匹配（基类短名后缀匹配 `app::Shape::area`），provenance=`synthesized`。
+5. **调用目标归一**：`->` 归一到 `.`（`w.run`），模板实参去除（`max_value<int>` → `algo::max_value`），
+   便于 TASK-006 的 name_tail 匹配（`. ` 分隔）。
+
+### 与设计的偏差（重点评审）
+
+1. **MISSING 容忍（C++ 专用，新增行为）**：`base.py` 把 ERROR/MISSING 一律视为解析失败（fallback）；
+   C++ 里宏调用后缺分号（如 `DECLARE_ACCESSOR(width)`）会报 MISSING ';'——若整体兜底，宏密集的 C++
+   仓库会丢掉全部符号。本卡在 `CppParser.parse` 里加了一条严格受限的容忍：**仅**当错误全为 MISSING、
+   数量 ≤ 5 时照常抽取（错误仍完整保留在 `parse_errors`，宏生成声明另进 unresolved）；出现任何 ERROR
+   或超过上限 → 仍整体 fallback。未修改 `base.py`（容忍逻辑完全在本模块内，复用 base 的公开工具函数）。
+   若编排者认为应上提到 base.py 作为通用策略，需由 TASK-002 所有者修改。
+2. 其余与设计一致：不做两阶段查找/模板实例化/转换序列/ADL/concepts（D-08）。
+
+### 未决问题（交编排者裁决）
+
+1. **overrides 的 unresolved 噪声**：跨文件基类（常态）会让每个 `override` 方法产生一条 unresolved。
+   对 Missing Evidence 是真实信号，但量大时需要下游聚合（按类聚合计数）。是否改为“只在同文件基类可见时才报”，请编排者定。
+2. **类内声明 + 类外定义会各出一个 chunk**（同 fqn、不同 start_line）。若 03/06 发现重复证据影响预算，
+   可考虑在 TASK-006 按 fqn 聚合（当前按 D-04 只要求代内唯一）。
+3. **`->*` 形态 tree-sitter 直接产 ERROR**（grammar 限制），这类文件会整文件 fallback。属上游语法库限制，
+   V1 接受；若真实仓库 `->*` 常见，需要预处理或换 grammar 版本。
