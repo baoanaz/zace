@@ -16,8 +16,11 @@
 - ``query`` 空白或 >2000 字符 → 400 ``invalid_query``；
 - ``maxTokens`` ∉ (0, 20000] → 400 ``invalid_max_tokens``；
 - 项目不存在 → 404 ``project_not_found``（含 R37 的"省略 projectId"解析）；
-- **空索引 → 409 ``index_in_progress``**（D-30 例外条款）：返回 200 空包会让 agent 误判
-  "仓库里没有相关代码"，宁可让它带着"先同步"的提示重试；
+- **空索引（``chunks == 0``）→ 三岔口（TASK-035 §B，根因优先）**：
+  1. provider 不可用（503 ``embedding_unavailable``，§A 探测）——**优先于**后两者；
+  2. 从未同步过（账本为空）→ 409 ``index_in_progress``，指引"先同步"；
+  3. 有账本但索引为空（上次索引失败）→ 500 ``index_failed``，**不得**再说"请先同步"
+     （用户会以为没上传过，从而陷入"同步→重试"的无限循环）；
 - ``ask`` **绝不 500**：Phase 2 没有 LLM，``Engine.ask()`` 抛 ``NotImplementedError``，
   本实现不调用它，而是返回带 ``status="degraded"`` 的检索包（诚实降级，D-26）。
 """
@@ -31,7 +34,12 @@ from pydantic import BaseModel
 from zace_core.contextpack import render_markdown
 
 from zace_service.deps import get_engine_manager, require_project_id
-from zace_service.errors import ApiError
+from zace_service.errors import (
+    CODE_EMBEDDING_UNAVAILABLE,
+    PROVIDER_UNAVAILABLE_HINT,
+    ApiError,
+)
+from zace_service.logging import redact_text
 from zace_service.packmeta import evidence_summary, pack_meta
 from zace_service.runtime import EngineManager
 
@@ -82,7 +90,8 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
         project_id=project_id,
         channels=trace.channels_used,
         degraded=trace.degraded,
-        reason=trace.degraded_reason,
+        # core 的降级原因会带上 provider 原始报错（TASK-035 §A 的同一纪律：secret 不进响应）。
+        reason=redact_text(trace.degraded_reason) if trace.degraded_reason else None,
         candidate_count=trace.candidate_count,
         checkpoint_id=payload.checkpointId,
         include_pack=payload.includePack,
@@ -139,15 +148,62 @@ def _require_max_tokens(value: int) -> None:
 
 
 def _require_index(manager: EngineManager, project_id: str) -> None:
-    """空索引 → 409（D-30 的例外条款）：不返回 200 空包，而是给可执行的提示。"""
-    chunks = manager.sync_status(project_id)["chunks"]
-    if chunks == 0:
+    """空索引（``chunks == 0``）→ 三岔口（TASK-035 §B；根因优先）。
+
+    | 情况 | 响应 | 为什么 |
+    |---|---|---|
+    | provider 不可用 | 503 ``embedding_unavailable`` | 根因；否则客户端会去重试"同步"而永远好不了 |
+    | 从未同步（账本空） | 409 ``index_in_progress`` | 现状正确：确实该先同步 |
+    | 有账本但 chunks=0 | 500 ``index_failed`` | 上次索引失败；说"请先同步"是错误指引 |
+
+    索引非空时不在这里拦：provider 真坏了会在检索链里以 §A 的 503 如实报出（
+    不靠"故障记忆"提前拒绝——记忆可能是陈旧的，会阻断已经恢复后的检索）。
+    索引进行中（TASK-034 的后台索引）落到第三岔，其 message 带进度（D-30 诚实性）。
+    """
+    status = manager.sync_status(project_id)
+    if status["chunks"] > 0:
+        return
+
+    ok, reason = manager.provider_health()
+    if not ok:
+        raise ApiError(
+            CODE_EMBEDDING_UNAVAILABLE,
+            f"embedding provider 当前不可用（{reason}），索引无法建立："
+            f"这不是「尚未同步」，请先修复依赖。{PROVIDER_UNAVAILABLE_HINT}",
+            503,
+        )
+
+    ledger_files = len(manager.sync_state(project_id).files)
+    if ledger_files == 0:
         raise ApiError(
             "index_in_progress",
-            "该项目尚未索引（chunks=0）：请先同步（client 会在 tool call 时自动上传，"
-            "或调用 POST /api/sync/batch-upload），索引完成后再查询。",
+            "该项目尚未索引（chunks=0，且没有任何已上传文件）：请先同步"
+            "（client 会在 tool call 时自动上传，或调用 POST /api/sync/batch-upload），"
+            "索引完成后再查询。",
             409,
         )
+    progress = _progress_hint(manager, project_id)
+    raise ApiError(
+        "index_failed",
+        f"该项目已收到 {ledger_files} 个文件但索引为空（chunks=0）：上次上传/索引未成功{progress}。"
+        "请检查服务端日志（provider/解析错误会记在那里）后重新同步。",
+        500,
+    )
+
+
+def _progress_hint(manager: EngineManager, project_id: str) -> str:
+    """TASK-034 的索引进度提示（旧版本/非本地模式无进度时返回空串）。"""
+    reader = getattr(manager, "index_progress", None)
+    if not callable(reader):  # pragma: no cover - TASK-034 落地后恒为真
+        return ""
+    progress = reader(project_id)
+    state = getattr(progress, "state", None)
+    if state != "running":
+        return f"，当前索引状态：{state}" if state else ""
+    return (
+        f"；当前仍在索引中（已处理 {getattr(progress, 'processed_files', 0)}/"
+        f"{getattr(progress, 'total_files', 0)} 个文件），请稍后重试"
+    )
 
 
 __all__ = [

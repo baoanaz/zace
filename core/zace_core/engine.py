@@ -369,6 +369,23 @@ class Engine:
         self._ingest(project_id, changes, full=False, source=source)
         return f"job-sync-{uuid.uuid4().hex[:12]}"
 
+    def apply_changes(
+        self,
+        project_id: str,
+        changes: ChangeSet,
+        *,
+        source: SourceProvider | None = None,
+        full: bool = False,
+    ) -> IngestReport:
+        """应用变更集并返回 **IngestReport**（TASK-035 §C 的公开面）。
+
+        服务端同步语义入口：与 CF-07 的 :meth:`ingest`（异步 job 版，只回 job id）区别在于
+        本方法**同步返回报告**，且属 core 的公开 API 但**不在 CF-07 面内**（R33 允许 service
+        使用 core 公开类与方法）。``_ingest`` 仍是内部实现，未被删除或改签名
+        （``ingest`` 在用）。
+        """
+        return self._ingest(project_id, changes, full=full, source=source)
+
     def ingest_repo(self, project_id: str, root: str | Path, *, full: bool = False) -> IngestReport:
         """本地目录摄入（CLI 入口）：扫描 → 与上次扫描对账 → 索引增量 → 落扫描状态。"""
         repo = Path(root).expanduser().resolve()
