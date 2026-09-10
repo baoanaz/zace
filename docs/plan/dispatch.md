@@ -26,9 +26,10 @@
 |---|---|---|---|---|
 | W1 / W2 | — | A/B/C/D/E | TASK-001..012 | 已完成 |
 | W3a | 3 | B / C / F | TASK-016 / TASK-017 / TASK-013 | 已完成 |
-| W3c | 2 | A `zace-lane-a` | **TASK-018**（兜底行号 + chunk id 唯一性，**阻断修复**） | **当前波次** |
-| W3c | | C `zace-lane-c` | **TASK-019**（spec 保底重复装填） | **当前波次** |
-| W3b | 1 | F `zace-lane-f` | TASK-014 → TASK-015（必须在 W3c 合并后跑，否则基线失真） | 等 W3c |
+| W3c | 2 | A / C | TASK-018 / TASK-019 | 已完成 |
+| W3d | 2 | B / F | TASK-020（零成本版）/ TASK-014（基线） | 已完成 |
+| W4a | 1 | A `zace-lane-a` | TASK-021 → TASK-022（质量修复） | 已完成 |
+| **W5a** | **1** | **A `zace-lane-a`** | **TASK-030 → 031 → 032 → 033**（Phase 2 M2a-1：service 外壳） | **当前波次** |
 
 ## 2. 提示词（整段复制）
 
@@ -449,8 +450,70 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进"未决问题"。
 ```
 
+### W5a · 泳道 A（Phase 2 M2a-1：service 外壳，四张卡串联）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 A：Phase 2 M2a-1 —— zace-service 骨架 + core 接入 + 查询/同步 API】。
+背景：core 引擎（Phase 1）已完成并在真实仓库上验证；现在要做"服务化外壳"，让编辑器里的 MCP 客户端能连上来。
+本波四张卡串联（同一泳道、有依赖），做完一张立刻做下一张，不要等我确认。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 "docs(phase2): freeze quality tuning, add service cards and M2a wave plan"
+  git switch -c feature/task-030_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】按顺序完成 4 张任务卡：
+  docs/tasks/TASK-030-service骨架.md
+  docs/tasks/TASK-031-core接入.md
+  docs/tasks/TASK-032-查询API.md
+  docs/tasks/TASK-033-同步API.md
+  每张卡开头都有"交付物所有权"清单，只改清单内文件。
+  第二张起从上一张的分支串联：
+    git switch -c feature/task-031_xwzMMDD feature/task-030_xwzMMDD   （以此类推）
+
+【必读（每张卡开工前）】
+  docs/tasks/README.md
+  docs/plan/orchestration.md 的"泳道模式"一节
+  docs/plan/contracts.md §3.8（R33-R37：本波四张卡的直接口径）
+  docs/contracts/openapi.yaml（CF-05 是冻结合同：路径与错误信封不得改）
+  各卡的"输入文档"节（只读所需章节）
+
+【本波特别提醒】
+1. TASK-031 有一处 **core 侧改动**：`core/zace_core/engine.py` 的 `Engine.ingest` 要支持
+   `source=...` 参数（契约 CF-07 已由编排者在 main 上更新好，你只实现 core 侧那一处）。
+   卡内 §A 写了"为什么"——**不传 source 会在配置指纹失效时静默清空索引**，
+   必须写一条回归测试同时断言"错误行为（清空）"与"正确行为（重建）"。
+2. TASK-030 的 CF-05 路径集合一致性测试是本波的地基（路径不得增删改名）。
+3. TASK-032 的 `meta` 字段集是给下一波 Rust client（TASK-040）的输入契约，写出后不要随意改。
+4. TASK-032 的 ask 端点在 Phase 2 一定走降级包（LLM 属 Phase 3）——**不得 500**。
+5. service 是薄壳（D-34）：不要往 service 里塞检索/组装逻辑，一律调 core。
+6. 不要在 service 引入新的第三方依赖；缺依赖先在报告里说明。
+7. 不要基于测试集调检索质量参数（R29/R30 冻结中）。
+
+【工艺】（每张卡重复）
+  a) 只修改该卡"交付物所有权"清单里的文件；
+  b) 跑通该卡"验收标准"全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest
+     （注意：本波会新增 service/tests/，跑全仓 pytest 也要绿）
+  c) 回填该卡"执行记录"（含卡内要求的实测输出）；
+  d) 任务板 docs/tasks/README.md 对应行状态改为 review；
+  e) git add -A && git commit（"task-030: " / "task-031: " / …前缀）。
+
+【报告格式】（每张卡一段）
+- 卡号 / 分支：
+- 验收命令与结果：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；遇到契约/设计冲突先停下写进"未决问题"。
+```
+
 ## 3. 收尾
 
 - 每个泳道做完后，把它的完成报告整段贴回总览会话：我会核对验收输出、跑全仓集成检查、合并到 main、更新任务板，并给你下一波提示词。
-- 全部 Phase 1 完成后我会做 M1 验收（对 zace 自身仓库索引 + 中文查询冒烟 + 增量验证 + golden 基线报告），然后规划 Phase 2 的卡片。
+- Phase 1 已完成 M1 验收（基线报告 benches/results/phase1-baseline.md）；Phase 2 的卡片已按 docs/plan/phase2-roadmap.md 逐波开出。
 - 工作区清理（所有波次结束后）：`bash scripts/lane-worktrees.sh remove`。

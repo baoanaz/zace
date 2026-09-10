@@ -5,10 +5,11 @@ Module/01 §2.4 + D-44（EmbeddingProvider）、Module/01 §2.2（Parser）。
 维护者：编排者；变更必须走 docs/plan/orchestration.md §4 契约变更协议。
 
 实现位置约定（各卡交付物）：
-  ContextEngine      → core/zace_core/engine.py        （TASK-007/013 组装，Phase 2 接入 service）
+  ContextEngine      → core/zace_core/engine.py        （TASK-007/013；TASK-031 接入 service）
   EmbeddingProvider  → core/zace_core/embedding/       （TASK-008）
   AnswerProvider     → core/zace_core/llm/             （Phase 3，Module/04）
   Parser             → core/zace_core/parsing/         （TASK-002..005）
+  SourceProvider     → core/zace_core/pipeline/source.py（服务端 blob 实现归 TASK-031）
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from zace_core.types import (
     AskResult,
@@ -26,6 +27,9 @@ from zace_core.types import (
     ProjectHandle,
     SyncStatus,
 )
+
+if TYPE_CHECKING:  # 仅类型检查期导入：运行时导入会造成 interfaces ↔ pipeline 循环
+    from zace_core.pipeline.source import SourceProvider
 
 # ---------------------------------------------------------------------------
 # ContextEngine：core 对 service 暴露的唯一接口面（Module/06 §1）
@@ -45,8 +49,26 @@ class ContextEngine(Protocol):
         """project identity（D-29）幂等解析/创建；identity_key 由调用方按 D-29 规则计算。"""
         ...
 
-    def ingest(self, project_id: str, changes: ChangeSet) -> str:
-        """写入变更集并排队索引（异步 job）；返回 job_id。幂等语义见 Module/06 §2.1。"""
+    def ingest(
+        self,
+        project_id: str,
+        changes: ChangeSet,
+        *,
+        source: SourceProvider | None = None,
+    ) -> str:
+        """写入变更集并完成索引（V1 同步语义，异步 job 归 TASK-062）；返回 job_id。
+
+        ``source``（2026-09-10 L2 契约扩展，实施卡 TASK-031）：服务端上传模式下由 service
+        提供的源码读取实现——``list_files()`` 必须是**项目已知全部文件**，``read(path)`` 返回
+        该 path 当前内容的原始字节（正规定义：``zace_core.pipeline.source.SourceProvider``）。
+        为 ``None`` 时引擎按已绑定的本地目录读取（TASK-013 CLI 路径）。
+
+        为什么服务端必须传 ``source``：配置指纹二级/一级失效（D-07）会走 ``reembed`` /
+        ``full_reparse``，该路径**遍历 ``source.list_files()`` 重建**；上传模式下若不传
+        （内部退化为空 source），会**静默清空索引且不重建任何文件**（TASK-031 卡内有最小复现）。
+
+        幂等语义见 Module/06 §2.1。
+        """
         ...
 
     def sync_status(self, project_id: str) -> SyncStatus: ...

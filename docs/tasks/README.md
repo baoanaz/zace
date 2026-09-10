@@ -46,6 +46,13 @@
 > 顺序依据：用户拍板 R32「先搭整体，再基于真实数据优化检索」。
 > 详细分解见 `docs/plan/phase2-roadmap.md`（M2a 本地跑通 → M2b 质量数据 → M2c 多用户）。
 
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-030](TASK-030-service骨架.md) | service 骨架（FastAPI / 配置 / JSON 日志 / 错误信封 / healthz / CF-05 路径快照） | — | `service/zace_service/{app,config,logging,errors,__main__}.py`、`routers/` | pending |
+| [TASK-031](TASK-031-core接入.md) | core 接入（EngineManager + BlobSource + 项目 API + `ingest(source=)` 契约实现） | TASK-030 | `service/zace_service/{runtime,blobstore,sync_state,deps}.py`、`core/zace_core/engine.py` | pending |
+| [TASK-032](TASK-032-查询API.md) | 查询 API（search 渲染 + ask 降级包 + `meta` 字段集冻结给 client） | TASK-031 | `service/zace_service/{routers/query,packmeta}.py` | pending |
+| [TASK-033](TASK-033-同步API.md) | 同步 API（batch-upload / checkpoint / deletions / status；CF-05 幂等语义） | TASK-032 | `service/zace_service/routers/sync.py` | pending |
+
 | 波次 | 泳道 | 任务卡 | 说明 |
 |---|---|---|---|
 | M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API |
@@ -65,7 +72,8 @@
 4. 批 4（W3c）：TASK-018（lane A）、TASK-019（lane C）—— **已完成**（阻断解除）
 5. 批 5（W3d）：TASK-020（lane B，零成本版）、TASK-014（lane F，基线）—— 已完成
 6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
-7. 批 7（Phase 2，MCP demo）：service 外壳 + Rust client（W4a 后规划卡片）
+7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **当前波次**
+8. 批 9（W5b/M2a-2）：TASK-034（本地单用户模式，demo 关键）；M2a-3 = TASK-040..043（Rust client）
 
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
 > 自举（dogfooding）从现在起列入每波收尾动作。

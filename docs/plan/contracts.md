@@ -107,6 +107,18 @@
 | R27 | **非 git 父目录汇总多仓库**：实测 `/tmp/zace-multi`（非 git 父目录 + 2 个子 git 仓 + 普通文档）→ 父目录 identity 退化为 `sha256(绝对路径)`，**不可跨机器共享**；扫描会把子仓源码全部并入一个巨项目（仅 `.git` 被跳过），子仓单独索引则又是另一个 project（重复工作）；子仓自己的 `.gitignore` 也不生效 | **裁定**：V1 明确不支持“多个 repo 合为一个 project”（Module/01 §6-1 “一 project 一 repo”）；**用户应指向具体仓库路径**。多仓场景留给 Phase 2+ 的 group/workspace 概念（需用户提需求再排期）。**文档层**：在 CLI 输出/错误文案里提示“当前目录不是 git 仓库，身份绑定绝对路径，不跨机器共享” |
 | R28 | **同步耗时构成被误读**：用户关心的“每次检索前同步耗时”实测拆解——稳态（0 变更）2.5s 中 **~2.0s 是进程启动（lancedb 导入 1.09s + jieba 词典 0.53s + 其他导入）**，真正扫描仅 0.63s（451 文件，1.4ms/文件） | **Phase 2 架构已自然解决**：client 是常驻 MCP 进程（stdio server 活在整个会话）→ 导入/模型加载只付一次；服务端同样常驻。**仍可优化项**（列入 Phase 2 卡）：① **mtime+size 快路径**（D-28/Module/05 §3.2 已设计但未实现）→ 扫描从 1.4ms/文件降到 ~0.05ms/文件；② lancedb 惰导入；③ `.gitignore` 真实解析（D-28 缺口）减少文件数 |
 
+### 3.8 Phase 2 服务化裁定（编排者，2026-09-10；M2a 开卡时定）
+
+| # | 议题 | 裁定 |
+|---|---|---|
+| R33 | **service 对 core 的依赖面**：CF-07（`ContextEngine` Protocol）是否为上限？ | **不是上限，是最低保证面**。service 可直接使用 core 的公开类与方法（`zace_core.engine.Engine`，含 `search_with_trace` / `project_dir` / `ingest_repo` / `resolve_repo`）。理由：同 monorepo 同版本演进；D-34 只要求 core 不依赖上层，不限制 service 用 core 的公开 API。**若未来要把 core 换 Rust 实现，再收窄到这个面** |
+| R34 | **M2a 鉴权**：Phase 2 本地跑通阶段是否需要 token？ | **不需要**。M2a 为**本地单用户模式**（`ZACE_LOCAL_MODE` 默认 true）：无鉴权、无用户概念、绑定 127.0.0.1。鉴权/token/租户归 M2c（TASK-060/061）。CF-05 的 `/api/auth/*` 路径保留但返回 501（路径契约不漂移，实现待 M2c） |
+| R35 | **服务端同步状态存哪**：CF-01（index.db）能否新增表？还是建第二套 DB？ | **都不**。M2a 落**文件**：`{project_dir}/sync-state.json`（路径→blobHash/大小/branch/commit/checkpoints，tmp+replace 原子写）+ `{project_dir}/blobs/{hash[:2]}/{hash}` 内容寻址镜像。理由：不碰 CF-01 冻结 DDL；本地单用户无用户/审计需求；JSON 可调试易备份。M2c 引入 `zace-meta.db`（Module/06 §2.4）时再迁移 |
+| R36 | **CF-07 L2 扩展：`ingest` 新增 `source` 参数** | 已由编排者在 main 落地（`interfaces.py`）。**存在的理由**：配置指纹失效（D-07）会走 `full_reparse` / `reembed`，该路径遍历 `source.list_files()` 重建；上传模式下不传 source 会**静默清空索引**。实施归 TASK-031（core 侧加 `source or self._source_for(project_id)`） |
+| R37 | **CF-05 扩展：`projectId` 在本地模式可省略** | 本地单用户模式下允许请求不带 `projectId`，服务端使用唯一 local project。理由：降低 client（TASK-040）复杂度，为 demo 服务。**扩展而非破坏**：显式传 `projectId` 时行为不变；仅在 `ZACE_LOCAL_MODE=true` 生效 |
+
+> R36/R37 属 CF-05/CF-07 的**扩展**（新增可选参数/放宽字段必填），已由编排者先改契约文件再放行实现（orchestration §4 的 L2 流程）。
+
 ## 4. 契约的验证方式（集成保障）
 
 - CF-01：TASK-001 的测试必须真实执行该 SQL 建库；DDL 与测试一起通过才算契约落地。
