@@ -38,6 +38,11 @@
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
 | [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
 | [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | done |
+| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | pending |
+| [TASK-022](TASK-022-answerable判定收紧.md) | answerable/confidence 判定收紧（负例诚实性，R22） | TASK-021（同文件串行） | — | `core/zace_core/contextpack/assembly.py` | pending |
+
+> TASK-015（embedding bake-off + rerank 校准）前置已满足；R24 的排序候选方案需 TASK-021/022 的包形态稳定后再评，
+> 可在 Phase 2 并行或延后，不阻塞 MCP demo。
 
 ### 开卡批次历史（并行安全）
 
@@ -45,8 +50,9 @@
 2. 批 2（W2）：TASK-006 → 007；TASK-010 → 011 → 012
 3. 批 3（W3a）：TASK-016（BM25 修复）、TASK-017（行序修复）、TASK-013（CLI + eval）
 4. 批 4（W3c）：TASK-018（lane A）、TASK-019（lane C）—— **已完成**（阻断解除）
-5. 批 5（W3d）：TASK-020（lane B）—— 真实靶场发现的 BM25 噪声 token 过滤（排序判别力问题转 R24，留待 golden set 裁决）
-6. 批 6（W3b，最后）：TASK-014 → TASK-015（基线/校准；必须在 020 合并后跑）
+5. 批 5（W3d）：TASK-020（lane B，零成本版）、TASK-014（lane F，基线）—— 已完成
+6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
+7. 批 7（Phase 2，MCP demo）：service 外壳 + Rust client（W4a 后规划卡片）
 
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
 > 自举（dogfooding）从现在起列入每波收尾动作。
