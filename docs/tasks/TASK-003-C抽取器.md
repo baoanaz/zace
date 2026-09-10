@@ -1,6 +1,6 @@
 # TASK-003：C 抽取器（include / static / 函数指针 / 宏）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-002 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-002 ｜ soft 依赖：无
 > 建议分支：`feature/task-003_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/parsing/c.py`、`core/tests/parsing/samples/c/`、`core/tests/parsing/test_c.py`
 

@@ -1,6 +1,6 @@
 # TASK-001：存储层（SQLite schema / FTS5 / jieba 预分词）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-001_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/storage/`、`core/zace_core/text/`、`core/tests/storage/`、`core/tests/text/`
 > **本卡是全 Phase 1 的关键路径首卡，目标是"API 先冻结、实现随后"，第一个 commit 就要把公开 API 定下来。**

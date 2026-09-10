@@ -1,6 +1,6 @@
 # TASK-002：Parser 基座 + Python 抽取器
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-002_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/parsing/`（除 `c.py` / `cpp.py` / `markdown.py`，那三份归 003/004/005）、`core/tests/parsing/`
 

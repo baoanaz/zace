@@ -1,6 +1,6 @@
 # TASK-009：向量存储（LanceDB）+ hash 复用对账
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-009_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/vectors/`、`core/tests/vectors/`
 

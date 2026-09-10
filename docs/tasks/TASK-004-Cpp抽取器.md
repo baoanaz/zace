@@ -1,6 +1,6 @@
 # TASK-004：C++ 抽取器（尽力而为 + 诚实标注）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-003（复用 include / 名称匹配工具） ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：TASK-003（复用 include / 名称匹配工具） ｜ soft 依赖：无
 > 建议分支：`feature/task-004_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/parsing/cpp.py`、`core/tests/parsing/samples/cpp/`、`core/tests/parsing/test_cpp.py`
 > **本卡是全项目最大风险项（D-08）：定位"尽力而为 + unresolved 如实标注"，宁可缺边不可错边。**

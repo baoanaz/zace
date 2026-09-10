@@ -1,6 +1,6 @@
 # TASK-008：Embedding Provider 双实现（本地 ONNX 默认 + API 可选）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-008_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/embedding/`、`core/tests/embedding/`
 > 依据：D-44（本地默认 + API 可选双实现）、D-07（embedding 变更触发二级失效）。

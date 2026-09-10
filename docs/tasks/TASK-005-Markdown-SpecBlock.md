@@ -1,6 +1,6 @@
 # TASK-005：Markdown SpecBlock 抽取（doctype / 标题树 / mentioned）
 
-> 状态：review ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1 ｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-005_<你的缩写><MMDD>`
 > 交付物所有权：`core/zace_core/parsing/markdown.py`、`core/tests/parsing/samples/markdown/`、`core/tests/parsing/test_markdown.py`
 
