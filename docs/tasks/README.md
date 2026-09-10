@@ -49,4 +49,12 @@
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
 > 自举（dogfooding）从现在起列入每波收尾动作。
 
+### 已指定的评测靶场
+
+| repo_hint | 路径 | commit | 用途 |
+|---|---|---|---|
+| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）；种子用例 `benches/golden/aibox-seed.jsonl` |
+
+详情（规模、负例口径、为何选它）见 `benches/README.md` 的“已指定的评测仓库”节。
+
 可复制提示词、用户操作循环与报告模板见 `docs/plan/dispatch.md`。

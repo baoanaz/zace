@@ -47,6 +47,23 @@ git clone https://github.com/psf/requests /tmp/repos/requests && git -C /tmp/rep
 
 外部仓库的选取与 commit 记录在 `golden/*.jsonl` 与报告里；同一用例集在不同机器上应能复现同一口径。
 
+### 已指定的评测仓库（TASK-014 必须覆盖）
+
+| repo_hint | 本地路径 | commit | 规模/特点 |
+|---|---|---|---|
+| `zace` | 本仓（`--repo .`） | `self` | dogfood；注意其 golden 文件自身会被索引（负例口径见下） |
+| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a322aff7d2d21939bc6d09b4cfa985671ea` | 451 个可索引文件（266 py + 152 md）；**文档密度极高**（memory 能力 146 个 md / 83 个 py），是 spec 检索的主靶场 |
+| （自选 1 个） | 使用者本机可得为准 | 记录实际 commit | 建议 C++（fmt）或 C（redis），补齐语言维度 |
+
+- 种子用例：`benches/golden/aibox-seed.jsonl`（8 条，编排者已验证可落地）；TASK-014 在此基础上扩充并在报告中记录实际 commit。
+- 该仓库的 `.venv/` 已在 `DEFAULT_SKIP_DIRS` 中，无需手工排除；索引前确认 checkout 到上述 commit。
+
+#### 负例口径（R17）
+
+- **外部仓库**：负例取该仓库中确实不存在的概念（种子文件已给一例；出题时用 `grep -ril` 核验 0 命中）。
+- **zace 自身（dogfood）**：`benches/golden/*.jsonl` 就在被索引仓库内，查询原文会被 BM25/Vector 命中自身 → 负例须
+  要么改用仓库中不存在的符号，要么在 eval 时用 `--exclude` 类参数（若有）排除 `benches/`；TASK-014 定口径并在报告写明。
+
 ## 运行
 
 ```bash
