@@ -86,6 +86,19 @@ Web 管理面 + Playground；docker compose + TLS + 备份脚本；与"agent 纯
 - **文件所有权**：见各卡"交付物"节；同一目录同一时间只允许一张卡 in_progress（任务板状态表是唯一仲裁）。
 - **集成点**：每张卡合并前必须保持全仓基线绿（ruff + 依赖方向 + pytest）；M1 集成由 TASK-013 卡承载验收，编排者执行一次端到端复核。
 
+## 3.5 M1 达成状态（2026-09-10）
+
+| 里程碑 | 口径 | 状态 |
+|---|---|---|
+| **M1** core 闭环 | 在 zace 自身 + 2 个真实仓库上可用；改 1 函数只重嵌 1 chunk；golden set 出基线 | **已达成**（2026-09-10）：zace-core 11.5k 行 / 501 tests；aibox 434 文件 / 5760 chunks 索引成功；smoke 集 e2e recall@5 0.593 |
+
+**M1 遗留（有意延后，见 `docs/plan/contracts.md` §3.6）**：
+
+- R21 装填配比、R24 排序判别力、R31 answerable 脆弱点 —— 均**冻结待真实数据**（TASK-023 → TASK-050）；
+- 当前 60 条 golden set 降级为 smoke + 回归护栏（R29），**不作为优化目标**。
+
+下一阶段：`docs/plan/phase2-roadmap.md`（M2 = MCP 端到端闭环）。
+
 ## 4. 风险登记（Phase 0/1 视角）
 
 | 风险 | 影响 | 缓解 |

@@ -1,6 +1,10 @@
 # TASK-022：answerable / confidence 判定收紧（负例诚实性）
 
-> 状态：review ｜ 阶段：Phase 1+（质量修复）｜ 硬依赖：TASK-021（同文件，必须**串行**）｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1+｜ 硬依赖：TASK-021（同文件，必须**串行**）｜ soft 依赖：无
+> **参数与偏差状态（2026-09-10，R30/R31）**：本卡实现偏离 Module/03 §4.4 条文两处（新增 `inferred` 依据、
+> `consensus>=2` 改复合条件），已按 L3 登记为**实现期修订**（详见 contracts.md R31）；
+> `CONSENSUS_SCORE_RATIO=2.15` / `MIN_CONSENSUS_FILES=2` 为 smoke 集拟合值，**未经真实数据校准**，已冻结。
+> **已知脆弱点**：`_is_corroborated_top` 在文档密集仓库近乎恒真，仍是负例漏判来源。真实数据到位后重评。
 > 建议分支：`feature/task-022_<你的缩写><MMDD>`（从 TASK-021 合并后的 main）
 > 交付物所有权：`core/zace_core/contextpack/assembly.py`（仅 `_assess` 及其辅助）、`core/tests/contextpack/`、`benches/results/`
 > 不改 `retrieval/`、不改 CF-03 契约。

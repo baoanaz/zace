@@ -1,6 +1,9 @@
 # TASK-021：装填层 Code/Docs 平衡（R21）
 
-> 状态：review ｜ 阶段：Phase 1+（质量修复，**M1 后最高优先级**）｜ 硬依赖：TASK-014（基线，已合并）｜ soft 依赖：无
+> 状态：done ｜ 阶段：Phase 1+｜ 硬依赖：TASK-014（基线，已合并）｜ soft 依赖：无
+> **参数状态（2026-09-10，R30）**：本卡选定的 `docs_ratio=0.10`（6 点扫描得出）与 `code_floor` 默认值
+> **未经真实数据校准**，是在 60 条 smoke 集上的拟合值。已冻结、不再调参；
+> 真实数据到位后由 TASK-050 统一重评。本卡的价值是「建立了 Code/Docs 互保底机制」，不是「找到最优配比」。
 > 建议分支：`feature/task-021_<你的缩写><MMDD>`（从最新 main）
 > 交付物所有权：`core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/`、`benches/results/`
 > **本卡与 TASK-022 同文件（assembly.py），必须串行**：等 TASK-021 合并后再开 TASK-022。

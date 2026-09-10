@@ -32,17 +32,30 @@
 | [TASK-012](TASK-012-ContextPack组装.md) | ContextPack 组装 + Markdown 渲染 | TASK-010, TASK-011 | — | `core/zace_core/contextpack/` | done |
 | [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | done |
 | [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | done |
-| [TASK-015](TASK-015-Bakeoff与校准.md) | embedding bake-off + rerank 初值校准 | TASK-013 | TASK-014 | `benches/bakeoff/` | pending |
+| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（**仅模型选型**；rerank 校准推迟至 TASK-050） | TASK-013 | — | `benches/bakeoff/` | pending |
 | [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
 | [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
 | [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | done |
-| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | review |
-| [TASK-022](TASK-022-answerable判定收紧.md) | answerable/confidence 判定收紧（负例诚实性，R22） | TASK-021（同文件串行） | — | `core/zace_core/contextpack/assembly.py` | review |
+| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | done |
+| [TASK-022](TASK-022-answerable判定收紧.md) | answerable/confidence 判定收紧（负例诚实性，R22） | TASK-021（同文件串行） | — | `core/zace_core/contextpack/assembly.py` | done |
 
-> TASK-015（embedding bake-off + rerank 校准）前置已满足；R24 的排序候选方案需 TASK-021/022 的包形态稳定后再评，
-> 可在 Phase 2 并行或延后，不阻塞 MCP demo。
+## Phase 2 — MCP 端到端闭环（M2）
+
+> 顺序依据：用户拍板 R32「先搭整体，再基于真实数据优化检索」。
+> 详细分解见 `docs/plan/phase2-roadmap.md`（M2a 本地跑通 → M2b 质量数据 → M2c 多用户）。
+
+| 波次 | 泳道 | 任务卡 | 说明 |
+|---|---|---|---|
+| M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API |
+| M2a-2 | `zace-lane-b` | TASK-034（本地单用户模式） | **demo 关键**：免鉴权一键起服务 |
+| M2a-3 | `zace-lane-c` | TASK-040 → 041 → 042 → 043 | Rust client：MCP stdio + 懒同步 + 分发 |
+| M2b | 视情况 | TASK-023 → TASK-050；TASK-015A 可并行 | 真实数据采集 → 质量调优 |
+| M2c | 视情况 | TASK-060 → 061 → 062 → 063 | 多用户 + 部署（要给朋友用时才做） |
+
+> **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
+> 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
 
 ### 开卡批次历史（并行安全）
 
