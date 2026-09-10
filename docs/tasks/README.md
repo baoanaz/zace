@@ -37,7 +37,7 @@
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
 | [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | review |
 | [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
-| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧判别力修复（token 噪声过滤 + IDF 加权重排） | TASK-016 | — | `retrieval/bm25.py`、`storage/store.py`（新增 DF 原语） | pending |
+| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py`、`storage/store.py`（新增 DF 原语） | pending |
 
 ### 开卡批次历史（并行安全）
 

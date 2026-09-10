@@ -1,10 +1,9 @@
-# TASK-020：BM25 查询侧判别力修复（token 噪声过滤 + IDF 加权重排）
+# TASK-020：BM25 查询侧噪声 token 过滤（原 IDF 重排方案已被实测否决）
 
-> 状态：pending ｜ 阶段：Phase 1（W3d，**检索质量关键**）｜ 硬依赖：TASK-016（OR 语义，已合并）｜ soft 依赖：无
+> 状态：pending（**编排者已修订范围**）｜ 阶段：Phase 1（W3d）｜ 硬依赖：TASK-016（OR 语义，已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-020_<你的缩写><MMDD>`（从最新 main）
-> 交付物所有权：`core/zace_core/retrieval/bm25.py`、`core/zace_core/storage/store.py`（仅新增 DF/批量命中查询原语）、
-> `core/tests/retrieval/`、`core/tests/storage/test_storage_fts.py`、`core/tests/integration/`
-> 其它文件不得改动（尤其 `contextpack/`——装填层问题不在本卡范围）。
+> 交付物所有权：`core/zace_core/retrieval/bm25.py`、`core/tests/retrieval/`、`core/tests/storage/test_storage_fts.py`
+> （**不新增 Store 原语**——见 §D；`contextpack/` 与 `storage/store.py` 本卡不得改动）
 
 ## 背景（编排者在真实 demo 仓库上实测，2026-09-10）
 
@@ -54,7 +53,22 @@ Markdown 段落挤出 top50 ⇒ 召回层就丢了正确目标。
 
 > 纪律说明：这不是"业务关键词规则"（违反 R4/D-14），而是**通用检索卫生**——停用词表仍然不做。
 
-### B. IDF 加权重排（核心修复）
+### B. ~~IDF 加权重排~~ —— **经实测否决，不要实现**（编排者 2026-09-10 更正）
+
+实施 AI 按本卡原公式（Σ IDF）实测：目标块 rank **797**（DoD 要求 ≤10）；编排者独立复现得
+**rank 148**（同一量级）。根因经数据确认：
+
+| 排序方案 | 目标块 rank | 原因 |
+|---|---|---|
+| FTS5 原生 bm25（当前） | 跌出 top50 | OR 语义下多词命中累加 |
+| **Σ IDF（本卡原公式）** | **148 / 797** | Σ 仍奖励"命中词多"的块；且丢掉 bm25 的长度归一 |
+| max-IDF 门控（必须命中 workflow） | 21 | 有好转但仍不达 ≤10；且装填层 R21 会再溺一次 |
+
+另一关键数据：`workflow` 的 IDF=8.04，而虚词 `里`/`怎么` 的 IDF=**8.25**（jieba 碎片化产物，
+DF 仅 19）——**稀有度本身在本语料上不可靠**，所以纯 IDF 家族（Σ/ max）都无法单独解决。
+
+**结论：排序变更属风险变更，必须先在 golden set（TASK-014）上验证，不得在本卡拍脑袋做。**
+本卡只保留 §A（确定收益且零风险）——详见下方 §D。
 
 保留现有"OR 召回"的召回率，但**排序改为按判别力加权**：
 
@@ -73,6 +87,19 @@ Markdown 段落挤出 top50 ⇒ 召回层就丢了正确目标。
 - 原 `bm25(chunks_fts)` 分值仍可保留用于 `reasons` 展示，但**排名以加权分为准**。
 - FTS5 原生 bm25() 的列权重（TASK-016 的 `FTS_COLUMN_WEIGHTS`）保持不变，两者不冲突。
 
+### D. 本卡最终范围（编排者裁定 2026-09-10）
+
+**只做 §A（token 噪声过滤）；不做 §B（IDF 重排）；不新增 `chunk_count` / `token_document_frequency` /
+`fts_hit_tokens` 等原语**（它们是为被否决的 §B 服务的，无用代码不入库）。
+
+保留的确定收益：
+1. 纯标点/空白 token（如 `？`）不再进入 FTS MATCH；
+2. DF=0 的 token 不再进入：它们对召回毫无帮助，却在 `AND` 路径下直接导致空结果
+   （实测：`AND` 命中数=0）；
+3. 结果：`AND` 路径在含标点的自然语言查询下不再必然空（可验证的直接收益）。
+
+排序行为（`bm25(chunks_fts)`）**保持原样**。
+
 ### C. 回归与护栏
 
 - 保持 `operator="and"` 语义与既有测试不变；
@@ -81,15 +108,18 @@ Markdown 段落挤出 top50 ⇒ 召回层就丢了正确目标。
 
 ## 验收标准（DoD）
 
-- [ ] **核心回归（必须，用真实仓库）**：对 `aibox-super-sdk`
-      （`/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk`，索引数据可由
-      `uv run zace-core ingest --repo <路径> --data <临时目录>` 重建，
-      或复用已在 `/tmp/zace-aibox` 的索引）执行查询
-      `workflow 在记忆系统里是怎么定义和使用的？`，断言：
-      1. `src/aibox/capabilities/memory/internal/maintenance.py` **出现在 BM25 通道 top10**；
-      2. 最终 ContextPack 中该文件可见（或至少其 BM25 rank ≤10 且进入候选池）。
-      —— 允许把该断言写成 `@pytest.mark.slow` + 环境变量开关的集成测试（大仓库索引耗时长），
-      但**必须在执行记录里贴出实跑输出**。
+- [ ] **噪声过滤回归**：构造含 `？`/`：` 与库外词汇的查询，断言：
+      ① 过滤后的 MATCH 串不含纯标点 token；② `fts_search` 不因 `？` 而空；
+      ③ `operator="and"` 在"含标点 + 存在候选"场景下不再必然返回空。
+- [ ] **真实仓库前后对比（必须）**：对 `aibox-super-sdk` 查询
+      `workflow 在记忆系统里是怎么定义和使用的？`，贴出：
+      ① 过滤前/后进入 MATCH 的 token 清单；② 目标文件
+      `src/aibox/capabilities/memory/internal/maintenance.py` 的 **BM25 rank 前后对比**；
+      ③ 最终 ContextPack 的 Code/Docs 块数。
+      —— 索引数据可直接复用 `/tmp/zace-aibox`（project id `8f39057792cf72e8`）；
+      若需重建：`uv run zace-core ingest --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk --data /tmp/zace-aibox`（约 17 分钟）。
+- [ ] **不要求**目标块进 BM25 top10：编排者原 DoD 已被数据推翻（见 §B 与未决问题 R21）；
+      本卡只要求其 rank **不劣于**修复前且噪声路径被清理。
 - [ ] **性能**：`fts_search` 的重排路径在 50 候选 × 10 token 规模下额外开销 <20ms（单测计时）；
       批量 DF 查询不超过 2 条 SQL。
 - [ ] 单测：token 过滤（标点、DF=0）、IDF 权重单调性（稀有词命中应排在多高频词命中之前）、
@@ -103,17 +133,15 @@ Markdown 段落挤出 top50 ⇒ 召回层就丢了正确目标。
 
 ## 明确不做
 
-- **不做停用词表**（违反 Module/02 R4 的"少规则"纪律；IDF 加权是通用解法，不需要人工词表）；
-- 不改 RRF 公式与通道权重（D-16）；不改 rerank 特征表（TASK-015 校准项）；
-- **不改装填层配额**（Code/Docs 配额平衡是独立议题，若本卡修复后仍失衡，另立卡）；
-- 不改 `answerable` 判定规则（负例弱点属 Module/03 §4.4 的规则范畴，需编排者另行裁定）；
-- 不改向量通道。
+- **不做 IDF/加权重排**（原方案已被实测否决，见 §B）；
+- **不做停用词表/词性过滤**（后者已实验：过滤虚词后 Σ IDF 仍为 rank 148，收益不足且引入行为变更）；
+- 不改 RRF 公式/通道权重/rerank 特征表/装填配额/向量通道/DF 与 hash 语义；
+- 不改 `answerable` 规则（负例弱点见 R22，属 Module/03 §4.4 范畴）。
 
 ## 参考
 
-- `docs/plan/contracts.md` §3.3 R11（BM25 OR 语义的来源）、§3.5 R20（本卡背景裁定）
-- codegraph `source/codegraph/src/db/queries.ts:1505-1513`（OR + 列权重参考；**其未做 IDF 重排**，
-  本卡是 zace 的增量改进）
+- `docs/plan/contracts.md` §3.3 R11（BM25 OR 语义的来源）、§3.5 R20（本卡背景裁定与**实测否决记录**）
+- codegraph `source/codegraph/src/db/queries.ts:1505-1513`（OR + 列权重参考）
 - FTS5 文档：`bm25(fts, w1, w2, ...)` 与 `fts5vocab` 表（可作为 DF 查询的替代实现路径）
 
 ## 完成报告（回填）
