@@ -16,7 +16,9 @@ tier 不作为排序键（D-17）：只做配额与资格线
 
 - **内容来源**：``store`` 提供切片正文；``EvidenceItem.content`` 是**带行号原文**
   （``45 | def refresh(...)``，CF-03 定义），渲染层直接输出；
-- **spec 保底**在贪心前**预占**最高分 spec 候选（存在相关 spec 时），保证不被预算挤掉；
+- **spec 保底**在贪心前**预占**最高分 spec 候选（存在相关 spec 时），保证不被预算挤掉；保底分支与
+  贪心循环、合并路径共用 `placed_ids`（**按 chunk_id** 判重，R15，不再靠 `_Slot` 值比较）；预留块若
+  已被贪心循环装填，预留预算立即**归还**（后续候选恢复完整 `hardCap`）；
 - **tier3 配额**按 §4.1 字面实现：``tier3_used + est > tier3_ratio × used`` 即跳过；
 - **skeleton 降级**只在"超单文件上限或超硬预算"时触发（>300 行是前置条件）；
 - **"命中行"**：RRF 只给 chunk 粒度 → 取**切片起始行**（符号定义行，即该切片锚点行）起
@@ -232,6 +234,12 @@ def assemble(
     symbol_slots: dict[str, _Slot] = {}
     slots: list[_Slot] = []
 
+    #: 已装填 chunk_id（R15）：同一 chunk 只装一次——保底分支、贪心循环与合并路径共用。
+    #: 修复前保底分支用 `reserved not in slots` 做 `_Slot` **值**比较：预留候选由贪心循环装下后，
+    #: 只要该 slot 被 `_try_merge`/`_degrade` 就地改动，值就不再相等，保底分支会把同一 chunk
+    #: 的原始 span 再装一次（真实复现：E1(173-232) 合并块 + E30(175-197) 预留块）。
+    placed_ids: set[str] = set()
+
     def _place(candidate: Candidate, slot: _Slot, tokens: int) -> None:
         nonlocal used, tier3_used
         used += tokens
@@ -240,6 +248,7 @@ def assemble(
         if candidate.tier == 3:
             tier3_used += tokens
         slots.append(slot)
+        placed_ids.add(candidate.chunk_id)
         if candidate.symbol_fqn:
             symbol_slots.setdefault(candidate.symbol_fqn, slot)
 
@@ -256,9 +265,17 @@ def assemble(
             reserved = slot
             break
     reserve_tokens = reserved.tokens if reserved is not None else 0
-    hard_limit = max(active.hard_cap - reserve_tokens, active.framework_overhead)
+    reserved_id = reserved.candidate.chunk_id if reserved is not None else None
+
+    def _hard_limit() -> int:
+        """预留期间收窄的硬顶；预留块被装填后即归还预留预算（R15，不再挤压其它候选）。"""
+        pending = reserved_id is not None and reserved_id not in placed_ids
+        return max(active.hard_cap - (reserve_tokens if pending else 0), active.framework_overhead)
 
     for candidate in pool:
+        if candidate.chunk_id in placed_ids:
+            omitted += 1  # 同一 chunk 只装一次（与 _place / 保底分支共用同一判重集合）
+            continue
         slot = _build_slot(store, candidate, index_signals)
         if slot is None:
             omitted += 1
@@ -275,6 +292,7 @@ def assemble(
 
         tokens = slot.tokens
         file_key = candidate.path or ""
+        hard_limit = _hard_limit()
         over_file_cap = file_usage.get(file_key, 0) + tokens > single_file_cap
         if over_file_cap or used + tokens > hard_limit:
             degraded = _degrade(candidate, slot, active, store)
@@ -299,10 +317,16 @@ def assemble(
             delta = merged
             used += delta
             file_usage[file_key] = file_usage.get(file_key, 0) + delta
+            placed_ids.add(candidate.chunk_id)  # 已并入既有块：同一 chunk 不再单独装填
             continue
         _place(candidate, slot, tokens)
 
-    if reserved is not None and reserved not in slots and used + reserved.tokens <= active.hard_cap:
+    # 保底补入：仅在预留块**尚未**被装填时执行（按 chunk_id 判重，R15）。
+    if (
+        reserved is not None
+        and reserved.candidate.chunk_id not in placed_ids
+        and used + reserved.tokens <= active.hard_cap
+    ):
         _place(reserved.candidate, reserved, reserved.tokens)
 
     truncated = capacity_cut > 0
