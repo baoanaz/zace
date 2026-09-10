@@ -50,7 +50,7 @@
 |---|---|---|---|---|
 | [TASK-030](TASK-030-service骨架.md) | service 骨架（FastAPI / 配置 / JSON 日志 / 错误信封 / healthz / CF-05 路径快照） | — | `service/zace_service/{app,config,logging,errors,__main__}.py`、`routers/` | review |
 | [TASK-031](TASK-031-core接入.md) | core 接入（EngineManager + BlobSource + 项目 API + `ingest(source=)` 契约实现） | TASK-030 | `service/zace_service/{runtime,blobstore,sync_state,deps}.py`、`core/zace_core/engine.py` | review |
-| [TASK-032](TASK-032-查询API.md) | 查询 API（search 渲染 + ask 降级包 + `meta` 字段集冻结给 client） | TASK-031 | `service/zace_service/{routers/query,packmeta}.py` | pending |
+| [TASK-032](TASK-032-查询API.md) | 查询 API（search 渲染 + ask 降级包 + `meta` 字段集冻结给 client） | TASK-031 | `service/zace_service/{routers/query,packmeta}.py` | review |
 | [TASK-033](TASK-033-同步API.md) | 同步 API（batch-upload / checkpoint / deletions / status；CF-05 幂等语义） | TASK-032 | `service/zace_service/routers/sync.py` | pending |
 
 | 波次 | 泳道 | 任务卡 | 说明 |
