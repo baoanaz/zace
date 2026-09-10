@@ -10,6 +10,9 @@
   分隔符继续递归；
 - 单块字符上限 ``FALLBACK_MAX_CHARS`` 只为防"单行巨型文件"病态输入，不改变行上限语义；
 - 块内容为原文的连续子串（不丢字符、不重排）；行号 1-based 含端点；
+- **偏移基准是全原文**：``_split`` 的 ``offset`` 恒为该片段在原文中的绝对字符偏移，
+  ``_split_keep`` 返回的相对偏移在进入下一级 ``_group`` 前必须补上本层 ``offset``
+  （TASK-018 §A 回归护栏：漏补会让多级递归块的行号回跳到文件开头）；
 - 纯函数、无 I/O、确定性：同输入两次调用结果相等。
 """
 
@@ -84,7 +87,15 @@ def _split(
         parts = _split_keep(text, separator)
         if len(parts) < 2:
             continue
-        _group(parts, max_lines, max_chars, out, separators[index + 1 :])
+        # _split_keep 的偏移相对 text，而 text 的起点是绝对偏移 offset，必须补上：
+        # 否则 _group 递归到更低优先级分隔符时第二部分行号会回跳（TASK-018 §A）。
+        _group(
+            [(piece_offset + offset, piece) for piece_offset, piece in parts],
+            max_lines,
+            max_chars,
+            out,
+            separators[index + 1 :],
+        )
         return
 
     # 无可用分隔符（单行超长）：按字符硬切；每片字符数严格变小，递归必然终止

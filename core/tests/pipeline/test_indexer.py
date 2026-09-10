@@ -323,6 +323,85 @@ def test_syntax_error_does_not_abort_ingest(
     assert store.counts()["symbols"] > 0  # 另一个文件照常入库
 
 
+def test_apply_failure_is_isolated_per_file(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TASK-018 §C：单文件落库失败不中断 ingest，只写 report.errors 并跳过该文件。"""
+    original = store.apply_file_change
+
+    def failing(parsed, chunks, file_content_hash, commit=None):
+        if parsed.path == "pkg/bad.py":
+            raise ValueError("模拟落库失败")
+        return original(parsed, chunks, file_content_hash, commit)
+
+    monkeypatch.setattr(store, "apply_file_change", failing)
+
+    report = indexer.ingest(change_set(added={"pkg/bad.py": PY_MODULE, "pkg/good.py": PY_MODULE}))
+
+    assert report.errors == ("pkg/bad.py: ValueError: 模拟落库失败",)
+    assert (report.added, report.modified) == (1, 0)  # 失败文件不计入 added/modified
+    assert store.counts()["files"] == 1  # 另一个文件照常入库
+
+
+def test_split_failure_from_duplicate_ids_is_isolated(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TASK-018 §B+§C 组合：切分抛出的重复 id ValueError 被单文件隔离，不进 sqlite。"""
+    from zace_core.pipeline import indexer as indexer_module
+
+    real_split = indexer_module.split_file
+
+    def failing_split(parsed, content):
+        if parsed.path == "pkg/dup.py":
+            raise ValueError("pkg/dup.py: 切分产物出现重复 chunk id（禁止静默去重/丢弃）：dup × 2")
+        return real_split(parsed, content)
+
+    monkeypatch.setattr(indexer_module, "split_file", failing_split)
+
+    report = indexer.ingest(change_set(added={"pkg/dup.py": PY_MODULE, "pkg/mod.py": PY_MODULE}))
+
+    assert len(report.errors) == 1 and report.errors[0].startswith("pkg/dup.py: ValueError")
+    assert (report.added, report.modified) == (1, 0)
+    assert store.counts()["files"] == 1
+    assert store.chunks_by_ids(["pkg/dup.py:(module):1"]) == []
+
+
+def test_full_reparse_isolates_split_failure(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    store: Store,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TASK-018 §C：``--full`` 的存量枚举（``_rebuild_vectors``）同样按单文件隔离。"""
+    from zace_core.pipeline import indexer as indexer_module
+
+    files = {"pkg/bad.py": PY_MODULE, "pkg/mod.py": PY_MODULE}
+    write_repo(repo, files)
+    indexer.ingest(change_set(added=files))
+
+    real_split = indexer_module.split_file
+
+    def failing_split(parsed, content):
+        if parsed.path == "pkg/bad.py":
+            raise ValueError("模拟切分失败")
+        return real_split(parsed, content)
+
+    monkeypatch.setattr(indexer_module, "split_file", failing_split)
+    report = indexer.full_reparse()
+
+    # bad.py 在“写库”与“存量枚举”两个环节各报一次，其余文件照常处理
+    assert [error.split(":", 1)[0] for error in report.errors] == ["pkg/bad.py", "pkg/bad.py"]
+    assert report.added + report.modified == 1
+    assert store.counts()["files"] == 2  # SQLite 行不变（重建不写库）
+
+
 def test_binary_files_are_skipped(
     indexer: Indexer, change_set: ChangeSetFactory, store: Store
 ) -> None:

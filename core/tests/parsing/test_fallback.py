@@ -78,3 +78,49 @@ def test_custom_budget() -> None:
 def test_deterministic() -> None:
     content = "".join(f"line {index}\n" for index in range(1000))
     assert split_fallback(content) == split_fallback(content)
+
+
+# ---------------------------------------------------------------------------
+# TASK-018 §A 回归护栏：多级递归不得丢失基准偏移（行号回跳）
+# ---------------------------------------------------------------------------
+
+
+def _line_starts(text: str) -> list[int]:
+    starts = [0]
+    for index, char in enumerate(text):
+        if char == "\n":
+            starts.append(index + 1)
+    return starts
+
+
+def test_nested_separators_keep_absolute_line_numbers() -> None:
+    """最小复现（TASK-018 卡）：``max_lines=5`` 触发 ``"\\n\\n"`` → ``"\\n"`` 两级递归。
+
+    修复前第 3、4 块的行号回跳到文件开头（start=1、7）。
+    """
+    content = "1\n2\n3\n4\n5\n6\n\n7\n8\n9\n10\n11\n12\n"
+
+    blocks = split_fallback(content, max_lines=5)
+
+    assert [block.start_line for block in blocks] == [1, 6, 8, 13]
+    assert joined(blocks) == content
+
+
+def test_recursive_split_line_ranges_map_back_to_source() -> None:
+    """强制多级递归：行号严格递增、块内容 = 原文对应行子串。"""
+    paragraphs = ["".join(f"p{para}-{line}\n" for line in range(1, 8)) for para in range(4)]
+    content = "\n".join(paragraphs)
+    blocks = split_fallback(content, max_lines=5)
+    starts = _line_starts(content)
+
+    assert len(blocks) >= 6  # 4 段 × 7 行 / 5 行上限 → 必然多块 + 两级递归
+    assert [block.index for block in blocks] == list(range(1, len(blocks) + 1))
+    assert joined(blocks) == content
+    previous_start = 0
+    for block in blocks:
+        assert block.start_line > previous_start  # 严格递增（修复前会回跳）
+        previous_start = block.start_line
+        offset = starts[block.start_line - 1]
+        assert content[offset : offset + len(block.content)] == block.content
+        assert block.end_line >= block.start_line
+        assert block.end_line - block.start_line + 1 <= 5

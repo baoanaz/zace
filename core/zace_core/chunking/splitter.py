@@ -8,6 +8,8 @@
 - ``chunk_id = {path}:{symbol_fqn}:{start_line}``（D-04，代内唯一）；markdown 的
   ``symbol_fqn`` 取 ``heading_path``；spec 块 id 与 ``Store`` 写入 ``spec_blocks`` 的 id 同源
   （见 :func:`spec_block_id`），保证双表同 id（CF-01 规划期裁定 2）。
+- **id 唯一性是硬不变量**：``split_file`` 出口检测重复 id，命中即抛带明细的 ``ValueError``
+  （TASK-018 §B）——既不静默去重、不静默丢弃，也不把冲突留到写库变成 ``IntegrityError``。
 - **符号 = 1 chunk**（``symbol_kind`` 取符号 kind；``class`` → ``class_skeleton``）；
   ``namespace`` 只做结构容器、不成 chunk（Module/01 §2.2 的语言规则表未把命名空间列为检索单元）。
 - **类/结构体带方法 = 骨架 chunk + 每方法 1 chunk**：骨架 chunk 只覆盖**声明区**
@@ -88,21 +90,25 @@ def split_file(parsed: ParsedFile, content: str) -> list[ChunkDef]:
     """把解析结果切成可入库的 ``ChunkDef`` 列表（同文件全量，供 ``Store.apply_file_change``）。
 
     ``content`` 为该文件原文（CRLF/CR 会被规范化成 LF）。
+    出口处校验 id 唯一性：命中重复直接抛 :class:`ValueError`（TASK-018 §B）。
     """
     lines = normalize_newlines(content).splitlines()
+    chunks = (
+        _fallback_chunks(parsed.path, "\n".join(lines))
+        if parsed.fallback
+        else _structural_chunks(parsed, lines)
+    )
+    _reject_duplicate_ids(parsed.path, chunks)
+    return sorted(chunks, key=_chunk_sort_key)
 
-    if parsed.fallback:
-        return _fallback_chunks(parsed.path, "\n".join(lines))
 
-    chunks: dict[str, ChunkDef] = {}
+def _structural_chunks(parsed: ParsedFile, lines: list[str]) -> list[ChunkDef]:
+    """符号 / spec 块 + 未覆盖行的兜底块（未排序、未去重）。"""
+    chunks: list[ChunkDef] = []
     covered: list[tuple[int, int]] = []
-    order: list[str] = []
 
     def add(chunk: ChunkDef) -> None:
-        if chunk.id in chunks:
-            return
-        chunks[chunk.id] = chunk
-        order.append(chunk.id)
+        chunks.append(chunk)
 
     for spec in parsed.spec_blocks:
         span = _clamp(spec.start_line, spec.end_line, len(lines))
@@ -171,7 +177,24 @@ def split_file(parsed: ParsedFile, content: str) -> list[ChunkDef]:
                 )
             )
 
-    return [chunks[key] for key in sorted(order, key=lambda key: _chunk_sort_key(chunks[key]))]
+    return chunks
+
+
+def _reject_duplicate_ids(path: str, chunks: Sequence[ChunkDef]) -> None:
+    """重复 chunk id 显式失败（TASK-018 §B）：**禁止静默去重/静默丢弃**。
+
+    兜底块 fqn 恒为 ``(module)``，一旦行号回跳或单行超长硬切，多个块会算出同一个
+    ``{path}:(module):{start_line}``；若把冲突留到写库，只会变成难以定位的
+    ``sqlite3.IntegrityError``（且整次 ingest 连带失败）。
+    """
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        counts[chunk.id] = counts.get(chunk.id, 0) + 1
+    duplicates = sorted((chunk_id, count) for chunk_id, count in counts.items() if count > 1)
+    if not duplicates:
+        return
+    detail = "; ".join(f"{chunk_id} × {count}" for chunk_id, count in duplicates)
+    raise ValueError(f"{path}: 切分产物出现重复 chunk id（禁止静默去重/丢弃）：{detail}")
 
 
 def embedding_text(chunk: ChunkDef, *, body_max_chars: int = EMBEDDING_BODY_MAX_CHARS) -> str:
