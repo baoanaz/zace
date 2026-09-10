@@ -6,12 +6,16 @@ Edit）；stale 文档带 ``⚠`` 行；budget/confidence/index 状态入 ``Meta
 
 ``render_evidence_for_prompt`` 是同一 formatter 的子函数（只有 Code/Docs 分节），
 供 Module/04 的 prompt 组装在 Phase 3 直接复用——两处绝不各写一套渲染逻辑。
+
+省略标注（``... （省略 N 行）``）由组装层**就地**写在 ``item.content`` 里（TASK-017 / R12：
+标注位置与行号区间一致）；本层只对外部构造、未就地标注的 pack 兜底追加。
 """
 
 from __future__ import annotations
 
 import time
 
+from zace_core.contextpack.assembly import elision_note, has_elision_note
 from zace_core.types import ContextPack, EvidenceItem, Freshness
 
 __all__ = ["render_evidence_for_prompt", "render_markdown"]
@@ -91,8 +95,8 @@ def _evidence_lines(item: EvidenceItem, *, is_doc: bool = False) -> list[str]:
         header = f"[{item.id}] {target} — {item.path}{span}"
     lines = [header, f"     reason: {item.reason}"]
     lines.extend(f"     {line}" for line in item.content.splitlines())
-    if item.elided_lines > 0:
-        lines.append(f"     ... （省略 {item.elided_lines} 行）")
+    if item.elided_lines > 0 and not has_elision_note(item.content):
+        lines.append(f"     {elision_note(item.elided_lines)}")
     if item.stale_refs:
         lines.append(f"     ⚠ 引用了已删除符号 {', '.join(item.stale_refs)}，文档可能过时")
     return lines
