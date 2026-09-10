@@ -33,6 +33,7 @@
 | [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | pending |
 | [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | pending |
 | [TASK-015](TASK-015-Bakeoff与校准.md) | embedding bake-off + rerank 初值校准 | TASK-013 | TASK-014 | `benches/bakeoff/` | pending |
+| [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | review |
 
 ### 开卡批次历史（并行安全）
 

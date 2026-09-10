@@ -33,14 +33,17 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from zace_core.storage.db import DB_FILENAME, connect, ensure_database, transaction
 from zace_core.text import segment
 from zace_core.types import ChunkDef, FileDelta, Freshness, ParsedFile, UnresolvedRef
 
 __all__ = [
+    "FTS_COLUMN_WEIGHTS",
     "EdgeRow",
     "EdgeTargetUpdate",
+    "FtsOperator",
     "RefResolution",
     "SpecRef",
     "Store",
@@ -49,6 +52,15 @@ __all__ = [
 ]
 
 _SQLITE_PARAM_BATCH = 500
+
+#: BM25 列权重（顺序 = ``chunks_fts`` 索引列 ``content_seg, signature_seg, docstring_seg``；
+#: ``file_path`` 为 UNINDEXED 不参与）。符号名列加权，保证符号名命中排在长 docstring 的
+#: 偶然提及之前（codegraph ``queries.ts:1505-1513`` 的同类做法）。
+#: **TASK-015 校准项**：与 TASK-015 bake-off 一并调；属通道内权重不是通道间权重（D-16 不违反）。
+FTS_COLUMN_WEIGHTS = (1.0, 5.0, 1.0)
+
+#: ``Store.fts_search`` 的多词组合语义：``or``（任一 token 命中，默认）/ ``and``（全 token 命中）。
+FtsOperator = Literal["or", "and"]
 
 # unresolved_refs.reference_kind → edges.kind 的默认映射（TASK-006 可用 kind 覆盖）。
 _EDGE_KIND_BY_REF_KIND = {
@@ -670,20 +682,38 @@ class Store:
                 found[str(row["id"])] = _chunk_from_row(row)
         return [found[i] for i in chunk_ids if i in found]
 
-    def fts_search(self, segmented_query: str, limit: int = 50) -> list[tuple[str, float]]:
+    def fts_search(
+        self,
+        segmented_query: str,
+        limit: int = 50,
+        *,
+        operator: FtsOperator = "or",
+    ) -> list[tuple[str, float]]:
         """BM25 检索：``segmented_query`` 必须已经过 :func:`zace_core.text.segment`（D-45）。
 
-        多 token 按隐式 AND 组合（每个 token 引号包裹，避免把 FTS 语法字符当运算符）；
+        多 token 组合语义由 ``operator`` 决定（R11，2026-09-10 集成期裁定）：
+
+        - ``"or"``（默认）：token 用 ``OR`` 连接 → 任一 token 命中即入候选，由 bm25 打分排序。
+          中文自然语言查询分词后 token 多（7+），隐式 AND 会恒零命中（真实缺陷 R11）；
+        - ``"and"``：保留高精度语义（全 token 必须命中），供需要精确性的调用方显式选择。
+
+        每个 token 均引号包裹（避免把 FTS 语法字符当运算符）；打分用
+        :data:`FTS_COLUMN_WEIGHTS` 加列权重，符号名列优先。
         返回 ``(chunk_id, bm25 分)``，分值为原始 bm25（负数，越小越相关）并按它升序。
         """
+        if operator not in ("or", "and"):
+            raise ValueError(f"operator 必须是 'or' 或 'and'，收到 {operator!r}")
         tokens = [t for t in segmented_query.split() if t.strip()]
         if not tokens:
             return []
-        match = " ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+        quoted = ['"' + t.replace('"', '""') + '"' for t in tokens]
+        match = (" OR " if operator == "or" else " ").join(quoted)
+        weights = ", ".join(repr(float(weight)) for weight in FTS_COLUMN_WEIGHTS)
         rows = self._conn.execute(
-            "SELECT c.id AS chunk_id, bm25(chunks_fts) AS score"
+            "SELECT c.id AS chunk_id,"
+            f" bm25(chunks_fts, {weights}) AS score"
             " FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid"
-            " WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?",
+            f" WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts, {weights}) LIMIT ?",
             (match, limit),
         ).fetchall()
         return [(str(r["chunk_id"]), float(r["score"])) for r in rows]
