@@ -15,6 +15,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
 
+[project.scripts]
+# TASK-030：服务入口（argparse + uvicorn.run）。仅新增 scripts 段，依赖清单不变（不新增第三方依赖）。
+zace-service = "zace_service.__main__:main"
+
 [tool.uv.sources]
 zace-core = { workspace = true }
 
