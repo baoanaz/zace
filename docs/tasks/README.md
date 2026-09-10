@@ -31,7 +31,7 @@
 | [TASK-011](TASK-011-图扩展与Rerank.md) | 图扩展（calls + spec_references）+ 确定性 rerank | TASK-010 | — | `core/zace_core/retrieval/{expand,rerank}.py` | done |
 | [TASK-012](TASK-012-ContextPack组装.md) | ContextPack 组装 + Markdown 渲染 | TASK-010, TASK-011 | — | `core/zace_core/contextpack/` | done |
 | [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | done |
-| [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | pending |
+| [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | review |
 | [TASK-015](TASK-015-Bakeoff与校准.md) | embedding bake-off + rerank 初值校准 | TASK-013 | TASK-014 | `benches/bakeoff/` | pending |
 | [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
 | [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
@@ -55,7 +55,7 @@
 
 | repo_hint | 路径 | commit | 用途 |
 |---|---|---|---|
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）；种子用例 `benches/golden/aibox-seed.jsonl` |
+| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）；种子用例 `benches/golden/aibox-super-sdk/aibox-seed.jsonl`（TASK-014 移入仓库子目录，内容未改） |
 
 详情（规模、负例口径、为何选它）见 `benches/README.md` 的“已指定的评测仓库”节。
 

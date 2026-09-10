@@ -70,3 +70,64 @@ git clone https://github.com/psf/requests /tmp/repos/requests && git -C /tmp/rep
 uv run zace-core eval --golden benches/golden --repo <本地仓库路径> --report benches/results/<name>.md
 uv run python benches/bakeoff/embed_compare.py --help   # TASK-015 交付
 ```
+
+## 用例编写指南（TASK-014 追加）
+
+### 目录结构：按仓库分层
+
+runner 的 `--golden` 接受**文件或目录**，目录模式会 `rglob` 收集全部 `*.jsonl`；而一次 eval 只针对一个
+`--repo`。因此用例按仓库分层，一次目录调用 = 一个仓库的完整用例集：
+
+```text
+benches/golden/
+├── zace/                         # dogfood（--repo .）
+│   ├── sample.jsonl              # 格式样例骨架（TASK-013 遗留，4 条，随 TASK-014 移入本目录，内容未改）
+│   └── zace.jsonl                # TASK-014 新增 20 条
+├── aibox-super-sdk/
+│   ├── aibox-seed.jsonl          # 编排者种子 8 条（随 TASK-014 移入本目录，内容未改）
+│   └── aibox.jsonl               # TASK-014 新增 12 条
+└── linux-mtk-mw-cameraservice/   # 自选 C++ 仓库
+    └── cameraservice.jsonl       # TASK-014 新增 16 条
+```
+
+`benches/golden`（根）仍可整体跑通（id 全局唯一，跨仓库用例会对着单个仓库索引跑出必然失败，
+只用于 runner 冒烟/回归，不用于指标口径）。**出题时不要把用例堆回根目录**，否则无法按仓库取指标。
+
+### 命令模板
+
+```bash
+# 每个仓库一次（目录级）
+uv run zace-core eval --golden benches/golden/zace --repo . --data <data-root> --report benches/results/<name>.md
+# C++ 自选仓库
+uv run zace-core eval --golden benches/golden/linux-mtk-mw-cameraservice \
+  --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data /tmp/zace-cam \
+  --report benches/results/<name>.md
+```
+
+### 两段口径（TASK-014 冻结）
+
+| 段 | 排名来源 | 覆盖什么 |
+|---|---|---|
+| ① 索引层 | `SearchTrace.candidates`（recall→expand→rerank 后的候选池序） | 召回/融合/rerank 的质量，**不受 TASK-017/019 的装填影响** |
+| ② 端到端 | `ContextPack` 的 E 编号装填序（`zace-core eval` 默认） | agent 实际读到的顺序（含装填、行序渲染、spec 保底） |
+
+两段对比可定位增益来自哪一层。① 没有 CLI 开关，需用 `Engine.search_with_trace` 写十行脚本
+（见 `results/phase1-baseline.md` §7 附录；建议编排者后续在 runner 上加 `--stage index|e2e`）。
+
+### 出题规则
+
+1. **期望必须是 grep 核验过的真答案**：`expected[].path` 用仓库相对路径精确匹配，`symbol` 可选但会额外收窄判定。
+2. **符号期望按“证据级”写**：runner 的符号判定是单向的（证据符号需等于期望符号，或以 `.symbol` / `::symbol` 结尾，或在正文中按词边界出现）。
+   期望写类名 `Indexer` 时，只有“符号就是 `Indexer`”的证据块才算命中，`Indexer.ingest` 的证据块会被判失败——想要类+成员都算命中，就把两条 `expected` 都写上。
+3. **负例核验口径 = 被索引的文件集，不是 git 工作区**：`DirectorySource` 不使用 `.gitignore`，
+   未跟踪文件（`CLAUDE.md`、`.claude/`、`egg-info/`、构建目录里的文本文件）同样入库。
+   因此 `grep -ril <概念> <repo>` 必须覆盖未跟踪文件与构建目录（`.venv` 等除外）。
+4. **zace dogfood 的 R17 免责**：`benches/golden/**` 自身在仓库内且会被索引，任何负例的查询原文都能被
+   自身命中（实测：`Category=negative` 的样例题因 `test_cli_eval.py` 的 fixture + `golden/zace/sample.jsonl`
+   命中 top-2 而 `answerable=true`）。dogfood 负例只能以“该 query 在 core/ 与 docs/ 中无对应实现”为前提，
+   并在报告里注明本次运行的索引是否包含 golden 文件。
+5. **语言/类别配额**（Module/02 §7-1 的 golden set 要求）：中文 ≥15、英文 ≥10、中英混合 ≥15；
+   类型须覆盖 `symbol` / `path` / `behavior` / `spec` / `negative`；至少 1 条 `negative` 在外部仓库上。
+6. **索引可复用，但必须记录索引状态**：`--data` 指向已有 data root 可省去 7-20 分钟重建；
+   报告里必须写清“索引来自哪个 commit / 哪个工作区”（`identity_key` 只由 git remote + 相对路径决定，
+   **同一 remote 的不同 worktree 共用同一个 project 目录**，lane 之间会互相覆盖，不能凭目录名判断内容）。
