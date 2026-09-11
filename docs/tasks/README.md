@@ -54,7 +54,7 @@
 | [TASK-033](TASK-033-同步API.md) | 同步 API（batch-upload / checkpoint / deletions / status；CF-05 幂等语义） | TASK-032 | `service/zace_service/routers/sync.py` | done |
 | [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | review |
 | [TASK-034](TASK-034-本地单用户模式.md) | 本地单用户模式（attach 本地仓库 + 一键起 + 后台索引进度 + 懒重扫） | TASK-035 | `service/zace_service/{runtime,indexer,__main__,config}.py` | review |
-| [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | pending |
+| [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | review |
 
 | 波次 | 泳道 | 任务卡 | 说明 |
 |---|---|---|---|

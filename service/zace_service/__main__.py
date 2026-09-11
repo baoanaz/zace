@@ -34,6 +34,7 @@ from pathlib import Path
 import uvicorn
 
 from zace_service.app import create_app
+from zace_service.cli_hint import format_snippets, mcp_url
 from zace_service.config import (
     DATA_ROOT_ENV,
     LOCAL_MODE_ENV,
@@ -47,7 +48,8 @@ __all__ = ["build_parser", "main"]
 PROG = "zace-service"
 LOG_LEVELS = ("critical", "error", "warning", "info", "debug", "trace")
 #: 子命令（不写子命令时默认 serve：向下兼容 TASK-030/035 的调用形式）。
-SUBCOMMANDS = ("serve", "local")
+#: ``mcp-config``（TASK-040）只输出编辑器配置片段，不起服务。
+SUBCOMMANDS = ("serve", "local", "mcp-config")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("serve", "纯服务模式：不绑本地仓库（客户端上传路径）"),
         ("local", "本地单用户：绑定一个仓库 + 后台索引 + 起服务（一条命令）"),
+        ("mcp-config", "只输出编辑器（Cursor 等）的 MCP 配置片段，不起服务"),
     ):
         sub = subparsers.add_parser(name, help=help_text, description=help_text)
         _add_common_arguments(sub, suppress=True)
@@ -125,10 +128,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         data_root=args.data_root or base.data_root,
         log_level=args.log_level or base.log_level,
     )
+    if args.command == "mcp-config":  # TASK-040：只打配置片段，不起服务、不碰 core
+        print(format_snippets(settings.port, host=settings.host), flush=True)
+        return 0
     if args.command == "local":
         return _run_local(args, base, settings)
     if args.reload:
         os.environ[DATA_ROOT_ENV] = str(settings.data_root)
+        print(format_snippets(settings.port, host=settings.host), flush=True)
         uvicorn.run(
             "zace_service.app:create_app",
             factory=True,
@@ -139,6 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             reload=True,
         )
         return 0
+    print(format_snippets(settings.port, host=settings.host), flush=True)
     uvicorn.run(
         create_app(settings),
         host=settings.host,
@@ -220,12 +228,14 @@ def _print_ready(settings: Settings, attached: AttachResult, *, indexed: bool) -
     else:
         lines.append("  索引      : 未启动（--no-index）；需要时 POST /api/projects/{id}/rescan")
     lines.append(f"  检索接口  : POST http://{settings.host}:{settings.port}/api/query/search")
-    lines.append("  MCP       : 编辑器直连地址由 TASK-040 提供（/mcp + 配置片段）")
+    lines.append(f"  MCP       : {mcp_url(settings.port, host=settings.host)}（Streamable HTTP）")
     lines.append(
         f"  懒重扫    : 每 {settings.local_rescan_interval_s:g}s 一次"
         f"（0=禁用，{LOCAL_RESCAN_INTERVAL_ENV} 可改）"
     )
     print("\n".join(lines), flush=True)
+    # 编辑器配置片段单独一段（TASK-040）：用户复制粘贴即可，不用去猜路径形态。
+    print("\n" + format_snippets(settings.port, host=settings.host), flush=True)
 
 
 if __name__ == "__main__":  # pragma: no cover - 手工入口

@@ -10,10 +10,13 @@
 3. requestId middleware：每请求一个 id（尊重调用方传的 ``X-Request-Id``），
    响应头回写 ``X-Request-Id``，访问日志只记 method/path/status/耗时（不碰 headers/body）；
 4. CF-05 错误信封处理器（见 ``zace_service.errors``）；
-5. 全部路由（路径集合冻结，见 ``zace_service.routers``）。
+5. 全部路由（路径集合冻结，见 ``zace_service.routers``）；
+6. **MCP 端点**（TASK-040）：``/mcp`` 挂 MCP Streamable HTTP（见 ``zace_service.mcp``）。
+   MCP 不是 CF-05 的 REST 路径（挂载不进 ``openapi()["paths"]``），因此路径快照测试不受影响。
 
 ``app.state.engine_manager`` 在本卡恒为 ``None``（TASK-030 不消费 core）；TASK-031 起由
-``zace_service.deps.get_engine_manager`` 懒构造或由测试注入。
+``zace_service.deps.get_engine_manager`` 懒构造或由测试注入；TASK-040 的 MCP 工具走
+``zace_service.mcp.manager_for_app``（同一口径，只是入口没有 ``Request``）。
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from fastapi import FastAPI, Request, Response
 from zace_service.config import Settings
 from zace_service.errors import install_error_handlers, internal_error_response
 from zace_service.logging import bind_request_id, configure_logging, get_logger, reset_request_id
+from zace_service.mcp import build_mcp, manager_for_app, mount, session_lifespan
 from zace_service.routers import all_routers
 
 __all__ = ["REQUEST_ID_HEADER", "create_app"]
@@ -54,7 +58,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _install_request_context(app)
     for router in all_routers():
         app.include_router(router)
+    _install_mcp(app, resolved)
     return app
+
+
+def _install_mcp(app: FastAPI, settings: Settings) -> None:
+    """挂载 MCP 端点并启用 session manager 的 lifespan（TASK-040）。
+
+    ``build_mcp`` 收的是**懒解析函数**：/healthz 与占位路由不得因为挂了 MCP 就去构造引擎
+    （TASK-030 的"起服务不加载模型"纪律，`test_healthz_without_touching_core` 守着这一点）。
+
+    lifespan 的接管方式：TASK-030 的 app 没有自己的 lifespan（无既有逻辑可被覆盖），因此这里
+    直接设 ``router.lifespan_context``；将来若有了别的 lifespan，改到 :func:`session_lifespan`
+    里嵌套组合。
+    """
+    server = build_mcp(lambda: manager_for_app(app), settings=settings)
+    mount(app, server)
+    app.router.lifespan_context = session_lifespan(server)
 
 
 def _install_request_context(app: FastAPI) -> None:
