@@ -8,6 +8,8 @@
 - 纯标准库实现（``os.environ`` + ``dataclasses``），**不引入 pydantic-settings**（依赖最小化）；
 - ``data_root`` 与 core 的 ``ZACE_DATA_ROOT`` 同名同义（``~/.zace``，core 只管 ``projects/``）；
 - ``local_mode`` 默认 ``True``：M2a 为本地单用户模式（R34），鉴权归 M2c（TASK-060/061）；
+- ``local_rescan_interval_s``（TASK-034 §C）：本地模式下检索前的懒重扫间隔，默认 2.0 秒，
+  **0 表示禁用**（测试与"只读演示"）；只影响本地模式（远端模式走客户端上传）；
 - 非法布尔值**显式报错**而不是静默取默认——``local_mode`` 决定是否要求鉴权，静默取真会让
   配置写错的人以为安全策略生效（诚实性优先于启动便利）。
 """
@@ -25,9 +27,11 @@ __all__ = [
     "DATA_ROOT_ENV",
     "DEFAULT_DATA_ROOT",
     "DEFAULT_HOST",
+    "DEFAULT_LOCAL_RESCAN_INTERVAL_S",
     "DEFAULT_LOG_LEVEL",
     "DEFAULT_PORT",
     "LOCAL_MODE_ENV",
+    "LOCAL_RESCAN_INTERVAL_ENV",
     "Settings",
 ]
 
@@ -35,6 +39,10 @@ __all__ = [
 DATA_ROOT_ENV = "ZACE_DATA_ROOT"
 #: 本地模式环境变量（R34：默认开启，M2c 才关）。
 LOCAL_MODE_ENV = "ZACE_LOCAL_MODE"
+#: 懒重扫间隔环境变量（TASK-034 §C；0 = 禁用）。
+LOCAL_RESCAN_INTERVAL_ENV = "ZACE_LOCAL_RESCAN_INTERVAL"
+#: 默认懒重扫间隔（秒）：本地模式下检索前最多每 2s 扫一次（Module/05 §3.6 的 freshness 语义）。
+DEFAULT_LOCAL_RESCAN_INTERVAL_S = 2.0
 #: 默认数据根（core 的 ``DEFAULT_DATA_ROOT`` 同值；service 只读 settings，不重复定义语义）。
 DEFAULT_DATA_ROOT = Path.home() / ".zace"
 DEFAULT_HOST = "127.0.0.1"
@@ -54,6 +62,7 @@ class Settings:
     port: int = DEFAULT_PORT
     log_level: str = DEFAULT_LOG_LEVEL
     local_mode: bool = True
+    local_rescan_interval_s: float = DEFAULT_LOCAL_RESCAN_INTERVAL_S
     version: str = __version__
 
     @classmethod
@@ -64,6 +73,11 @@ class Settings:
         return cls(
             data_root=Path(raw_root).expanduser() if raw_root else DEFAULT_DATA_ROOT,
             local_mode=_as_bool(source.get(LOCAL_MODE_ENV), LOCAL_MODE_ENV, default=True),
+            local_rescan_interval_s=_as_float(
+                source.get(LOCAL_RESCAN_INTERVAL_ENV),
+                LOCAL_RESCAN_INTERVAL_ENV,
+                default=DEFAULT_LOCAL_RESCAN_INTERVAL_S,
+            ),
         )
 
 
@@ -76,3 +90,15 @@ def _as_bool(raw: str | None, name: str, *, default: bool) -> bool:
     if value in _FALSY:
         return False
     raise ValueError(f"环境变量 {name} 必须是布尔值（{sorted(_TRUTHY | _FALSY)}），收到 {raw!r}")
+
+
+def _as_float(raw: str | None, name: str, *, default: float) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"环境变量 {name} 必须是数字，收到 {raw!r}") from None
+    if value < 0:
+        raise ValueError(f"环境变量 {name} 不能为负（0 表示禁用），收到 {raw!r}")
+    return value

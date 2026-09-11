@@ -1,6 +1,12 @@
 """TASK-030 验收：CF-05 路径快照 / healthz / 错误信封 / requestId / 日志脱敏。
 
 对应任务卡"验收标准（DoD）"逐条；每条测试的 docstring 标注它守的是哪一条。
+
+TASK-034 说明（本文件唯一的后续改动）：§A 预授权的**新增路径**（``/api/projects/attach``、
+``/api/projects/{id}/rescan``）属 CF-05 的**扩展**，卡内已登记。本文件用
+:data:`TASK_034_EXTENSION_PATHS` 把"允许多出哪些"写死：除此之外路径集合仍必须与
+``docs/contracts/openapi.yaml`` **完全相等**（多一个/少一个/改名依然失败）。
+``docs/contracts/openapi.yaml`` 的同步由编排者执行（实施 AI 不改契约文件）。
 """
 
 from __future__ import annotations
@@ -21,16 +27,22 @@ from tests.conftest import make_app, make_client
 
 # --------------------------------------------------------------------------- CF-05 路径快照
 
+#: TASK-034 §A 预授权的 CF-05 **扩展路径**（卡内登记；编排者需同步 ``openapi.yaml``）。
+#: 这个白名单是刻意的：它把"扩展"与"漂移"分开——白名单外的任何差异依然会让测试失败。
+TASK_034_EXTENSION_PATHS: frozenset[str] = frozenset(
+    {"/api/projects/attach", "/api/projects/{id}/rescan"}
+)
+
 
 def test_openapi_paths_match_cf05_contract(
     app: FastAPI, contract_paths: dict[str, set[str]]
 ) -> None:
-    """CF-05 地基：应用暴露的路径集合必须与 ``docs/contracts/openapi.yaml`` 完全相等。
+    """CF-05 地基：应用暴露的路径集合 = 合同集合 + TASK-034 预授权扩展（其余完全相等）。
 
     路径多一个 / 少一个 / 改名（含路径参数名）都会失败，并在断言消息里给出两侧差异。
     """
     actual = set(app.openapi()["paths"])
-    expected = set(contract_paths)
+    expected = set(contract_paths) | set(TASK_034_EXTENSION_PATHS)
     assert actual == expected, _path_diff(actual, expected)
 
 
