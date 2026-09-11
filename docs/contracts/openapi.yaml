@@ -102,11 +102,30 @@ paths:
   /api/projects:
     get:
       tags: [projects]
-      responses: { '200': { description: Project[] } }
+      responses: { '200': { description: 'Project[]（本地模式追加 attachedRoot / indexProgress）' } }
+  /api/projects/attach:
+    post:
+      tags: [projects]
+      summary: 【本地模式】绑定目录并后台索引（TASK-034 / R44）；立即返回，不等索引完成
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [root], properties: { root: { type: string, description: 本地目录绝对路径 }, displayName: { type: string } } } } }
+      responses:
+        '200': { description: '{ projectId, created, root, indexProgress }（幂等：已在索引中则返回当前进度）' }
+        '400': { description: invalid_root }
+        '403': { description: local_mode_required（非本地模式） }
+  /api/projects/{id}/rescan:
+    post:
+      tags: [projects]
+      summary: 【本地模式】手动触发增量重扫（TASK-034 §C）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '202': { description: '{ indexProgress }' }
+        '409': { description: 'index_running（已在索引）/ local_root_unknown（重启后未 attach）' }
+        '404': { description: project_not_found }
   /api/projects/{id}:
     get:
       tags: [projects]
-      responses: { '200': { description: Project + SyncStatus } }
+      responses: { '200': { description: 'Project + SyncStatus（本地模式追加 attachedRoot / indexProgress）' } }
     delete:
       tags: [projects]
       summary: 级联删除（rm -rf 项目目录 + 元数据行；审计留痕）
