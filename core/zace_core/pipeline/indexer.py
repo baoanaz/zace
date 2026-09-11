@@ -266,10 +266,8 @@ class Indexer:
             for path in self._source.list_files():
                 if path in deleted:
                     continue
-                try:
-                    data = self._source.read(path)
-                except OSError as exc:  # 扫描期读失败不中断整体 ingest
-                    acc.errors.append(f"{path}: {type(exc).__name__}: {exc}")
+                data = _safe_read(self._source, path, acc)
+                if data is None:
                     continue
                 items[path] = _Input(path=path, data=data, kind="modified")
         for blob in changes.added:
@@ -381,10 +379,8 @@ class Indexer:
         for path in self._source.list_files():
             if path in processed:
                 continue
-            try:
-                data = self._source.read(path)
-            except OSError as exc:
-                acc.errors.append(f"{path}: {type(exc).__name__}: {exc}")
+            data = _safe_read(self._source, path, acc)
+            if data is None:
                 continue
             text = _decode(data)
             if text is None:
@@ -440,6 +436,27 @@ class Indexer:
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
+
+
+def _safe_read(source: SourceProvider, path: str, acc: _Accumulator) -> bytes | None:
+    """读一个文件并**隔离任何失败**：异常记入 ``acc.errors`` 后返回 ``None``。
+
+    TASK-036 §B 复现的崩溃（最小复现见
+    ``core/tests/integration/test_ingest_isolation.py``）：``DirectorySource.list_files()``
+    会把文件名含反斜杠的路径列出来（反斜杠在 Linux 上是合法文件名字符，老仓库里存在），
+    而它的 ``read()`` 用 :class:`SourcePathError`（``ValueError``）拒绝这类路径。此前只有
+    ``OSError`` 被捕获——**一个这样的文件就让整次 ingest 中止**，连已解析的文件都留不下来。
+
+    为什么放宽到整个 ``Exception``：隔离本身是设计行为（Module/01 §4.3 per-file 韧性、
+    TASK-018 §C 同一口径），“如实记录并跳过”严格优于“整体中止”；``KeyboardInterrupt`` 等
+    ``BaseException`` 不受影响。读写两侧路径口径的一致性归 TASK-037（``pipeline/source.py``），
+    本卡只保证“不再拖垮整次 ingest”。
+    """
+    try:
+        return source.read(path)
+    except Exception as exc:  # noqa: BLE001 - 见 docstring：隔离是设计行为
+        acc.errors.append(f"{path}: {type(exc).__name__}: {exc}")
+        return None
 
 
 def _decode(data: bytes) -> str | None:

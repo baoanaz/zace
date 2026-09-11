@@ -74,7 +74,7 @@
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
 | [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | review |
-| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | pending |
+| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | review |
 | [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | TASK-036 | `core/zace_core/pipeline/{ignore,source,indexer}.py` | pending |
 | [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（TASK-015A 实测发现：e5 等模型原生上限 512，配 2048 会崩） | — | `core/zace_core/embedding/**` | pending |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
