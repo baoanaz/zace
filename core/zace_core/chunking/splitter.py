@@ -27,13 +27,14 @@
 - ``embedding_text(chunk)`` = signature + docstring + 截断体（去掉签名后的正文，按字符上限截断；
   最终 token 级截断仍由 EmbeddingProvider 按 ``max_input_tokens`` 执行，D-05）。
 - 纯函数、无 I/O、确定性：同一 ``(parsed, content)`` 两次调用结果逐字段相等；输出按
-  ``(start_line, end_line, id)`` 稳定排序。
+  ``(start_line, end_line, id)`` 稳定排序（同 id 的兜底硬切块按文档内顺序附 ``#N``）。
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 
 from zace_core.hashing import chunk_content_hash, normalize_newlines
 from zace_core.parsing.fallback import split_fallback
@@ -43,6 +44,7 @@ __all__ = [
     "CLASS_SKELETON_KIND",
     "EMBEDDING_BODY_MAX_CHARS",
     "FALLBACK_KIND",
+    "ID_DISAMBIGUATION_SEP",
     "MODULE_FQN",
     "SPEC_BLOCK_KIND",
     "chunk_id",
@@ -61,6 +63,9 @@ CLASS_SKELETON_KIND = "class_skeleton"
 SKELETON_KINDS = frozenset({"class", "struct"})
 #: 只做结构容器、不成 chunk 的符号 kind（Module/01 §2.2 未列为检索单元）。
 CONTAINER_KINDS = frozenset({"namespace"})
+
+#: 同 id 兜底块的后缀分隔符（Module/01 §2.2「重载消歧：chunk_id 后缀消歧」）。
+ID_DISAMBIGUATION_SEP = "#"
 
 #: embedding 输入的正文字符上限（≈2048 词元安全上界；token 级截断归 provider，D-05）。
 EMBEDDING_BODY_MAX_CHARS = 8_000
@@ -98,8 +103,43 @@ def split_file(parsed: ParsedFile, content: str) -> list[ChunkDef]:
         if parsed.fallback
         else _structural_chunks(parsed, lines)
     )
-    _reject_duplicate_ids(parsed.path, chunks)
-    return sorted(chunks, key=_chunk_sort_key)
+    ordered = sorted(chunks, key=_chunk_sort_key)
+    unique = _disambiguate_fallback_ids(ordered)
+    _reject_duplicate_ids(parsed.path, unique)
+    return unique
+
+
+def _disambiguate_fallback_ids(chunks: Sequence[ChunkDef]) -> list[ChunkDef]:
+    """给"同一行被硬切出的多个兜底块"补 ``#N`` 后缀（按 Module/01 §2.2 的后缀消歧）。
+
+    ``FALLBACK_MAX_CHARS`` 的字符硬切只在**找不到任何分隔符**时触发——也就是同一物理行内部。
+    N 个片因此算出同一个 ``{path}:(module):{start_line}``：这是 D-04 的 id 方案
+    （只用 ``start_line`` 消歧）在"一行多块"时的固有缺口，不是数据不一致。
+
+    为什么不再让它整文件失败（TASK-018 §B 当时的处置）：实测代价是**静默丢掉整个文件**。
+    2026-09-11 在 Obsidian 靶场命中 7 个压缩 JS/CSS（``make-md/styles.css`` 149KB 单行、
+    ``make-md/main.js``、``obsidian-git/main.js``、``templater-obsidian/main.js``、
+    ``heatmap-tracker``、``dataview``、``obsidian-custom-attachment-location``），
+    全部被整文件跳过。它也不是"超大文件才有的病"——任何单行 > ``FALLBACK_MAX_CHARS``
+    的文件（≈41KB 单行 JSON/CSS/压缩产物）都命中同一路径。
+
+    **其它来源的重复不在此列**（同名同起始行的符号、同 heading 同起始行的 spec 块）：
+    那些是真不一致，继续交给 :func:`_reject_duplicate_ids` 显式失败，不静默掩盖。
+
+    后缀号 = 该 id 在 ``chunks`` 中的出现次序；入参已按 :func:`_chunk_sort_key` 排过序，
+    而同一行硬切出的块 ``(start_line, end_line)`` 完全相同、``sorted`` 稳定，
+    因此次序就是文档内顺序，后缀赋值是确定性的。
+    """
+    counts: dict[str, int] = {}
+    result: list[ChunkDef] = []
+    for chunk in chunks:
+        counts[chunk.id] = counts.get(chunk.id, 0) + 1
+        occurrence = counts[chunk.id]
+        if occurrence == 1 or chunk.symbol_kind != FALLBACK_KIND:
+            result.append(chunk)
+            continue
+        result.append(replace(chunk, id=f"{chunk.id}{ID_DISAMBIGUATION_SEP}{occurrence}"))
+    return result
 
 
 def _structural_chunks(parsed: ParsedFile, lines: list[str]) -> list[ChunkDef]:
@@ -186,6 +226,9 @@ def _reject_duplicate_ids(path: str, chunks: Sequence[ChunkDef]) -> None:
     兜底块 fqn 恒为 ``(module)``，一旦行号回跳或单行超长硬切，多个块会算出同一个
     ``{path}:(module):{start_line}``；若把冲突留到写库，只会变成难以定位的
     ``sqlite3.IntegrityError``（且整次 ingest 连带失败）。
+
+    "单行硬切"这一类已由 :func:`_disambiguate_fallback_ids` 在出口前消歧（保数据、不给 id 撞车）；
+    本函数是**最后一道不变量**：走到这里还有重复，就是切分逻辑真的错了，必须显式失败。
     """
     counts: dict[str, int] = {}
     for chunk in chunks:

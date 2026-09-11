@@ -12,6 +12,7 @@ import pytest
 from zace_core.chunking import (
     CLASS_SKELETON_KIND,
     FALLBACK_KIND,
+    ID_DISAMBIGUATION_SEP,
     MODULE_FQN,
     SPEC_BLOCK_KIND,
     chunk_id,
@@ -315,14 +316,54 @@ def test_duplicate_chunk_ids_raise_value_error() -> None:
     assert "重复 chunk id" in message
 
 
-def test_oversized_single_line_fallback_raises_with_details() -> None:
-    """单行超长硬切出的兜底块同 id（fqn 恒为 ``(module)``）→ 显式失败并列出冲突 id。"""
+def test_oversized_single_line_fallback_is_disambiguated_not_lost() -> None:
+    """单行超长硬切出的兜底块同 id（fqn 恒为 ``(module)``）→ 补 ``#N`` 后缀，**不丢文件**。
+
+    TASK-018 §B 当时的选择是抛 ValueError 让该文件整份跳过（当时的代价小、能先解除阻断）；
+    TASK-036 §B 在 Obsidian 靶场量到真实代价：7 个压缩 JS/CSS 因此全部被跳过。硬切只发生在
+    "找不到任何分隔符"时——就是同一物理行内部，不是数据不一致，而是 D-04 的 id 方案
+    （只用 ``start_line`` 消歧）在一行多块时的固有缺口；Module/01 §2.2 已预留后缀消歧。
+    """
     parsed = ParsedFile(path="assets/blob.bin", language="fallback", fallback=True)
     source = "x" * (FALLBACK_MAX_CHARS * 2 + 10)
 
-    with pytest.raises(ValueError) as excinfo:
-        split_file(parsed, source)
+    chunks = split_file(parsed, source)
 
-    message = str(excinfo.value)
-    assert "assets/blob.bin" in message
-    assert f"assets/blob.bin:{MODULE_FQN}:1" in message
+    assert [chunk.id for chunk in chunks] == [
+        f"assets/blob.bin:{MODULE_FQN}:1",
+        f"assets/blob.bin:{MODULE_FQN}:1{ID_DISAMBIGUATION_SEP}2",
+        f"assets/blob.bin:{MODULE_FQN}:1{ID_DISAMBIGUATION_SEP}3",
+    ], "首块保留原 id，后续块按出现次序附 #N"
+    assert "".join(chunk.content for chunk in chunks) == source, "消歧不得丢字符/重排"
+    assert {chunk.start_line for chunk in chunks} == {1}, "硬切块共享同一物理行（缺陷现场）"
+
+
+def test_disambiguation_is_deterministic_and_ordered() -> None:
+    """同输入两次调用逐字段相等（纯函数），且后缀号按文档内顺序递增。"""
+    parsed = ParsedFile(path="m.bin", language="fallback", fallback=True)
+    source = "y" * (FALLBACK_MAX_CHARS * 4 + 7)
+
+    first = split_file(parsed, source)
+    second = split_file(parsed, source)
+
+    assert first == second
+    ids = [chunk.id for chunk in first]
+    assert ids == sorted(ids, key=_id_occurrence)
+    assert "".join(chunk.content for chunk in first) == source
+
+
+def _id_occurrence(chunk_id: str) -> int:
+    """从 ``...#N`` 取出现次序（无后缀 = 1），用于断言文档内顺序。"""
+    _, _, tail = chunk_id.rpartition(ID_DISAMBIGUATION_SEP)
+    return int(tail) if tail.isdigit() else 1
+
+
+def test_structural_duplicates_still_fail_loudly() -> None:
+    """非兜底来源的真不一致仍显式失败（消歧不把 bug 掩盖成“能跑”）。"""
+    from zace_core.types import SymbolDef
+
+    duplicate = SymbolDef(name="dup", fqn="dup", kind="function", start_line=1, end_line=3)
+    parsed = ParsedFile(path="src/dup.py", language="python", symbols=(duplicate, duplicate))
+
+    with pytest.raises(ValueError, match="重复 chunk id"):
+        split_file(parsed, "def dup():\n    a = 1\n    return a\n")

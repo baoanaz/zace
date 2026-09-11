@@ -254,6 +254,26 @@ class _EmptySource:
         return ()
 
 
+def _vector_index_gap(store: Store, vectors: VectorStore) -> str | None:
+    """R41 附注 / TASK-036 §D：``chunks > 0`` 但向量表为空 → 返回可读的降级原因。
+
+    这是 TASK-031 实测过的"静默清空"形态：``Engine.ingest`` 不传 ``source`` 时配置指纹失效
+    触发 ``full_reparse``，遍历空清单重建出空向量表，**既不报错也不留痕**。检索侧照常返回
+    BM25 通道结果，调用方无从判断向量索引其实已经不在了。本函数让该状态在
+    :class:`SearchTrace` 上可见（只复用既有 ``degraded`` / ``degraded_reason`` 字段，
+    CF-03/CF-04 不动）。
+
+    反向不成立：``chunks == 0``（真空库）不算降级——那是"还没索引"，由 ``answerable``
+    与 SyncStatus 表达，不该伪装成"通道坏了"。
+    """
+    if vectors.count() != 0:
+        return None
+    chunks = store.counts()["chunks"]
+    if chunks == 0:
+        return None
+    return f"向量索引为空（可能未重建）：chunks={chunks}，vectors=0"
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -451,6 +471,7 @@ class Engine:
                 vector_store=vectors,
                 limits=self._limits,
             )
+            vector_gap = _vector_index_gap(store, vectors)
             expansion = expand(store, recalled.candidates, limits=self._expansion_limits)
             pool = [*recalled.candidates, *expansion.candidates]
             ranked = rerank(pool, collect_signals(store, query, pool))
@@ -464,11 +485,16 @@ class Engine:
                 config=self._budget(max_tokens),
                 signals=collect_index_signals(store, ranked),
             )
+        degraded_reason = recalled.degraded_reason
+        if vector_gap is not None:
+            degraded_reason = (
+                f"{degraded_reason}；{vector_gap}" if degraded_reason else vector_gap
+            )
         return SearchTrace(
             pack=pack,
             channels_used=recalled.channels_used,
-            degraded=recalled.degraded,
-            degraded_reason=recalled.degraded_reason,
+            degraded=recalled.degraded or vector_gap is not None,
+            degraded_reason=degraded_reason,
             candidates=tuple(ranked),
         )
 
@@ -577,7 +603,9 @@ def plan_scan(root: str | Path, previous: Mapping[str, str]) -> _ScanResult:
     for path in source.list_files():
         try:
             data = source.read(path)
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 - 单文件读失败隔离（同 Indexer._safe_read）
+            # TASK-036 §B：此前只捕 OSError，而 DirectorySource 对含反斜杠的文件名抛
+            # SourcePathError（ValueError）——一个这样的文件会让整次 ingest 中止。
             errors.append(f"{path}: {type(exc).__name__}: {exc}")
             continue
         digest = file_content_hash(data)

@@ -74,7 +74,7 @@
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
 | [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | pending |
-| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | pending |
+| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | review |
 | [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | TASK-036 | `core/zace_core/pipeline/{ignore,source,indexer}.py` | pending |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
 | TASK-050 | 质量调优（R21/R24/rerank/装填参数，**必须基于 TASK-023 真实数据**） | TASK-023 | — | 未开卡 |

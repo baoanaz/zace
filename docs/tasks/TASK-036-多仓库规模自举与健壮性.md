@@ -114,4 +114,65 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-11 ｜ 分支 `feature/task-036_xwz0910`（从 `main` @ `ea4084d` 开出）
+
+**交付物**
+
+| 文件 | 内容 |
+|---|---|
+| `benches/results/robustness-scale.md` | 新建，§A/§B/§C/§D 四部分 + 契约影响/偏差/未决问题 |
+| `core/zace_core/chunking/splitter.py` | §B.1 修复：兜底硬切块的 chunk id 后缀消歧 |
+| `core/zace_core/chunking/__init__.py` | 导出 `ID_DISAMBIGUATION_SEP` |
+| `core/zace_core/pipeline/indexer.py` | §B.2 修复：`_safe_read()` 把读失败纳入单文件隔离 |
+| `core/zace_core/engine.py` | §B.2 修复（`plan_scan` 隔离）+ §D 实现（`_vector_index_gap`） |
+| `core/tests/chunking/test_splitter.py` | §B.1 回归（改写 TASK-018 留下的 1 条 + 新增 2 条） |
+| `core/tests/integration/test_ingest_isolation.py` | §B.2 回归（新建，4 条） |
+| `core/tests/integration/test_vector_index_health.py` | §D 回归（新建，4 条） |
+
+**验收命令与结果**
+
+```text
+uv run ruff check .                                  → All checks passed!
+uv run python scripts/check_dependency_direction.py  → 依赖方向检查通过（core 纯库 / service 不上探）。
+uv run pytest                                        → 622 passed, 2 skipped, 2 warnings in 410.85s
+                                                       （main 基线 612 passed / 2 skipped；本卡 +10 条）
+uv run pytest tests/chunking tests/parsing tests/pipeline -q   → 全绿
+uv run pytest tests/integration/test_vector_index_health.py tests/integration/test_ingest_isolation.py -q → 8 passed
+```
+
+**§D 负控（防止永真断言）**：把 `_vector_index_gap` 临时改为恒 `None` 后重跑，
+2 条断言如期失败（`test_chunks_without_vectors_is_reported_as_degraded`、
+`test_gap_reason_is_appended_to_existing_degraded_reason`），恢复后 8/8 通过。
+
+**六靶场实测**（完整数字与逐条 errors 见 `benches/results/robustness-scale.md` §A；
+原始证据 `~/.zace-lanec/raw.jsonl`）：
+
+| # | 靶场 | 耗时 | chunks | errors | skipped |
+|---|---|---|---|---|---|
+| 1 | notace-tool-rs | 118.5s | 112 | 0 | 0 |
+| 2 | Obsidian | 2327.2s | 4095 | 0（修复前 7）| 255 |
+| 3 | hmi-framework | 648.8s | 1756 | 14 | 544 |
+| 4 | systemservice | 1678.7s | 4585 | 21 | 1738 |
+| 5 | hmi | 见 §A.3（超预算） | 47325（已入库）| — | — |
+| 6 | Trellis | 见 §A.3（超预算） | 17828（已入库）| — | — |
+
+**自举实证（§A 完整输出）**：见 `benches/results/robustness-scale.md` §A.2-4（systemservice 全字段）；
+检索冒烟见 §A.5（Obsidian 纯文档 + hmi-framework C++，各 2 条查询，含证据路径与行号）。
+
+**与设计的偏差**
+
+1. Module/01 §2.2 的"chunk_id 后缀消歧"此前只覆盖重载，本卡把同一机制推广到"单行硬切"的
+   兜底块（依据：TASK-018 §B 的"整文件失败"在真实数据上代价是 10.0 MB 内容静默丢失）。
+2. TASK-018 §B 的"重复 id → 抛 ValueError"被收窄为"仅非兜底来源抛"。
+
+**未决问题（需编排者裁定）**
+
+1. `pipeline/source.py` 的 `list_files()` 与 `read()` 对"合法仓库相对路径"口径不一致
+   （含反斜杠的文件名）。本卡按边界未改该文件，**属 TASK-037**：过滤掉（静默跳过）
+   还是让 `read()` 接受？
+2. 向量通道 `vector_timeout_s=5.0` 被首次的 ~5.06s 模型懒加载吃掉 → **每个新进程的第一次
+   查询都静默丢向量通道**。建议显式 warm-up，但归属卡需裁定（性能回填 vs M2a 收口）。
+3. 纯文档仓库（无代码符号）的 `answerable` 在 R22 收紧后恒为 `False`——产品判断，未自行放宽。
+4. 大批量嵌入**没有分批提交/检查点**：`_embed_new` 是"全部嵌完再一次性 upsert"，
+   中途被中断则向量表为空且不写指纹/扫描状态，重跑需完全重做。hmi（47325 chunks）
+   超预算即属此形态。是否需要在 TASK-062 引入分批提交需编排者裁定。
