@@ -55,11 +55,12 @@
 | [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | review |
 | [TASK-034](TASK-034-本地单用户模式.md) | 本地单用户模式（attach 本地仓库 + 一键起 + 后台索引进度 + 懒重扫） | TASK-035 | `service/zace_service/{runtime,indexer,__main__,config}.py` | review |
 | [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | review |
+| [TASK-045](TASK-045-M2a验收手册.md) | **M2a 验收手册**（本机 demo 的"照着做就能验证"文档；无代码产出） | TASK-034、TASK-040 | `docs/handbook/M2a-验收手册.md` | review |
 
 | 波次 | 泳道 | 任务卡 | 说明 |
 |---|---|---|---|
 | M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API —— **已完成** |
-| M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 | 错误映射 → 本地模式（attach/一键起/懒重扫）→ **MCP 端点（demo 收口）** |
+| M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式（attach/一键起/懒重扫）→ **MCP 端点（demo 收口）** → 验收手册 |
 | M2b | 视情况 | TASK-023 → TASK-050；TASK-015A 可并行 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 
@@ -75,7 +76,7 @@
 5. 批 5（W3d）：TASK-020（lane B，零成本版）、TASK-014（lane F，基线）—— 已完成
 6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
 7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **当前波次**
-8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040（lane A 串行，三张卡）—— **当前波次**
+8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040 → TASK-045（lane A 串行，四张卡；TASK-045 是收尾的验收手册）—— **当前波次**
 9. 批 10（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）；TASK-015A 可并行
 10. 批 11（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
 
