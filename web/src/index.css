@@ -2,10 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 全局背景纹理（TASK-086 §4）：浅蓝灰底 + 淡网格。
+ *
+ * 为什么用 CSS 渐变而不是图片：不引入图片资源与依赖，且网格随主题色一起可调
+ * （一条 `background-size` 控制间距，两条 `linear-gradient` 控制线色）。
+ * 线色 token 见 tailwind.config.js 的 `colors.grid`（`grid-line` = 线色）。
+ *
+ * 层次约定（不要互相覆盖）：
+ * - `body` 铺底色与网格（**全局**：登录页、加载态也在这个底上）；
+ * - 卡片/header 保持 `bg-white` 实心浮在网格之上——有对比才有层次。
+ */
 @layer base {
   body {
     font-family:
       ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
       "PingFang SC", "Microsoft YaHei", sans-serif;
+
+    /* 底色：浅蓝灰（slate-100 偏蓝，不是纯白）。 */
+    background-color: theme("colors.grid.base");
+
+    /*
+     * 网格：两条 1px 渐变线（横 / 纵）画在底色上。
+     * `background-size` 决定间距（24px）；线色透明度控制在 0.5 以下，
+     * 保证小屏与高 DPI 下也不出现可见噪点。
+     */
+    background-image:
+      linear-gradient(to right, theme("colors.grid.line") 1px, transparent 1px),
+      linear-gradient(to bottom, theme("colors.grid.line") 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 }

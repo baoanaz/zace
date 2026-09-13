@@ -107,7 +107,7 @@
 | [TASK-083](TASK-083-空态与错误态.md) | **空态/加载态/错误态统一**（`EmptyState` 组件 + 各页替换） | **TASK-082** | `web/src/components/ui.tsx`、`HistoryPage.tsx`、`DashboardPage.tsx`、`ApiKeysPage.tsx` | **review**（`feature/task-083-empty-states_xwz0913`；lint 绿、34 passed、build 绿；另修 3 处“把故障伪装成空数据”） |
 | [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | **review**（本地模式端到端 `total` 0→3；云端 summary 待 TASK-061 归属写入，见卡内未决问题） |
 | [TASK-085](TASK-085-索引统计接上传路径.md) | **索引统计接上客户端上传路径**（补 TASK-062）：`npx zace-client` 索引后面板不再恒为 0 | TASK-060/062 | `service/zace_service/runtime.py`、`service/tests/test_index_stats.py`(新建) | **review**（2026-09-23） |
-| [TASK-086](TASK-086-导航与首页重排.md) | **导航与首页重排 + 全局背景纹理**（接入指南移到第二位；账户→控制台；删「最近索引记录」；浅蓝灰网格底） | 无 | `web/src/app/Layout.tsx`、`web/src/pages/DashboardPage.tsx`、`web/src/index.css`、`web/tailwind.config.js` | pending |
+| [TASK-086](TASK-086-导航与首页重排.md) | **导航与首页重排 + 全局背景纹理**（接入指南移到第二位；账户→控制台；删「最近索引记录」；浅蓝灰网格底） | 无 | `web/src/app/Layout.tsx`、`web/src/pages/DashboardPage.tsx`、`web/src/index.css`、`web/tailwind.config.js` | review |
 
 > **TASK-084/085 的由来**（编排者实测，2026-09-13）：TASK-062/064 的**建表与方法已实现**，
 > 但（a）`record_query()` 全仓零调用、`audit.py` 不存在；（b）索引 run 记录只覆盖本地 attach 路径，

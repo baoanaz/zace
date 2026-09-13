@@ -144,7 +144,7 @@ describe("首屏门禁", () => {
     expect(screen.getByText(/首次部署/)).toBeInTheDocument();
   });
 
-  it("本地模式 → 不需要登录，直接进入账户面板", async () => {
+  it("本地模式 → 不需要登录，直接进入控制台", async () => {
     stubFetch({
       "/api/meta": {
         body: {
@@ -162,7 +162,7 @@ describe("首屏门禁", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "账户" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "控制台" })).toBeInTheDocument();
     // 本地模式没有登出按钮（没有账户可登出）
     expect(screen.queryByRole("button", { name: "登出" })).not.toBeInTheDocument();
   });
@@ -185,11 +185,13 @@ describe("仪表盘统计口径", () => {
       "/api/account/overview": { body: OVERVIEW },
     });
     render(<App />);
-    await screen.findByRole("heading", { name: "账户" });
+    await screen.findByRole("heading", { name: "控制台" });
   }
 
-  it("展示账户资料与四项索引面板", async () => {
+  it("展示控制台的面板：账户资料 + 索引统计 + 使用次数 + 项目", async () => {
     await renderDashboard();
+    // 页面标题是「控制台」，而面板名「账户资料」不受改名影响（TASK-086 §2）。
+    expect(screen.getByRole("heading", { name: "账户资料" })).toBeInTheDocument();
     expect(screen.getByText("成功次数")).toBeInTheDocument();
     expect(screen.getByText("失败次数")).toBeInTheDocument();
     // "平均耗时"在索引与用量两个面板都出现，因此按数量与数值断言（索引 avg = 61.0 s）
@@ -206,10 +208,21 @@ describe("仪表盘统计口径", () => {
     expect(screen.getByText(/尚未测量/)).toBeInTheDocument();
   });
 
-  it("索引记录里 done 且有解析问题的显示为成功 + 提示", async () => {
+  it("不再有索引记录面板，但项目面板保留（TASK-086 §3）", async () => {
     await renderDashboard();
-    expect(screen.getByText("成功")).toBeInTheDocument();
-    expect(screen.getByText("336/338 文件 · ", { exact: false })).toBeInTheDocument();
+
+    // 删掉的那块：它的标题、「查看全部历史」链接与那条运行记录都不该再现。
+    // （历史页的「索引记录」页签是**另一个**文案，不受影响，由 HistoryPage 的测试覆盖。）
+    expect(screen.queryByRole("heading", { name: /最近索引/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看全部历史" })).not.toBeInTheDocument();
+    expect(screen.queryByText("336/338 文件 · ", { exact: false })).not.toBeInTheDocument();
+
+    // 用户明确要求保留「项目」面板（那条记录在此表里仍然可见）。
+    expect(screen.getByRole("heading", { name: "项目" })).toBeInTheDocument();
+    expect(screen.getByText("demo")).toBeInTheDocument();
+
+    // 未接 LLM 的引用覆盖率仍如实显示"尚未测量"。
+    expect(screen.getByText(/尚未测量/)).toBeInTheDocument();
   });
 });
 
