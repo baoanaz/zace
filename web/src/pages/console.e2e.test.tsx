@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 describe.skipIf(!enabled)("端到端：账户console（真实服务）", () => {
-  it("首屏是登录页；登录后进入账户面板并显示真实统计字段", async () => {
+  it("首屏是登录页；登录后进入控制台并显示真实统计字段", async () => {
     const restore = installCookieForwarder(base);
     try {
       render(<App />);
@@ -88,19 +88,23 @@ describe.skipIf(!enabled)("端到端：账户console（真实服务）", () => {
       await typed.type(screen.getByLabelText("密码"), password);
       await typed.click(screen.getByRole("button", { name: "登录" }));
 
-      // 3) 落到账户面板，且四个数据面板都在。
+      // 3) 落到控制台，且各数据面板都在。
       expect(
-        await screen.findByRole("heading", { name: "账户" }, { timeout: 15_000 }),
+        await screen.findByRole("heading", { name: "控制台" }, { timeout: 15_000 }),
       ).toBeInTheDocument();
       for (const label of ["账户资料", "成功次数", "失败次数", "占用内存"]) {
         expect(screen.getByText(label)).toBeInTheDocument();
       }
       // "平均耗时"在索引与用量两个面板各有一个（口径不同），因此按数量断言。
       expect(screen.getAllByText("平均耗时")).toHaveLength(2);
-      // 导航包含全部大页面。
-      for (const label of ["账户", "API Key", "历史记录", "接入指南"]) {
-        expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
-      }
+      // 导航包含全部大页面，且顺序为 控制台 → 接入指南 → API Key → 历史记录（TASK-086 §1）。
+      const nav = screen.getByRole("navigation");
+      expect([...nav.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
+        "控制台",
+        "接入指南",
+        "API Key",
+        "历史记录",
+      ]);
     } finally {
       restore();
     }

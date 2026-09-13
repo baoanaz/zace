@@ -4,12 +4,17 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { type Account, logout } from "../api/client";
 
-/** 大页面导航（用户 2026-09-13 指定的信息架构）。 */
+/**
+ * 大页面导航（用户 2026-09-13 指定的信息架构，2026-09-14 TASK-086 §1 定序）。
+ *
+ * 顺序即用户要求的展示顺序：控制台 → 接入指南 → API Key → 历史记录。
+ * **`to` 是路由契约**（外部链接与文档都指向它），本卡只改顺序与 label。
+ */
 const NAV = [
-  { to: "/", label: "账户", end: true },
+  { to: "/", label: "控制台", end: true },
+  { to: "/connect", label: "接入指南", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
-  { to: "/connect", label: "接入指南", end: false },
 ];
 
 export function Layout({
@@ -33,6 +38,7 @@ export function Layout({
 
   return (
     <div className="min-h-screen">
+      {/* header 保持 bg-white 实心：内容滚动时不能透过导航文字（TASK-086 §4）。 */}
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
           <NavLink to="/" className="font-mono text-lg font-semibold text-slate-900">

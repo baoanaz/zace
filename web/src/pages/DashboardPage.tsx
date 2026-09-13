@@ -1,5 +1,5 @@
 /**
- * 首页仪表盘（TASK-071）：**只放账户资料与数据面板**（用户 2026-09-13 指定）。
+ * 首页仪表盘/控制台（TASK-071）：**只放账户资料与数据面板**（用户 2026-09-13 指定）。
  *
  * 面板口径（不许美化成好看的数字）：
  * - `avgDurationMs` **只统计成功的索引**——失败 run 的耗时是"失败得多快"；
@@ -8,6 +8,9 @@
  *
  * TASK-083：空态改由 `EmptyState` 渲染（每处都说明"怎样才会有数据"）；
  * `sumDisk` 不再把"后端未提供 `diskBytes`"伪装成"占用 0"。
+ *
+ * TASK-086：页面名从「账户」改为「控制台」；删掉「最近索引」记录面板（历史页的
+ * 「索引记录」页签已覆盖该职能）。**「账户资料」是面板名，不是页面名，保持不变。**
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -47,7 +50,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
 
   return (
     <div className="space-y-5">
-      <h1 className="text-lg font-semibold">账户</h1>
+      <h1 className="text-lg font-semibold">控制台</h1>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Panel title="账户资料" className="lg:col-span-1">
@@ -96,69 +99,33 @@ export function DashboardPage({ account }: { account: Account | null }) {
         </Panel>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title={`使用次数（近 ${data.days} 天）`}>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Metric label="查询总数" value={String(usage.total)} />
-            <Metric label="有答案" value={String(usage.succeeded)} tone="ok" />
-            <Metric label="证据不足" value={String(usage.insufficient)} tone={usage.insufficient > 0 ? "warn" : "muted"} />
-            <Metric label="失败" value={String(usage.failed)} tone={usage.failed > 0 ? "bad" : "muted"} />
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            <Metric
-              label="平均耗时"
-              value={usage.avgLatencyMs === null ? "—" : `${usage.avgLatencyMs} ms`}
-            />
-            <Metric
-              label="P95 耗时"
-              value={usage.p95LatencyMs === null ? "—" : `${usage.p95LatencyMs} ms`}
-            />
-          </div>
-          <p className="mt-3 text-xs text-slate-500">
-            引用覆盖率：{usage.citationCoverageAvg === null ? "— 尚未测量（LLM 总结未接入）" : `${(usage.citationCoverageAvg * 100).toFixed(1)}%`}
-          </p>
-        </Panel>
-
-        <Panel title="最近索引记录">
-          {index.recent.length === 0 ? (
-            <EmptyState
-              title="还没有索引记录"
-              hint="在编辑器里接入 Agent 后让它同步一次（本地模式也可用客户端 attach 目录），这里就会列出最近的索引结果。"
-              action={
-                <Link className="text-xs underline" to="/connect">
-                  去接入指南
-                </Link>
-              }
-            />
-          ) : (
-            <ul className="space-y-2">
-              {index.recent.slice(0, 6).map((run) => (
-                <li key={run.runId} className="flex items-baseline justify-between gap-3 text-sm">
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-xs ${
-                        run.state === "done"
-                          ? "bg-emerald-50 text-emerald-700"
-                          : "bg-rose-50 text-rose-700"
-                      }`}
-                    >
-                      {run.state === "done" ? "成功" : "失败"}
-                    </span>
-                    <span className="font-mono text-xs text-slate-500">{run.projectId}</span>
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {formatDuration(run.durationMs)} · {run.filesProcessed}/{run.filesTotal} 文件 ·{" "}
-                    {formatTime(run.finishedAt)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Link className="mt-3 inline-block text-xs underline" to="/history">
-            查看全部历史
-          </Link>
-        </Panel>
-      </div>
+      {/*
+       * TASK-086 §3：「最近索引」记录面板已删（用户："有专门的历史记录去看就行"）。
+       * 「使用次数」因此从两列半边改为整宽——它原本靠一个 grid-cols-1 lg:grid-cols-2
+       * 与已删面板并排；留着会被拉成半宽、右边真空。
+       * 不删：「索引（近 N 天）」与「使用次数」两个统计面板（用户未要求）。
+       */}
+      <Panel title={`使用次数（近 ${data.days} 天）`}>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Metric label="查询总数" value={String(usage.total)} />
+          <Metric label="有答案" value={String(usage.succeeded)} tone="ok" />
+          <Metric label="证据不足" value={String(usage.insufficient)} tone={usage.insufficient > 0 ? "warn" : "muted"} />
+          <Metric label="失败" value={String(usage.failed)} tone={usage.failed > 0 ? "bad" : "muted"} />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Metric
+            label="平均耗时"
+            value={usage.avgLatencyMs === null ? "—" : `${usage.avgLatencyMs} ms`}
+          />
+          <Metric
+            label="P95 耗时"
+            value={usage.p95LatencyMs === null ? "—" : `${usage.p95LatencyMs} ms`}
+          />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          引用覆盖率：{usage.citationCoverageAvg === null ? "— 尚未测量（LLM 总结未接入）" : `${(usage.citationCoverageAvg * 100).toFixed(1)}%`}
+        </p>
+      </Panel>
 
       <Panel title="项目">
         {data.projects.length === 0 ? (
