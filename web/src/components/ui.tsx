@@ -47,9 +47,29 @@ export function Card({
   );
 }
 
+/** 把任意抛出物转成可读文本：**永不出 `[object Object]`**（TASK-083 要求）。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  // null/undefined 与无法序列化的值不能直接落进兜底文案（`String(null)` 会渲染成 "null"）。
+  if (error !== null && error !== undefined) {
+    try {
+      const json = JSON.stringify(error);
+      if (json && json !== "{}" && json !== "null") return json;
+    } catch {
+      // 循环引用等无法序列化的情况：落到下面的兜底文案。
+    }
+  }
+  return "请求失败（错误对象没有可读的 message）";
+}
+
 /** 错误块：服务端 message + `code` + 由 `code` 推出的下一步指引（不各页各写文案）。 */
 export function ErrorBlock({ error }: { error: unknown }) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeError(error);
   const code =
     typeof error === "object" && error !== null && "code" in error
       ? String((error as { code: unknown }).code)
@@ -62,7 +82,7 @@ export function ErrorBlock({ error }: { error: unknown }) {
         <span className="font-medium">{message}</span>
         {code && <code className="rounded bg-rose-100 px-1 text-xs">{code}</code>}
       </div>
-      {hint && <p className="mt-1 text-rose-700">{hint}</p>}
+      {hint && hint !== message && <p className="mt-1 text-rose-700">{hint}</p>}
     </div>
   );
 }
@@ -107,4 +127,33 @@ export function KeyValue({ items }: { items: [string, ReactNode][] }) {
 
 export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
   return <p className="py-6 text-center text-sm text-slate-500">{text}</p>;
+}
+
+/**
+ * 空态块（TASK-083）：**只用于"请求成功但没有数据"**。
+ *
+ * 为什么要有这个组件："0 条"与"后端坏了"在旧版看起来一样——用户分不清
+ * 是"自己还没用"还是"服务没记上"。因此本组件把两件事钉死：
+ *
+ * 1. **`hint` 必须说明"怎样才会有数据"**（可操作的一句话），不许写"暂无数据"；
+ * 2. **错误一律走 `ErrorBlock`**——请求失败时禁止渲染本组件，否则"后端坏了"会被
+ *    伪装成"还没数据"。调用方必须先判错误、再判空数组（各页先渲染 `ErrorBlock`，
+ *    确认无错误后才轮到 `EmptyState`）。
+ */
+export function EmptyState({
+  title,
+  hint,
+  action,
+}: {
+  title: ReactNode;
+  hint?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="px-4 py-6 text-center">
+      <p className="text-sm font-medium text-slate-700">{title}</p>
+      {hint && <p className="mx-auto mt-1 max-w-prose text-sm text-slate-500">{hint}</p>}
+      {action && <div className="mt-3 flex justify-center">{action}</div>}
+    </div>
+  );
 }

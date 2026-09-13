@@ -5,6 +5,9 @@
  * - `avgDurationMs` **只统计成功的索引**——失败 run 的耗时是"失败得多快"；
  * - `processedFiles/totalFiles` 不同量纲，不做除法、**不显示百分比**；
  * - 未测量的一律显示 `—`（如 `citationCoverageAvg` 在 LLM 接入前恒为 null）。
+ *
+ * TASK-083：空态改由 `EmptyState` 渲染（每处都说明"怎样才会有数据"）；
+ * `sumDisk` 不再把"后端未提供 `diskBytes`"伪装成"占用 0"。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -15,7 +18,7 @@ import {
   type AccountOverview,
   getAccountOverview,
 } from "../api/client";
-import { ErrorBlock, LoadingBlock } from "../components/ui";
+import { EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
 
 const WINDOW_DAYS = 30;
 
@@ -69,8 +72,8 @@ export function DashboardPage({ account }: { account: Account | null }) {
             />
             <Metric
               label="占用内存"
-              value={formatBytes(sumDisk(index))}
-              hint="索引数据磁盘占用"
+              value={formatBytes(index.diskBytes)}
+              hint={index.diskBytes == null ? "后端未提供" : "索引数据磁盘占用"}
             />
           </div>
           <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -118,9 +121,15 @@ export function DashboardPage({ account }: { account: Account | null }) {
 
         <Panel title="最近索引记录">
           {index.recent.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              还没有索引记录。绑定本地目录或让客户端同步一次即可产生。
-            </p>
+            <EmptyState
+              title="还没有索引记录"
+              hint="在编辑器里接入 Agent 后让它同步一次（本地模式也可用客户端 attach 目录），这里就会列出最近的索引结果。"
+              action={
+                <Link className="text-xs underline" to="/connect">
+                  去接入指南
+                </Link>
+              }
+            />
           ) : (
             <ul className="space-y-2">
               {index.recent.slice(0, 6).map((run) => (
@@ -153,10 +162,15 @@ export function DashboardPage({ account }: { account: Account | null }) {
 
       <Panel title="项目">
         {data.projects.length === 0 ? (
-          <p className="text-sm text-slate-500">
-            还没有项目。在编辑器里接入后让客户端同步一次即可出现（本地模式可用客户端 attach
-            本地目录）。
-          </p>
+          <EmptyState
+            title="还没有项目"
+            hint="项目在你第一次同步时自动创建：接入 Agent 并让它上传/索引一个仓库，项目就会出现在这里。"
+            action={
+              <Link className="text-xs underline" to="/connect">
+                去接入指南
+              </Link>
+            }
+          />
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
@@ -192,11 +206,6 @@ export function DashboardPage({ account }: { account: Account | null }) {
       </Panel>
     </div>
   );
-}
-
-/** 各项目 data_root 占用之和（未提供 diskBytes 时返回 0，显示为 —）。 */
-function sumDisk(index: { diskBytes?: number }): number {
-  return index.diskBytes ?? 0;
 }
 
 function Panel({
@@ -268,7 +277,8 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-export function formatBytes(bytes: number): string {
+/** 字节数格式化；`null`/`undefined`（后端未提供）显示 `—`，不退化成"0 B"。 */
+export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes) return "—";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
