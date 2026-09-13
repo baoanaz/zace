@@ -61,11 +61,10 @@
 |---|---|---|---|
 | M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API —— **已完成** |
 | M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式 → **MCP 端点（demo 收口）** → 验收手册 —— **已完成** |
-| M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行） |
-| M2b-2 | `zace-lane-c` | TASK-036 → TASK-037 | 多仓库规模自举（**已完成**）→ 索引范围策略 |
-| M2b | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
-| M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式（attach/一键起/懒重扫）→ **MCP 端点（demo 收口）** → 验收手册 |
-| M2b | 视情况 | TASK-023 → TASK-050；TASK-015A 可并行 | 真实数据采集 → 质量调优 |
+| M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行）—— **已完成**（结论：沿用 e5-small） |
+| M2b-2 | `zace-lane-c` | TASK-036 | 多仓库规模自举 —— **已完成** |
+| **W6（当前）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents（规划：`docs/plan/phase2-m2b-w6.md`） |
+| M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
@@ -75,12 +74,20 @@
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
-| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | review |
-| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | review |
-| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | TASK-036 | `core/zace_core/pipeline/{ignore,source,indexer}.py` | pending |
-| [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（TASK-015A 实测发现：e5 等模型原生上限 512，配 2048 会崩） | — | `core/zace_core/embedding/**` | pending |
+| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | done |
+| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | done |
+| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **in_progress（W6-lane A）** |
+| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **in_progress（W6-lane B）** |
+| [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **in_progress（W6-lane C）** |
+| [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
 | TASK-050 | 质量调优（R21/R24/rerank/装填参数，**必须基于 TASK-023 真实数据**） | TASK-023 | — | 未开卡 |
+
+> **TASK-037 的硬依赖已改**：原卡写 `TASK-036`（要求用其规模数字做前后对照），但 TASK-036 已完成
+> 且其靶场（hmi / systemservice / Trellis）**在当前环境不存在**；改以 `hello-agents` + `zace` 自身
+> 作前后对照靶场（理由与替代口径见 `docs/plan/phase2-m2b-w6.md` §3.1）。
+> **TASK-038 的降级依据**：用户 2026-09-13 拍板当前全程用云端 embedding、本地 ONNX 暂缓（U1/U2），
+> 保留卡但不派活。
 
 ### 开卡批次历史（并行安全）
 
@@ -90,13 +97,16 @@
 4. 批 4（W3c）：TASK-018（lane A）、TASK-019（lane C）—— **已完成**（阻断解除）
 5. 批 5（W3d）：TASK-020（lane B，零成本版）、TASK-014（lane F，基线）—— 已完成
 6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
-7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **当前波次**
+7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **已完成**
 8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040 → TASK-045（lane A 串行）—— **已完成**
 9. 批 10（W5c，**整夜并行三泳道**）：lane A TASK-034→040→045（demo 收口）；lane B TASK-015A（模型选型）；lane C TASK-036（规模自举）—— **均已完成**（夜里机器重启，成果未丢）
-10. 批 11（M2b）：TASK-038（embedding 钳制）→ TASK-037（索引范围）→ 云端 embedding 接入（R44-R46）
-8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040 → TASK-045（lane A 串行，四张卡；TASK-045 是收尾的验收手册）—— **当前波次**
-9. 批 10（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）；TASK-015A 可并行
-10. 批 11（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
+10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **当前波次**
+11. 批 12（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
+12. 批 13（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
+
+> **编号说明（2026-09-13 修正）**：历史列表里出现过重复行（两次 W5b、两次 M2b 规划行），已去重；
+> 原先“云端 embedding 接入（R44-R46）”的引用已改为具体卡号：**R44 被 TASK-034 的 attach 端点占用**
+> （见 `docs/contracts/openapi.yaml`），且 R45/R46 **从未存在**；新增裁定的编号在 W6 收口时统一登记。
 
 > 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
 > 自举（dogfooding）从现在起列入每波收尾动作。
@@ -105,7 +115,13 @@
 
 | repo_hint | 路径 | commit | 用途 |
 |---|---|---|---|
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）；种子用例 `benches/golden/aibox-super-sdk/aibox-seed.jsonl`（TASK-014 移入仓库子目录，内容未改） |
+| `hello-agents` | `/home/xuwenzheng/github/hello-agents` | `4f7682c` | **当前主靶场**（W6 起）：Python Agent 教程项目，976 有效文件（227 md + 749 py），文档与代码逐章对应（中英双文档） |
+| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）—— **靶场在当前环境不存在，用例保留但暂停** |
+| `linux-mtk-mw-cameraservice` | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | `3fb0b2d6` | TASK-014 自选 C++ 靶场 —— **同样不可得，用例保留但暂停** |
+
+**靶场变更（2026-09-13）**：用户更换开发环境（家里 WSL2），上述两个旧外部靶场不在本机，
+因此历史基线数字**无法复现**；新靶场与重建口径见 `docs/tasks/TASK-047-新靶场与golden重建.md`。
+历史报告（`benches/results/*`）保留，但注意其靶场已不可得。
 
 详情（规模、负例口径、为何选它）见 `benches/README.md` 的“已指定的评测仓库”节。
 

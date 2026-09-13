@@ -1,6 +1,6 @@
 # TASK-036：多仓库规模自举与索引健壮性
 
-> 状态：pending ｜ 阶段：Phase 2（M2b，**可与 M2a/M2b 其它卡并行**）｜ 硬依赖：无（core 已可用）｜ soft 依赖：无
+> 状态：done（2026-09-13 由编排者更正：代码早已合入 main @ `c76cd1f`，任务板已标 done；卡文头此前漏改）
 > 建议分支：`feature/task-036_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `benches/results/robustness-scale.md`（新建，报告）

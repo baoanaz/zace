@@ -1,7 +1,15 @@
 # TASK-037：索引范围策略落地（三层忽略规则 + 大小/二进制阈值）
 
-> 状态：pending ｜ 阶段：Phase 2（M2b）｜ 硬依赖：TASK-036（它先给出规模实测数字，本卡用那些数字做前后对照）｜ soft 依赖：无
-> 建议分支：`feature/task-037_<你的缩写><MMDD>`（从 TASK-036 分支串联）
+> 状态：in_progress ｜ 阶段：Phase 2（M2b / W6-lane A）｜ 硬依赖：**无**（原为 TASK-036，已改，见下）｜ soft 依赖：TASK-046（云端 embedding 让前后对照跑得快）
+> 建议分支：`feature/task-037_<你的缩写><MMDD>`
+> **开工前必读的环境变更（2026-09-13，`docs/plan/phase2-m2b-w6.md`）**：
+> 1. **硬依赖解除**：TASK-036 已完成；原卡要求“用它给的规模数字做前后对照”，但 TASK-036 的
+>    靶场（hmi / systemservice / Trellis）**在当前环境（家里 WSL2）不存在**；
+> 2. **对照靶场改为**：`/home/xuwenzheng/github/hello-agents`（976 有效文件；**272 个 >128KB**、
+>    345 个 `.png`、58 个无扩展名文件——正好是阈值策略的活标本）+ `zace` 自身（dogfood）；
+> 3. **§C 的前后对照表按新靶场重做**，并在报告中**明确标注“靶场变更，数字不可与 TASK-036 对比”**——
+>    这比沿用不可复现的旧数字更诚实；
+> 4. `benches/results/robustness-scale.md` 的“追加”章节写在新靶场名下，**不改 TASK-036 的原始数字**。
 > 交付物所有权：
 > - `core/zace_core/pipeline/ignore.py`（新建：忽略规则引擎）
 > - `core/zace_core/pipeline/source.py`（`DirectorySource` 与 `DEFAULT_SKIP_DIRS`）

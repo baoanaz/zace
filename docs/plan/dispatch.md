@@ -7,18 +7,29 @@
 
 1. **建工作区**（只需一次）：在任意终端执行
    ```bash
-   bash /home/xuwenzheng/2_github/AI/ACE/zace/scripts/lane-worktrees.sh create
+   bash /home/xuwenzheng/github/ACE/zace/scripts/lane-worktrees.sh create
    ```
-   它会在 `/home/xuwenzheng/2_github/AI/ACE/` 下建出 `zace-lane-a` … `zace-lane-f` 六个独立工作区（互不干扰，可同时开工）。
+   它会在 `/home/xuwenzheng/github/ACE/` 下建出 `zace-lane-a` … `zace-lane-f` 六个独立工作区（互不干扰，可同时开工）。
 2. **开会话**：每一波按下方表格开对应数量的 AI 会话，**会话的工作目录必须是对应的工作区**（如泳道 A 用 `zace-lane-a`），然后把该泳道的提示词整段粘贴进去。
 3. **收报告**：AI 做完会输出“完成报告”。把这些报告复制粘贴回总览会话（我），我评审+跑集成测试+合并，然后给你下一波的提示词。
 
 > 若某个 AI 中途提问题、卡住或报错：把它的原话复制给我，我判断后给你处理方式。
 
-### 已知事项（2026-09-10）
+### 已知事项（2026-09-13 环境切换后更新）
 
-- **远程推送已修好**：origin 已从 HTTPS 换为 **SSH**（`git@github.com:baoanaz/zace.git`），本机 `~/.ssh/id_rsa` 已验证可认证（身份 baoanaz），`git push` 不再需要任何凭据输入。若以后新建仓库要推送，同样用 SSH URL 即可。
-- **工作区里的“main”是本地 main**：不要自行 `git pull`。各泳道从本地 main 开分支，远端同步由编排者（总览 AI）在合并后统一推送；开工前按提示词里的核验命令确认 main 包含上一波提交即可。
+- **远程推送**：origin 为 `git@github.com:baoanaz/zace.git`（SSH）。
+- **工作区根目录变了**：新环境（家里 WSL2）仓库在 `/home/xuwenzheng/github/ACE/zace`，
+  泳道工作区在 `/home/xuwenzheng/github/ACE/zace-lane-*`。**本文旧波次提示词里的 `/home/xuwenzheng/2_github/...` 已失效**，
+  以各段提示词顶部的【工作区】为准。
+- **旧靶场不存在**：`aibox-super-sdk` / `linux-mtk-mw-cameraservice` / `linux-mtk-hmi` 在本机都没有；
+  新主靶场是 `/home/xuwenzheng/github/hello-agents`（见 `docs/plan/phase2-m2b-w6.md`）。
+- **云端 embedding 是当前主路径**：硅基流动 `BAAI/bge-m3`（免费）；配置坑见 `docs/tasks/TASK-046-云端embedding接入.md`。
+- **`~/.bashrc` 里的 key 子进程拿不到**（第 5-9 行有非交互守卫）：派活时要么把 `export` 写进提示词，
+  要么让子 AI 按 TASK-046 §C 的注入方式做。
+- **测试汇总行被吞**：根 `pyproject.toml` 设了 `addopts = "-q"`，`uv run pytest` **不打印** passed/failed；
+  要看数字用 `uv run pytest -o addopts="" -q`。
+- **参考源码 `../source/` 不存在**：任务卡的“参考锚点”只能按卡内摘录理解。
+- **工作区里的“main”是本地 main**：不要自行 `git pull`。各泳道从本地 main 开分支，远端同步由编排者（总览 AI）在合并后统一处理。
 
 ## 1. 波次表（谁和谁可以同时做）
 
@@ -30,8 +41,9 @@
 | W3d | 2 | B / F | TASK-020（零成本版）/ TASK-014（基线） | 已完成 |
 | W4a | 1 | A `zace-lane-a` | TASK-021 → TASK-022（质量修复） | 已完成 |
 | W5a | 1 | A `zace-lane-a` | TASK-030 → 031 → 032 → 033（Phase 2 M2a-1：service 外壳） | 已完成 |
-| W5b | 1 | A `zace-lane-a` | TASK-035 → 034（进行中）→ 040 → 045 | 进行中 |
-| **W5c** | **3** | **A / B / C** | A：续做 TASK-034 → 040 → 045（demo 收口）；B：TASK-015A（模型选型）；C：TASK-036 → 037（规模自举 + 索引范围） | **当前波次（整夜并行）** |
+| W5b | 1 | A `zace-lane-a` | TASK-035 → 034 → 040 → 045 | 已完成 |
+| W5c | 3 | A / B / C | A：TASK-034 → 040 → 045（demo 收口）；B：TASK-015A（模型选型）；C：TASK-036（规模自举） | 已完成 |
+| **W6** | **3** | **A / B / C** | A：TASK-037（索引范围）；B：TASK-046（云端 embedding 接入）；C：TASK-047（新靶场 + golden + 冒烟脚本） | **当前波次**（规划：`docs/plan/phase2-m2b-w6.md`） |
 
 ## 2. 提示词（整段复制）
 
@@ -734,6 +746,174 @@ core/zace_core/{types,interfaces,hashing}.py；不改任何排序/装填参数�
 
 【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
 core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
+```
+
+### W6-1 · 泳道 A（TASK-037：索引范围策略）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 A：索引范围策略（三层忽略规则 + 大小/二进制阈值）】。
+背景：当前 `DirectorySource` 只按目录名跳过，实测在新靶场 `hello-agents` 上列举出 1862 个文件，
+其中 272 个 >128KB、345 个 .png、58 个无扩展名——这些都不是源码，却会吃掉索引时间与检索质量。
+
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1            # 应为 4dfe65c 或之后（含 TASK-045 手册）
+  git status --short              # 应为空
+  uv run pytest -o addopts="" -q  # 应为 668 passed, 2 skipped（注意：不加 -o addopts="" 看不到汇总行）
+  git switch -c feature/task-037_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】完成 1 张任务卡：docs/tasks/TASK-037-索引范围策略.md
+  卡文头已更新（2026-09-13）：硬依赖解除、对照靶场改为 hello-agents + zace 自身。**先读文头那段。**
+
+【本波特别提醒】
+1. 参考源码 `../source/` **不存在**（新环境）；卡内的“参考源码锚点”只作理解用，不要去找。
+2. 旧靶场（hmi / systemservice / Trellis / cameraservice）**都不在本机**：
+   §C 的前后对照改用 `/home/xuwenzheng/github/hello-agents`（只读！不要在其中建文件）+ `zace` 自身；
+   报告里必须**明确标注“靶场变更，数字不可与 TASK-036 对比”**——诚实比可比性重要。
+3. §D 的检索回归：旧 golden（aibox/cameraservice）不可用；用 `benches/golden/zace/`（dogfood）回归，
+   并在报告里说明这一替代。**若 TASK-047 已产出 `benches/golden/hello-agents/`，也可以用它**（先看有没有）。
+4. 本波并行泳道 B 在改 `core/zace_core/embedding/**`，泳道 C 在改 `benches/**` 与 `scripts/**`；
+   你只碰 `core/zace_core/pipeline/**` 与 `core/tests/pipeline/**`，互不重叠。
+5. 不要为了让 eval 数字好看而放宽忽略规则（R30 冻结）；不要顺手改 embedding。
+6. 索引对照时用云端 embedding（快很多）：按 `docs/tasks/TASK-046-云端embedding接入.md` 的配置；
+   若该卡还没合入 main，用这个可用组合：
+   `EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_DIM=1024 EMBED_BASE_URL=https://api.siliconflow.cn EMBED_API_KEY=<key>`
+   （key：`sed -n 's/^export zace_embeding_API_KEY=//p' ~/.bashrc | tr -d '"'`，**不要写进仓库/报告**）
+
+【工艺】
+  a) 只修改卡内“交付物所有权”清单里的文件；其他一律不动
+     （尤其 `docs/contracts/**`、`docs/design/**`、`core/zace_core/{types,interfaces,hashing}.py`、
+      `core/zace_core/embedding/**`、`benches/golden/**`）；
+  b) 跑通卡内“验收标准”全部命令 + 基线三条：
+     uv run ruff check . / uv run python scripts/check_dependency_direction.py / uv run pytest -o addopts="" -q
+  c) 回填“执行记录”（**必须含 §C 前后对照表**）；任务板对应行状态已预置为 in_progress，完成后改 review；
+  d) git add -A && git commit（“task-037: ” 前缀）。
+
+【报告格式】
+- 卡号 / 分支：
+- 验收命令与结果：
+- 前后对照表（文件名数 / chunks / 耗时 / 体积 / skipped 按原因分组）：
+- 检索回归结果（用了哪个 golden 集）：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
+```
+
+### W6-2 · 泳道 B（TASK-046：云端 embedding 接入）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 B：云端 embedding 接入与配置对齐（硅基流动 bge-m3）】。
+背景：用户拍板当前全程用云端 embedding（免费、1024D、8192 token），但实测**照官方文档配置跑不通**：
+裸名 `bge-m3` 被 API 拒绝（Model does not exist），官方全名 `BAAI/bge-m3` 又被 registry 拒绝（未登记）。
+
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-b
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 4dfe65c 或之后
+  git switch -c feature/task-046_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】完成 1 张任务卡：docs/tasks/TASK-046-云端embedding接入.md（F1/F2/F3 三节 + 手册）
+
+【key 怎么拿（关键，先解决再开工）】
+  `~/.bashrc` 第 163 行的 key 子进程拿不到（第 5-9 行有非交互守卫）。在会话里这样注入：
+    export zace_embeding_API_KEY=$(sed -n 's/^export zace_embeding_API_KEY=//p' ~/.bashrc | tr -d '"')
+    export EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_DIM=1024 EMBED_BASE_URL=https://api.siliconflow.cn EMBED_API_KEY="$zace_embeding_API_KEY"
+    export NO_PROXY=127.0.0.1,localhost    # 本机设了 http_proxy，否则连不上本机服务
+  **key 绝不得写入仓库、测试或报告**（只出现变量名）。
+
+【本波特别提醒】
+0. **本卡有两处阻断级缺陷**：F1（模型名怎么写都不可用）与 **F4（`api.py` 不截断 + 按条数分批）**。
+   F4 已在 `hello-agents` 上**实测复现全量索引失败**（9971 chunks 但 vectors=0）。
+   编排者已把完整证据（含 token 分布与探测数据）写进卡内 §D 与 `docs/plan/phase2-m2b-w6.md` §2.4——**先读完再动手**。
+   **注意**：`tokenizers>=0.20` 已是 core 正式依赖（已核实），所以 §D 无需申请新依赖。
+1. F1 是**阻断级**：必须让 `EMBED_MODEL=BAAI/bge-m3`（无 EMBED_DIM）开箱可用。
+   两条路线（别名解析 / 改用全名作 key）**择一**并在报告里说明理由。
+   无论选哪条，都要保证“发给 API 的 model 字段是 provider 认的名字”（写一条 mock 断言测试）。
+2. **不要破坏 D-07 保护**：未登记模型 + 无 dim 仍必须报错（否则指纹失真、静默重嵌）。
+3. **不改代码默认值**（`EmbeddingConfig.mode` 仍是 "local"，D-44）；**不碰 `local.py`**（TASK-038 的领地）。
+4. 本波并行泳道 A 在改 `core/zace_core/pipeline/**`，泳道 C 在改 `benches/**` 与 `scripts/**`；
+   你只碰 `core/zace_core/embedding/**`、`core/tests/embedding/**` 与新建的手册。
+   **若你判断 `service/zace_service/config.py` 必须改，先在执行记录里说明理由**（卡内列了该文件的所有权，但要看是否真有必要）。
+5. 不加新依赖（`httpx` 已有）；不引入 provider 专属 SDK。
+
+【工艺】
+  a) 只修改卡内“交付物所有权”清单里的文件；
+  b) 跑通卡内“验收标准”全部命令 + 基线三条（用 `-o addopts=""` 看数字）；
+  c) 回填“执行记录”（**必须含**：F1 选了哪条路线与理由、profile 实测输出、F3 推荐注入方式）；
+     任务板对应行已预置 in_progress，完成后改 review；
+  d) git add -A && git commit（“task-046: ” 前缀）。
+
+【报告格式】
+- 卡号 / 分支：
+- 验收命令与结果（含 profile 输出：model_id / dim / max_input_tokens）：
+- F1 路线选择与理由：
+- 请求体 model 字段的断言（贴测试名）：
+- **F4：截断与分批的实现方式（含“按字符估算 vs 用 tokenizer”的选择理由）；超长输入实测输出；
+  batch token 预算的测试名；429 重试测试名；失败后可恢复性（重跑是否续上）的实测结论**：
+- **F4 端到端：`hello-agents` 完整 ingest 输出（files/chunks/vectors/elapsed；warning 是否消失）**：
+- F3 推荐做法与理由：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
+```
+
+### W6-3 · 泳道 C（TASK-047：新靶场 + golden + 冒烟脚本）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 C：新评测靶场建立（hello-agents）+ golden 重建 + M2a 一键冒烟脚本】。
+背景：用户换了开发环境，旧的三个评测靶场（aibox-super-sdk / linux-mtk-mw-cameraservice / linux-mtk-hmi）
+在本机都不存在，历史基线无法复现。新主靶场已拍板：/home/xuwenzheng/github/hello-agents
+
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-c
+（会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
+
+【开工前核验】
+  git log --oneline -1     # 应为 4dfe65c 或之后
+  ls /home/xuwenzheng/github/hello-agents | head    # 靶场存在（git remote: datawhalechina/hello-agents）
+  git switch -c feature/task-047_xwzMMDD main   ← MMDD 换成今天月日
+
+【开工】完成 1 张任务卡：docs/tasks/TASK-047-新靶场与golden重建.md（§A 用例 / §B 基线 / §C 旧文件处置 / §D 冒烟脚本 / §E 手册补充）
+
+【本波特别提醒】
+1. 靶场仓库 `/home/xuwenzheng/github/hello-agents` 是**只读外部靶场**：
+   不要修改它、不要在其中建文件、不要把它纳入 zace 仓库。数据根放到 `/tmp` 或 `~/.cache`。
+2. 出题纪律（TASK-014 沿用，**不可放松**）：每条 expected 必须 grep 核验过；负例必须真的 0 命中；
+   **不得为了数字好看而挑用例子集**（R29/R30）。本报告的指标**不是优化目标**，只是回归护栏基线。
+3. 索引/评测用云端 embedding（快且免费）：
+   `EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_DIM=1024 EMBED_BASE_URL=https://api.siliconflow.cn EMBED_API_KEY=<key>`
+   key 拿法：`sed -n 's/^export zace_embeding_API_KEY=//p' ~/.bashrc | tr -d '"'`（**不要写进仓库/报告**）；
+   若 TASK-046 已合入 main，你的 profile 会拿到 max_input_tokens=8192；否则是 2048（**在报告里如实注明**）。
+4. §D 冒烟脚本**必须真的跑过**：脚本里要把本环境的两个坑固定下来——
+   (a) key 注入（`.bashrc` 非交互 shell 拿不到）；(b) `NO_PROXY=127.0.0.1,localhost`（本机有 http_proxy）。
+   断言必须是“返回里有 `文件:行号`”，不能只看 exit code。
+5. §D/§E 只**复用** `docs/handbook/M2a-验收手册.md` §4.2 的最小 MCP 客户端思路，**不要重写**那份手册的 0-9 节（只追加 §10）。
+6. 不要碰 `core/**`（泳道 A 在改 `pipeline/**`、泳道 B 在改 `embedding/**`）。
+
+【工艺】
+  a) 只修改卡内“交付物所有权”清单里的文件；
+  b) 跑通卡内“验收标准”全部命令 + 基线三条（用 `-o addopts=""` 看数字）；
+  c) 回填“执行记录”（**必须含**用例清单、分 category/语言的指标表、索引范围实测、冒烟脚本真实输出）；
+     任务板对应行已预置 in_progress，完成后改 review；
+  d) git add -A && git commit（“task-047: ” 前缀）。
+
+【报告格式】
+- 卡号 / 分支：
+- 用例清单（id / category / lang / 期望目标）：
+- 基线指标表（分 category 与语言；含负例通过情况）：
+- 索引范围实测（列举/解析/chunks/skipped 分布）：
+- 冒烟脚本输出：
+- 契约影响（无 / 说明）：
+- 与设计偏差（无 / 说明）：
+- 未决问题（无 / 说明）：
+
+【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
 ```
 
 ## 3. 收尾
