@@ -66,9 +66,41 @@
 | **W6（已完成）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents —— **三张卡已合并进 main**（`01d9016`）；性能基准见 `benches/results/index-performance-w6.md` |
 | M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
+| **Phase 3/4（本波，2026-09-13 开卡）** | `docs/cards-phase3_xwz0913` | TASK-060 → 061 → 062 → 064 ‖ **TASK-070（web，并行）** | 用户拍板：WebUI 先行。后端缺口（鉴权/token、租户、索引统计、查询用量）开成卡交编排者派活；`web/` 由本会话独占实现。**TASK-070 只依赖已 done 的端点，可与 060-064 并行**。详见下文「Phase 3 后端缺口卡片」与「Phase 4 卡片」 |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
 > 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
+
+### Phase 3 后端缺口卡片（2026-09-13 开卡，为 WebUI 的登录/统计/用量页提供后端）
+
+> 背景：用户要求 Web 具备「登入 / 注册 / 初始化账户 / API Key 管理 / 索引成功与失败次数 / 平均耗时 / 用量」等能力。
+> 现状盘点（`main` @ `42587cf`）：`/api/auth/*` 与 `/api/usage/projects/{id}` **全部是 501 占位**，
+> 索引统计**只存在于内存**（无 job 表、无历史），CF-05 **没有任何初始化账户入口**。
+> 另据 TASK-051 实测（`docs/plan/cloud-mcp-readiness.md` §1 A1）：非本地模式下**完全无鉴权**——
+> 这是 Rust client 上云的**阻断级前置**，与本组卡片是同一件事。
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-060](TASK-060-鉴权与token.md) | **鉴权**（session + API token + 首个用户 bootstrap + `/healthz` 诚实性自检）；**修 TASK-051 A1** | TASK-030 | `service/zace_service/{auth,routers/auth,metadb}.py` | pending |
+| [TASK-061](TASK-061-租户双层.md) | 租户双层：token→user→owns project（D-36 逻辑授权层） | TASK-060 | `service/zace_service/{metadb,deps,routers}/*.py` | pending |
+| [TASK-062](TASK-062-索引job与统计.md) | **索引 job 落库与统计**（成功/失败次数、平均耗时、历史） | TASK-034, TASK-060 | `service/zace_service/{metadb,indexer,runtime,routers}/*.py` | pending |
+| [TASK-064](TASK-064-查询审计与用量.md) | **查询审计与用量端点**（`/api/usage/**` 替换 501） | TASK-060 | `service/zace_service/{audit,metadb,routers}/*.py` | pending |
+
+> **串行约束**：060 → 061 → 062 → 064。**060、061、062、064 均改 `service/zace_service/metadb.py`**（新建后共用），
+> 同一时间只允许一张 in_progress；061 必须从 060 的分支串联创建。
+> **契约影响均为 L2**：需新增 `/api/auth/me`、`/api/auth/bootstrap`、`/api/meta`、`/api/projects/{id}/index-{runs,stats}`、
+> `/api/index-stats`、`/api/usage/**`，并补全 `/api/auth/*` 的请求/响应形状——**由编排者先更新 `docs/contracts/openapi.yaml`**，
+> 实施 AI 不得直接改契约（各卡内已逐条列明）。
+
+### Phase 4 卡片（WebUI）
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 骨架 + 项目总览/详情 + Playground + 接入指南**（M4 首卡；只依赖已 done 的端点） | 无（soft：TASK-060/061/062/064） | `web/**` | pending |
+
+> TASK-070 的未就绪页（登录/注册/初始化/token/用量/设置）**显式标注依赖卡号**，不用假数据填充；
+> 后端落地后另开 TASK-071 补齐这六页（卡内已列为 soft 依赖）。
+> 参考项目只借信息架构（LiteLLM Keys/Usage/Logs、Supabase 清单+抽屉、E2B 引导流），**代码全部自研**（用户 2026-09-13 拍板；E2B `dashboard-ee` 为专有许可，仅只读参考产品形态）。
 
 ### M2b 卡片
 
@@ -109,6 +141,11 @@
 10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **当前波次**
 11. 批 12（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
 12. 批 13（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
+13. 批 14（2026-09-13，**WebUI 波次**，用户拍板）：lane A TASK-060 → 061 → 062 → 064（后端缺口：鉴权/租户/索引统计/查询用量，串行共用 `metadb.py`）；lane W **TASK-070**（`web/**` 独占，与 lane A **零文件重叠**，可完全并行）—— **开卡完成，待派活**
+
+> **本波次的并行安全论证**：TASK-070 只消费已 done 的端点（projects/query/healthz），
+> 文件所有权限定在 `web/**`；TASK-060..064 只改 `service/**`。两者无交集，且 web 端的
+> 未就绪页已显式标注依赖卡号，不会把“后端已支持”写错。
 
 > **编号说明（2026-09-13 修正）**：历史列表里出现过重复行（两次 W5b、两次 M2b 规划行），已去重；
 > 原先“云端 embedding 接入（R44-R46）”的引用已改为具体卡号：**R44 被 TASK-034 的 attach 端点占用**
