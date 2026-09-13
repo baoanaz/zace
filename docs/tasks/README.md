@@ -68,6 +68,7 @@
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 | **M2c 前置** | `zace-lane-d` | [TASK-051](TASK-051-云端MCP就绪度与远端身份预研.md) | 云端 MCP 就绪度盘点 + 远端身份预研（只出文档，为 TASK-040R 开卡）—— **review（2026-09-13）** |
 | **M2c** | `zace-lane-d` | [TASK-040R](TASK-040R-client骨架与同步代理.md) | **zace-client（Rust MCP stdio + 本地同步代理）**——MCP 最终形态（R38）；含跨语言身份一致性与端到端验收 —— **review（2026-09-13）** |
+| **M2c** | `zace-lane-d` | [TASK-052](TASK-052-npm分发.md) | **npm 分发**（`npx zace-client`）+ 二进制级 stdio 测试 + 五平台 release CI——供 Codex/Claude Code/pi 接入 —— **review（2026-09-13）** |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
 > 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
@@ -111,7 +112,7 @@
 10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **当前波次**
 11. 批 12（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
 12. 批 13（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
-13. 批 14（W7，**云端 MCP**）：lane D TASK-051（就绪度盘点 + 远端身份预研，只出文档）→ **TASK-040R（Rust client，MCP 最终形态）** —— **均 review**
+13. 批 14（W7，**云端 MCP**）：lane D TASK-051（就绪度盘点）→ TASK-040R（Rust client）→ TASK-052（npm 分发）—— **均 review**
 
 > **用户方向（2026-09-13）**：**不妥协，直奔最终版本**——MCP 的最终形态是本地 Rust client（stdio + 远端 sync，
 > 依 `docs/design/Background/01-notace-tool-rs.md`），本地 MCP（service 直出 Streamable HTTP，R38）**仅作短期验证**。

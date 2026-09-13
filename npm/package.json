@@ -1,0 +1,24 @@
+{
+  "name": "zace-client",
+  "version": "0.0.1",
+  "description": "MCP stdio client for zace: local codebase sync proxy backed by a remote zace-service",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baoanaz/zace.git"
+  },
+  "bugs": {
+    "url": "https://github.com/baoanaz/zace/issues"
+  },
+  "homepage": "https://github.com/baoanaz/zace#readme",
+  "keywords": ["mcp", "codebase", "indexing", "context", "rust", "stdio"],
+  "bin": {
+    "zace-client": "run.js"
+  },
+  "files": ["run.js", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"]
+}

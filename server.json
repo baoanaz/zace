@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.baoanaz/zace-client",
+  "description": "MCP stdio client for zace: grounded codebase context for AI coding agents from a remote zace-service",
+  "version": "0.0.1",
+  "repository": {
+    "url": "https://github.com/baoanaz/zace",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "zace-client",
+      "version": "0.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--base-url",
+          "description": "zace-service base URL",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "type": "named",
+          "name": "--token",
+          "description": "zace-service API token",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
