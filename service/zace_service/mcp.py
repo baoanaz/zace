@@ -54,6 +54,7 @@ from zace_service.errors import (
     map_engine_error,
 )
 from zace_service.logging import get_logger, redact_text
+from zace_service.metadb import MetaDB
 from zace_service.packmeta import pack_meta
 from zace_service.routers.query import (
     DEFAULT_MAX_TOKENS,
@@ -250,6 +251,10 @@ def manager_for_app(app: FastAPI) -> EngineManager:
         manager = getattr(app.state, "engine_manager", None)
         if not isinstance(manager, EngineManager):
             manager = EngineManager.open(app.state.settings.data_root)
+            # TASK-085：与 ``deps.get_engine_manager`` 同口径——懒构造的 manager 必须接上
+            # app 级元数据库，否则 MCP 面触发的上传同样不落索引 run（统计恒为 0）。
+            db = getattr(app.state, "meta_db", None)
+            manager.attach_meta_db(db if isinstance(db, MetaDB) else None)
             app.state.engine_manager = manager
     return manager
 

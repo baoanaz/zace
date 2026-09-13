@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -58,6 +59,13 @@ from zace_service.sync_state import SyncState
 __all__ = ["AttachResult", "EngineManager"]
 
 logger = logging.getLogger("zace_service.runtime")
+
+#: 持久化 ``error_text`` 时要抹掉的 endpoint 形态（``https://host/path``）。
+#: 为什么只在**落库**时抹：HTTP 错误面（``errors.py``）刻意保留 endpoint 便于定位，
+#: 而 ``index_runs`` 是**长期保留 + 在 WebUI 里展示**的记录（公司内网部署时 base_url
+#: 就是内网主机名），脱敏代价（少一截定位信息）明显小于收益。
+#: 代价与口径差异记在 TASK-062 的「补做记录（TASK-085）」节。
+_ENDPOINT_RE = re.compile(r"https?://[^\s,;，；、）)]+")
 
 #: 引擎工厂（测试注入假 embedding provider 的接缝）。
 EngineFactory = Callable[[Path], Engine]
@@ -238,13 +246,46 @@ class EngineManager:
     # ------------------------------------------------------------------ 数据面
 
     def ingest(self, project_id: str, changes: ChangeSet) -> IngestReport:
-        """索引一次变更集（同 project 串行；source 用账本快照，见卡内 §A/§B）。"""
+        """索引一次变更集（同 project 串行；source 用账本快照，见卡内 §A/§B）。
+
+        **记录点（TASK-085 §A）**：本方法是所有索引路径的汇聚点（客户端 ``batch-upload`` /
+        ``deletions`` 走这里；本地模式走 ``ProjectIndexer`` 的 ``ingest_repo``），因此 run 记录
+        挂在这里才能覆盖 Agent 接入形态。**成功与失败都落**（只记成功会让"失败次数"恒为 0）。
+
+        ``files_total`` 的口径（TASK-085 §B）：``IngestReport`` **没有**"仓库共多少文件"这个字段，
+        因此记**本次请求送达的文件数**（added + modified）。它可能与 ``files_processed``
+        （真正重解析的文件数）相等——**相等不代表没干活**：重扫时 chunk 走 ``chunks_reused``
+        复用、向量不重算。故意不从 ``sync_state`` 取账本总数：那会与 ``files_processed``
+        分属两种量纲，让 web 的"解析/总数"两列失去可解释性。
+        """
+        started_at = int(time.time())
+        started_perf = time.perf_counter()
         with self._lock_for(project_id):
             source = self.blob_source(project_id)
             # TASK-035 §C：调 core 的公开 ``apply_changes``（不再跨包调 ``Engine._ingest``）。
-            return self._observe_provider(
-                lambda: self._engine.apply_changes(project_id, changes, source=source)
+            try:
+                report = self._observe_provider(
+                    lambda: self._engine.apply_changes(project_id, changes, source=source)
+                )
+            except Exception as exc:
+                # 失败也要留痕（否则"失败次数"恒为 0），但**不能让记帐改变索引结果**：
+                # 原异常照旧向上抛（HTTP 层映射 503/500 的逻辑不变）。
+                self._record_failed_ingest(
+                    project_id,
+                    changes,
+                    started_at=started_at,
+                    elapsed_ms=(time.perf_counter() - started_perf) * 1000,
+                    exc=exc,
+                )
+                raise
+            self._record_ingest_run(
+                project_id,
+                changes,
+                started_at=started_at,
+                elapsed_ms=(time.perf_counter() - started_perf) * 1000,
+                report=report,
             )
+            return report
 
     def sync_status(self, project_id: str) -> dict[str, Any]:
         """core ``sync_status`` 全字段（camelCase，CF-05）+ 同步侧追加字段（TASK-033 口径）。"""
@@ -441,9 +482,115 @@ class EngineManager:
 
     # ------------------------------------------------------------------ 历史与统计（TASK-062/064）
 
-    def attach_meta_db(self, db: MetaDB) -> None:
-        """注入元数据库（``create_app`` 或测试调用；未注入时历史/统计不可用但不报错）。"""
+    def attach_meta_db(self, db: MetaDB | None) -> None:
+        """注入元数据库（``create_app`` 或测试调用；未注入时历史/统计不可用但不报错）。
+
+        ``None`` 是合法输入（幂等置空）：app 级 ``meta_db`` 为 ``None`` 时调用方
+        （``deps`` / ``mcp`` 的懒构造）直接传它，不必自己判空。
+        """
         self._meta_db = db
+
+    def _project_chunk_count(self, project_id: str) -> int:
+        """run 记录里的 ``chunks``：索引结束后项目库里的 chunk **总数**。
+
+        与 ``sync_status().chunks`` 同源（同一份 ``store.counts()``），因此：
+        - 历史表里的 chunks 列与项目页显示的 chunks 始终是同一个数；
+        - **两条索引路径**（本地 attach / 客户端上传）得到完全相同的口径 ——
+          TASK-062 §A 的响应样例（``filesTotal: 1436`` 配 ``chunks: 9389``）也表明
+          ``chunks`` 指**项目总量**，不是"本次新增"（后者在增量重扫/整批重传时会显示 0，
+          看起来像没工作 —— 而那正是本卡要消灭的观察）。
+
+        取不到（库未建/打不开）时记 0 并告警：**记帐不得拖垮索引**（TASK-062 §C 纪律）。
+        """
+        try:
+            return int(self._engine.sync_status(project_id).chunks)
+        except Exception:  # noqa: BLE001 - 见 docstring：旁路统计不阻断主路径
+            logger.warning("读取 chunk 总数失败（run 记录的 chunks 记 0）：%s", project_id)
+            return 0
+
+    def _record_ingest_run(
+        self,
+        project_id: str,
+        changes: ChangeSet,
+        *,
+        started_at: int,
+        elapsed_ms: float,
+        report: IngestReport,
+    ) -> None:
+        """把一次**成功**的上传索引写进 ``index_runs``（口径与 ``_record_index_run`` 一致）。
+
+        - ``state="done"``（本方法只在没抛异常时被调）；
+        - ``errors`` 非空仍算 succeeded（只是部分文件有解析问题，TASK-062 §C）；
+        - ``error_text`` = 逗号分隔的解析问题摘要（与 ``_count_errors`` 的计数器同源），
+          因此 web 的"errors"列与"有解析问题"标记在两条路径上含义相同；
+        - ``finished_at`` 用真实墙钟；**真实耗时**（``perf_counter`` 差）走日志，
+          库里落的是它的整秒表示——原因与代价见下方注释与执行记录。
+        """
+        db = self._meta_db
+        if db is None:
+            return
+        logger.info(
+            "上传索引完成：%s（added=%d，modified=%d，parsed=%d，errors=%d，实测耗时 %.1f ms）",
+            project_id,
+            report.added,
+            report.modified,
+            report.files_parsed,
+            len(report.errors),
+            elapsed_ms,
+        )
+        errors = ", ".join(report.errors)
+        try:
+            db.record_index_run(
+                project_id,
+                state=STATE_DONE,
+                started_at=started_at,
+                # ``record_index_run`` 是 TASK-062 的冻结签名（只收秒级 started_at/finished_at，
+                # 由它自己算 duration_ms），因此**不能**在这里传毫秒。代价：亚秒级的上传
+                # （典型客户端小仓库）``durationMs`` 会呈现为 0——与本地 attach 路径的整秒
+                # 粒度一致（TASK-085 §B 要求两条路径不得两套解释），真实值看上面的日志。
+                finished_at=int(time.time()),
+                files_total=len(changes.added) + len(changes.modified),
+                files_processed=report.files_parsed,
+                chunks=self._project_chunk_count(project_id),
+                errors=len(report.errors),
+                error_text=errors or None,
+            )
+        except Exception:  # 记不上账不能把已经成功的索引变成失败（TASK-062 §C 的既有纪律）
+            logger.exception("索引记录落库失败（不影响索引结果）：%s", project_id)
+
+    def _record_failed_ingest(
+        self,
+        project_id: str,
+        changes: ChangeSet,
+        *,
+        started_at: int,
+        elapsed_ms: float,
+        exc: BaseException,
+    ) -> None:
+        """把一次**失败**的索引写进 ``index_runs``（``state="failed"``）。
+
+        ``error_text`` 走 :func:`redact_text`（key/token 不出库）；``files_processed`` 记 0——
+        ``IngestReport`` 在异常路径上根本不存在，"失败前处理了几个文件"无从得知。
+        **不谎报**：0 在这里的含义是"未知/未产出报告"，不是"一个文件都没处理"。
+        """
+        db = self._meta_db
+        if db is None:
+            return
+        logger.error(
+            "上传索引失败：%s（实测耗时 %.1f ms）", project_id, elapsed_ms, exc_info=exc
+        )
+        try:
+            db.record_index_run(
+                project_id,
+                state=STATE_FAILED,
+                started_at=started_at,
+                finished_at=int(time.time()),
+                files_total=len(changes.added) + len(changes.modified),
+                errors=1,
+                error_text=_persist_error_text(exc),
+            )
+        except Exception:  # 同上：记帐失败不改变索引结果（原异常仍在向上传播）
+            logger.exception("索引失败记录落库失败（不影响错误上报）：%s", project_id)
 
     @property
     def meta_db(self) -> MetaDB | None:
@@ -457,6 +604,12 @@ class EngineManager:
         - ``state="done"`` 且 ``error`` 非空仍算 **succeeded**（那只是部分文件有解析问题），
           ``errors`` 字段存条数、``error_text`` 存摘要；
         - 回调异常在 ``ProjectIndexer._notify_finish`` 已吞掉，不让记帐拖垮索引。
+
+        与上传路径（:meth:`ingest`）的关系：``duration_ms`` 沿用本路径（整秒精度，
+        ``finished_at - started_at``），``chunks`` 用同一个 :meth:`_project_chunk_count`。
+        两条路径的**共同语义**是 ``state`` / ``errors`` / ``error_text`` / ``chunks``：
+        web 的"成功/失败"、"有解析问题"、"chunks"三列因此一致；
+        耗时绝对值的精度差异见 TASK-062 的「补做记录（TASK-085）」节。
         """
         db = self._meta_db
         if db is None or progress.state not in (STATE_DONE, STATE_FAILED):
@@ -470,6 +623,7 @@ class EngineManager:
             finished_at=int(finished),
             files_total=progress.total_files,
             files_processed=progress.processed_files,
+            chunks=self._project_chunk_count(project_id),
             errors=_count_errors(progress.error),
             error_text=progress.error,
         )
@@ -510,6 +664,15 @@ class EngineManager:
                 lock = threading.Lock()
                 self._locks[project_id] = lock
             return lock
+
+
+def _persist_error_text(exc: BaseException) -> str:
+    """失败 run 的 ``error_text``：沿用 :func:`redact_text`（key/token/Bearer），再抹掉 endpoint。
+
+    两步都是**保留诊断价值**的收窄，而不是编辑事实：异常类型与原因照旧，只有
+    "key 本体"与"embedding 服务地址"不出库。
+    """
+    return _ENDPOINT_RE.sub("***", redact_text(f"{type(exc).__name__}: {exc}"))
 
 
 def _count_errors(error_text: str | None) -> int:

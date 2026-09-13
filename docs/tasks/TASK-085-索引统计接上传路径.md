@@ -119,4 +119,41 @@ TASK-062 卡的 DoD 列了必须覆盖的场景，**逐条落实**。至少覆�
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-23 ｜ 分支 `feature/task-085-indexstats_xwz0923` ｜ 状态：review
+
+**验收命令与结果**
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest service/tests/test_index_stats.py -q` | **15 passed**（新建文件；TASK-062 DoD 逐条 + 本卡回归点） |
+| `uv run pytest -o addopts="" -q` | **761 passed, 2 skipped** |
+| `uv run ruff check .` | All checks passed! |
+| `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过 |
+| 真实 E2E（云端模式 + 真实 `BAAI/bge-m3`） | `resolve` + `batch-upload` 后 `GET /api/index-stats`：**`0` → `total:1`**；`/api/account/overview.index`：**`0/null` → `succeeded:1, avgDurationMs:2000`** |
+| 真实 `npx zace-client`（MCP stdio） | `search_context` 返回带行号证据（`is_error: False`），其懒同步产生的上传同样落库（`total:2`） |
+| 两条路径口径对照（同一项目） | 本地 attach + 客户端上传 → `total:2`，字段形态一致（见下文） |
+
+完整真实响应、逐条偏差与未决问题已写在 `docs/tasks/TASK-062-索引job与统计.md` 的
+**「补做记录（TASK-085，2026-09-23）」**节（本卡是 TASK-062 的补做，故记录集中在那里）。
+
+**改动文件**（所有权内 + 经用户批准的两处扩展）
+
+- `service/zace_service/runtime.py`（所有权内）：`ingest` 成功/失败两路各落一条 run 记录、
+  `_project_chunk_count`、`_persist_error_text`、`attach_meta_db` 接受 `None`；
+- `service/tests/test_index_stats.py`（所有权内，新建）：15 个用例；
+- `service/zace_service/deps.py`、`service/zace_service/mcp.py`（**清单外，已获批准**）：懒构造的
+  manager 接上 app 级 MetaDB（卡内漏识别的第二个根因）；
+- `service/zace_service/routers/projects.py`（**清单外，已获批准**）：`resolve` 后 claim
+  （本卡 DoD 通过的前提；同时补上 TASK-061 缺失的接线）。
+
+`metadb.py` / `routers/sync.py` 均**未改**（卡内明确禁止）。
+
+**未决问题**（详版见 TASK-062 补做记录）
+
+1. TASK-061 的其余接线仍未落地（`require_project_id` 归属校验、`attach` claim、
+   `batch-upload` 403）——**TASK-051 A1 的越权面依然存在**，不属本卡范围；
+2. 多人共用同一仓库时第二人可见性（我未按 TASK-061 §B 报 403，避免把共用仓库的
+   第二人卡死）——请编排者裁决；
+3. `durationMs` 保留冻结契约的整秒粒度，上传路径的亚秒级索引会显示 0（真实值在日志）；
+4. `chunks` 口径由"本次新增"改为"项目总量"（依据 TASK-062 §A 的响应样例）。
+
