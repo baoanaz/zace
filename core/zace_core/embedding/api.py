@@ -6,14 +6,28 @@
 
 协议：``POST {base_url}/v1/embeddings``，请求体 ``{"model": ..., "input": [...]}``，
 响应 ``{"data": [{"index": i, "embedding": [...]}]}``（index 用于恢复输入顺序）。
+
+截断与分批（TASK-046 §D，**与 local.py 语义一致**）：
+
+1. **按 token 截断**：每个输入在发送前截到 ``spec.max_input_tokens``（模型实际能力）。
+   有自己的 tokenizer 时（``spec.tokenizer_repo_id``）做**精确截断并用同一 tokenizer 回验**；
+   拿不到 tokenizer 时回落到**按 UTF-8 字节数**截断（每 token ≥ 1 字节 ⇒ 字节数 ≥ token 数，
+   因此是安全上界，代价是英文场景会欠填）。**绝不把超长输入直接发给 API**：
+   实测超限请求会被 provider 拒绝（``400 code=20015``）。
+2. **按 token 预算分批**：批的切分依据是**累计 token 预算**（默认 ``DEFAULT_BATCH_TOKEN_BUDGET``）
+   与条数上限两者取先到者。单条超预算的输入仍单独成批（不拆输入），保证可用性。
+   本地 provider 不受此影响（它自己按 token 截断，且批语义由 ONNX 侧决定）。
+
+为什么这么做：卡内实测 ``hello-agents`` 全库（9971 chunks）因 (a) 超长输入 400 与
+(b) 批次 token 尖峰触发 TPM 429 而**全量索引失败**（vectors=0）。
 """
 
 from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import numpy as np
@@ -26,15 +40,21 @@ from zace_core.embedding.base import (
     EmbeddingConfigError,
     EmbeddingDimMismatchError,
     Side,
-    iter_batches,
     l2_normalize,
     with_prefix,
 )
 from zace_core.embedding.registry import ApiModelSpec
 from zace_core.interfaces import EmbeddingProfile
 
+if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期需要
+    from tokenizers import Tokenizer
+
 #: API 批大小（卡内 §A）。
 DEFAULT_BATCH_SIZE = 64
+
+#: 单批的累计 token 预算（TASK-046 §D）：与 ``bge-m3`` 的单条上限同值，
+#: 使 64 条短 chunk 的批（~9.4K token）会被拆成两批，而单条长输入仍能独占一批。
+DEFAULT_BATCH_TOKEN_BUDGET = 8192
 
 #: 超时：连接 10s / 整体 60s（卡内 §C）。
 DEFAULT_TIMEOUT_CONNECT = 10.0
@@ -90,9 +110,13 @@ class OpenAiCompatibleEmbeddingProvider:
         timeout_total: float = DEFAULT_TIMEOUT_TOTAL,
         timeout_connect: float = DEFAULT_TIMEOUT_CONNECT,
         extra_headers: Mapping[str, str] | None = None,
+        tokenizer: Tokenizer | None = None,
+        batch_token_budget: int = DEFAULT_BATCH_TOKEN_BUDGET,
     ) -> None:
         if batch_size < 1:
             raise EmbeddingConfigError(f"batch_size 必须 ≥ 1，收到 {batch_size}")
+        if batch_token_budget < 1:
+            raise EmbeddingConfigError(f"batch_token_budget 必须 ≥ 1，收到 {batch_token_budget}")
         if max_retries < 0:
             raise EmbeddingConfigError(f"max_retries 不能为负，收到 {max_retries}")
         self._spec = spec
@@ -103,6 +127,9 @@ class OpenAiCompatibleEmbeddingProvider:
             timeout_total=timeout_total, timeout_connect=timeout_connect
         )
         self._batch_size = batch_size
+        self._batch_token_budget = batch_token_budget
+        self._tokenizer = tokenizer
+        self._tokenizer_load_failed = False
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._sleep = sleep
@@ -130,6 +157,10 @@ class OpenAiCompatibleEmbeddingProvider:
     @property
     def batch_size(self) -> int:
         return self._batch_size
+
+    @property
+    def batch_token_budget(self) -> int:
+        return self._batch_token_budget
 
     def __repr__(self) -> str:
         return (
@@ -159,13 +190,58 @@ class OpenAiCompatibleEmbeddingProvider:
         if not items:
             return []
         prefix = self._spec.query_prefix if side == "query" else self._spec.passage_prefix
+        # 截断 + 按 token 预算分批（TASK-046 §D）：发请求前就消掉超长输入与批次尖峰。
+        prepared = [self._prepare(with_prefix(text, prefix)) for text in items]
         vectors: list[list[float]] = []
-        for batch in iter_batches(items, self._batch_size):
-            vectors.extend(self._embed_batch([with_prefix(text, prefix) for text in batch]))
+        for batch in iter_batches_by_token_budget(
+            prepared,
+            batch_size=self._batch_size,
+            token_budget=self._batch_token_budget,
+            count_tokens=self._estimate_tokens,
+        ):
+            vectors.extend(self._embed_batch(batch))
         return vectors
 
+    # -- 截断与分批 -------------------------------------------------------
+
+    def _prepare(self, text: str) -> str:
+        """发送前截到 ``max_input_tokens``（卡内 §D-1）。"""
+        limit = self._spec.max_input_tokens
+        tokenizer = self._ensure_tokenizer()
+        if tokenizer is not None:
+            return _truncate_with_tokenizer(text, limit, tokenizer)
+        # 退路：按 UTF-8 字节数截断（字节数 ≥ token 数，安全上界；英文会欠填）。
+        return _truncate_by_bytes(text, limit)
+
+    def _estimate_tokens(self, text: str) -> int:
+        """token 数上界估计（供分批预算用；与 ``_prepare`` 同一口径）。"""
+        tokenizer = self._ensure_tokenizer()
+        if tokenizer is not None:
+            return len(tokenizer.encode(text).ids)
+        return len(text.encode("utf-8"))
+
+    def _ensure_tokenizer(self) -> Tokenizer | None:
+        """惰性加载 tokenizer；拿不到时回落字节估计（不联网失败不得阻断索引）。"""
+        if self._tokenizer is not None or self._tokenizer_load_failed:
+            return self._tokenizer
+        repo_id = self._spec.tokenizer_repo_id
+        if not repo_id:
+            self._tokenizer_load_failed = True
+            return None
+        try:  # pragma: no cover - 依赖 HF 缓存/网络，离线测试走字节退路
+            from huggingface_hub import hf_hub_download
+            from tokenizers import Tokenizer as _Tokenizer
+
+            path = hf_hub_download(repo_id=repo_id, filename="tokenizer.json")
+            self._tokenizer = _Tokenizer.from_file(str(path))
+        except Exception:
+            self._tokenizer_load_failed = True
+        return self._tokenizer
+
     def _embed_batch(self, batch: Sequence[str]) -> list[list[float]]:
-        body = self._post({"model": self._spec.name, "input": list(batch)})
+        # 请求体里的 model 必须是 **provider 认的名字**：registry 的 key（如 ``bge-m3``）只是
+        # zace 侧标识，硅基流动要的是 ``BAAI/bge-m3``（TASK-046 §A 的核心断言）。
+        body = self._post({"model": self._spec.api_model, "input": list(batch)})
         data = body.get("data")
         if not isinstance(data, list) or len(data) != len(batch):
             got = len(data) if isinstance(data, list) else "非列表"
@@ -307,6 +383,75 @@ class OpenAiCompatibleEmbeddingProvider:
         if self._api_key:
             text = text.replace(self._api_key, "***")
         return _BEARER_PATTERN.sub(r"\1***", text)
+
+
+def _truncate_by_bytes(text: str, max_bytes: int) -> str:
+    """无 tokenizer 时的保守截断：保留累计 UTF-8 字节数 ≤ ``max_bytes`` 的前缀。
+
+    byte-level BPE 的每个 token 至少对应 1 个字节，故「字节数」是 token 数的**安全上界**；
+    代价是英文文本会欠填（英文 ~4 字节/token）。这是退路，不是推荐路径。
+    """
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(text[:mid].encode("utf-8")) <= max_bytes:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
+
+
+def _truncate_with_tokenizer(text: str, max_tokens: int, tokenizer: Tokenizer) -> str:
+    """精确按 token 截断，并用同一 tokenizer 回验（TASK-046 §D-1）。
+
+    XLM-R 系（bge-m3 / e5）在片段边界重新分词会抖 ±2 token（实测原始切片 8189/8190 在 API 侧
+    分别按 8191/8192 计，8188 → 8190），因此不能只截一次就发，必须回验。
+
+    回验采用**从原始 ids 递减切片**而不是“解码→重编码→再解码”：后者在边界抖动下会反复回到
+    同一长度（不收敛），一旦耗尽迭代就会退到字节退路，对中文是灾难性欠填（实测只填到 1984/8192）。
+    这里每轮至少回退 1 token，单调收缩，必定收敛。
+    """
+    ids = tokenizer.encode(text).ids
+    if len(ids) <= max_tokens:
+        return text
+    limit = max_tokens
+    for _ in range(16):
+        if limit < 1:  # pragma: no cover - 防御性分支
+            break
+        candidate = tokenizer.decode(ids[:limit], skip_special_tokens=False)
+        actual = len(tokenizer.encode(candidate).ids)
+        if actual <= max_tokens:
+            return candidate
+        limit -= actual - max_tokens + 1  # 至少回退 1 token，保证单调收缩
+    return tokenizer.decode(ids[: max(1, max_tokens // 2)], skip_special_tokens=False)
+
+
+def iter_batches_by_token_budget(
+    items: Sequence[str], *, batch_size: int, token_budget: int, count_tokens: Callable[[str], int]
+) -> Iterator[Sequence[str]]:
+    """按**累计 token 预算**与条数上限切批（TASK-046 §D，两者取先到者）。
+
+    单条超出预算的输入仍会单独成批（绝不拆输入、也不丢输入）：否则长 chunk 会导致死循环或
+    静默丢弃。``count_tokens`` 应为 token 数的上界估计（无 tokenizer 时传字节数即可）。
+    """
+    if batch_size < 1:
+        raise EmbeddingConfigError(f"batch_size 必须 ≥ 1，收到 {batch_size}")
+    if token_budget < 1:
+        raise EmbeddingConfigError(f"token_budget 必须 ≥ 1，收到 {token_budget}")
+    current: list[str] = []
+    used = 0
+    for item in items:
+        cost = count_tokens(item)
+        if current and (len(current) >= batch_size or used + cost > token_budget):
+            yield current
+            current = []
+            used = 0
+        current.append(item)
+        used += cost
+    if current:
+        yield current
 
 
 def _as_float_list(raw: Any, *, endpoint: str) -> list[float]:

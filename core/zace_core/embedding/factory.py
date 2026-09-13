@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
 from typing import TYPE_CHECKING, Any
@@ -35,6 +36,7 @@ from zace_core.embedding.local import (
 )
 from zace_core.embedding.local import LocalOnnxEmbeddingProvider
 from zace_core.embedding.registry import (
+    API_MODEL_ALIASES,
     API_MODELS,
     DEFAULT_LOCAL_SLUG,
     ApiModelSpec,
@@ -50,6 +52,30 @@ if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期需要
 
 #: 未登记 API 模型的默认截断值（Module/01 §2.4 的 zace 侧 2048 假设）。
 UNKNOWN_API_MAX_INPUT_TOKENS = 2048
+
+
+def _clamp_to_model_limit(spec: ApiModelSpec, configured: int | None) -> int:
+    """生效的 ``max_input_tokens``：用户值只降不升（``min`` 语义，TASK-046 §B）。
+
+    - 未给 → 用**已登记模型的登记值**（bge-m3 = 8192，即模型实际能力）；
+    - 给了更小值 → 尊重用户（更省 token / 更快）；
+    - 给了**大于模型能力**的值 → 钳回登记值并发 ``UserWarning``：超过该值的请求会被
+      provider 拒绝（实测 8193 即 `400 code=20015`），静默抬高只会让索引在深处失败。
+
+    这是 TASK-038（本地 clamping）的同一语义在 API 侧的对应实现；本卡不改 ``local.py``。
+    """
+    if configured is None:
+        return spec.max_input_tokens
+    if configured > spec.max_input_tokens:
+        warnings.warn(
+            f"max_input_tokens={configured} 超过 {spec.model_id} 的实际上限 "
+            f"{spec.max_input_tokens}，已钳制为 {spec.max_input_tokens}"
+            f"（超出部分会被 provider 拒绝）",
+            UserWarning,
+            stacklevel=3,
+        )
+        return spec.max_input_tokens
+    return configured
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,9 +113,7 @@ class EmbeddingConfig:
             raise EmbeddingConfigError(f"max_retries 不能为负，收到 {self.max_retries}")
 
     @classmethod
-    def from_env(
-        cls, env: Mapping[str, str] | None = None, **overrides: Any
-    ) -> EmbeddingConfig:
+    def from_env(cls, env: Mapping[str, str] | None = None, **overrides: Any) -> EmbeddingConfig:
         """从环境变量构造配置；``overrides`` 覆盖 env（显式参数优先）。"""
         source: Mapping[str, str] = os.environ if env is None else env
         data: dict[str, Any] = {
@@ -205,7 +229,8 @@ def _create_api(
         if config.dim is None:
             raise EmbeddingConfigError(
                 f"未登记的 API 模型 {config.model!r}：必须显式提供 dim（EMBED_DIM），"
-                f"否则 profile.dim 会失真并破坏 D-07 指纹；已登记模型：{sorted(API_MODELS)}"
+                f"否则 profile.dim 会失真并破坏 D-07 指纹；已登记模型：{sorted(API_MODELS)}；"
+                f"已登记别名：{sorted(API_MODEL_ALIASES)}"
             )
         spec = ApiModelSpec(
             name=config.model,
@@ -217,7 +242,7 @@ def _create_api(
         spec = replace(
             spec,
             dim=config.dim or spec.dim,
-            max_input_tokens=config.max_input_tokens or spec.max_input_tokens,
+            max_input_tokens=_clamp_to_model_limit(spec, config.max_input_tokens),
         )
     return OpenAiCompatibleEmbeddingProvider(
         spec,
@@ -233,6 +258,7 @@ def _create_api(
 
 
 __all__ = [
+    "UNKNOWN_API_MAX_INPUT_TOKENS",
     "EmbeddingConfig",
     "EmbeddingProvider",
     "create_provider",

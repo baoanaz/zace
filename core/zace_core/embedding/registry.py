@@ -62,10 +62,27 @@ class ApiModelSpec:
     query_prefix: str = ""
     passage_prefix: str = ""
     notes: str = ""
+    #: 请求体里发给 API 的 model 字段。默认与 ``name`` 相同；调用了厂商前缀做 key 时
+    #: （如 key ``bge-m3`` / ``request_name`` ``BAAI/bge-m3``），这里写 provider 认的名字。
+    #: **别名替换必须发生在这里**（发请求前），见 TASK-046 §A。
+    request_name: str | None = None
+    #: 提供该模型 tokenizer.json 的 HF 仓库 id（可选）。设了它，API 侧就能**精确**按 token
+    #: 截断（TASK-046 §D）；拿不到时回落 UTF-8 字节数估计（安全上界）。
+    tokenizer_repo_id: str | None = None
+
+    @property
+    def api_model(self) -> str:
+        """实际发给 API 的 model 字段（未设 ``request_name`` 时回落 ``name``）。"""
+        return self.request_name or self.name
 
     @property
     def model_id(self) -> str:
-        """指纹 id（卡内 §A）：``api:<model_name>``。"""
+        """指纹 id（卡内 §A）：``api:<model_name>``。
+
+        刻意用**注册表 key**（``name``）而不是 ``request_name``：key 是「哪家的哪个模型」的
+        稳定标识，``index_config`` 指纹据此区分 provider——同名模型换 provider 会改 key，
+        从而触发 D-07 二级失效（重嵌），而改别名（同一模型的不同写法）不会无谓重嵌。
+        """
         return f"api:{self.name}"
 
 
@@ -109,6 +126,13 @@ _LOCAL_CANDIDATES: tuple[LocalModelSpec, ...] = (
 # - Snowflake/snowflake-arctic-embed-xs: onnx/model_quantized.onnx
 LOCAL_MODELS: dict[str, LocalModelSpec] = {spec.slug: spec for spec in _LOCAL_CANDIDATES}
 
+#: 注册表 key → 别名集合。别名是「同一模型在别处（如官方文档）的写法」，
+#: 解析后落到同一条目，因此**不改变 ``model_id``、也不触发重嵌**（TASK-046 §A）。
+#: 硅基流动官方文档的 model 名带厂商前缀（``BAAI/bge-m3``），用户照抄即可命中这里。
+API_MODEL_ALIASES: dict[str, str] = {
+    "BAAI/bge-m3": "bge-m3",
+}
+
 API_MODELS: dict[str, ApiModelSpec] = {
     spec.name: spec
     for spec in (
@@ -116,7 +140,13 @@ API_MODELS: dict[str, ApiModelSpec] = {
             name="bge-m3",
             dim=1024,
             max_input_tokens=8192,
-            notes="TASK-015 的 API 对照候选",
+            request_name="BAAI/bge-m3",
+            tokenizer_repo_id="BAAI/bge-m3",
+            notes=(
+                "硅基流动上的 model 名是厂商前缀全名 BAAI/bge-m3；裸名会被 API 拒绝"
+                "（20012 Model does not exist）——API 侧统一发 request_name（TASK-046 §A）；"
+                "上限经本机实测校准：8192 token 成功、8193 被拒（20015）"
+            ),
         ),
         ApiModelSpec(name="text-embedding-3-small", dim=1536, max_input_tokens=8191),
         ApiModelSpec(name="text-embedding-3-large", dim=3072, max_input_tokens=8191),
@@ -134,5 +164,13 @@ def get_local_spec(slug: str) -> LocalModelSpec:
 
 
 def find_api_spec(name: str) -> ApiModelSpec | None:
-    """按模型名取 API 条目；未登记返回 ``None``（由 factory 决定是否要求显式 dim）。"""
-    return API_MODELS.get(name)
+    """按模型名取 API 条目；未登记返回 ``None``（由 factory 决定是否要求显式 dim）。
+
+    先查注册表 key，再查别名表（如 ``BAAI/bge-m3`` → ``bge-m3``），两者命中同一条目，
+    因此换写法（别名 vs 裸名）不会改变 ``model_id``、不会触发无谓重嵌。
+    """
+    spec = API_MODELS.get(name)
+    if spec is not None:
+        return spec
+    canonical = API_MODEL_ALIASES.get(name)
+    return API_MODELS.get(canonical) if canonical else None
