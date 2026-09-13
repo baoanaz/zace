@@ -1,7 +1,12 @@
 # 发布 zace-client 的多平台二进制（npm 包装器按 tag 从这里下载）。
 #
-# 触发：推送 v* tag。产物命名必须与 npm/run.js 的 assetName() 一一对应——
-# 改一处必须改两处（asset_name 是两者的唯一约定）。
+# 触发：推送 v* tag。
+#
+# **关键约束**：资产名必须与 `npm/run.js` 的 `assetName()` 一一对应——
+# 两处是同一个约定，改一处必须改另一处（用 `scripts/check-version.sh` + 资产名对账命令守住）。
+#
+# 交叉编译说明：`aarch64-unknown-linux-musl` 在 x86_64 runner 上**必须用 `cross`**
+# （只有 x86_64 那条能靠 `musl-tools` 直编）——这是参考实现踩过的点。
 name: release
 
 on:
@@ -14,32 +19,43 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
             asset_name: zace-client_Linux_x86_64.tar.gz
             binary_name: zace-client
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
+            universal: false
+            cross: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
             asset_name: zace-client_Linux_aarch64.tar.gz
             binary_name: zace-client
-          - os: macos-latest
-            target: universal-apple-darwin
+            universal: false
+            cross: true          # x86_64 runner 上编 aarch64-musl 需要 cross
+          - target: universal-apple-darwin
+            os: macos-latest
             asset_name: zace-client_Darwin_universal.tar.gz
             binary_name: zace-client
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            universal: true
+            cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
             asset_name: zace-client_Windows_x86_64.zip
             binary_name: zace-client.exe
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
+            universal: false
+            cross: false
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
             asset_name: zace-client_Windows_aarch64.zip
             binary_name: zace-client.exe
+            universal: false
+            cross: false
 
-    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: client
@@ -47,23 +63,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust (universal)
+        if: matrix.universal
+        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: >-
-            ${{ matrix.target == 'universal-apple-darwin'
-                && 'x86_64-apple-darwin,aarch64-apple-darwin'
-                || matrix.target }}
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
+      - name: Setup Rust (single target)
+        if: ${{ !matrix.universal }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: client
 
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
       - name: Build (macOS universal)
-        if: matrix.target == 'universal-apple-darwin'
+        if: matrix.universal
         run: |
           cargo build --release --target x86_64-apple-darwin
           cargo build --release --target aarch64-apple-darwin
@@ -72,20 +101,28 @@ jobs:
             target/x86_64-apple-darwin/release/${{ matrix.binary_name }} \
             target/aarch64-apple-darwin/release/${{ matrix.binary_name }}
 
-      - name: Build
-        if: matrix.target != 'universal-apple-darwin'
+      - name: Build (default)
+        if: ${{ !matrix.universal && !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (unix)
-        if: matrix.target != 'universal-apple-darwin' && !contains(matrix.target, 'windows')
+        if: ${{ !matrix.universal && !matrix.cross && !contains(matrix.target, 'windows') }}
+        run: |
+          cd target/${{ matrix.target }}/release
+          strip ${{ matrix.binary_name }} || true
+          tar czf "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" ${{ matrix.binary_name }}
+
+      - name: Package (cross)
+        if: matrix.cross
         run: |
           cd target/${{ matrix.target }}/release
           tar czf "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" ${{ matrix.binary_name }}
 
       - name: Package (macOS universal)
-        if: matrix.target == 'universal-apple-darwin'
+        if: matrix.universal
         run: |
           cd target/release
+          strip ${{ matrix.binary_name }} || true
           tar czf "$GITHUB_WORKSPACE/${{ matrix.asset_name }}" ${{ matrix.binary_name }}
 
       - name: Package (windows)
@@ -106,10 +143,19 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          path: artifacts
           merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: assets/*
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
           generate_release_notes: true
