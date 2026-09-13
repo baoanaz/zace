@@ -109,6 +109,17 @@
 | [TASK-085](TASK-085-索引统计接上传路径.md) | **索引统计接上客户端上传路径**（补 TASK-062）：`npx zace-client` 索引后面板不再恒为 0 | TASK-060/062 | `service/zace_service/runtime.py`、`service/tests/test_index_stats.py`(新建) | **review**（2026-09-23） |
 | [TASK-086](TASK-086-导航与首页重排.md) | **导航与首页重排 + 全局背景纹理**（接入指南移到第二位；账户→控制台；删「最近索引记录」；浅蓝灰网格底） | 无 | `web/src/app/Layout.tsx`、`web/src/pages/DashboardPage.tsx`、`web/src/index.css`、`web/tailwind.config.js` | review |
 
+### Phase 3 补充（2026-09-14：把 ContextPack 的信号真正交给 Agent）
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-087](TASK-087-ContextPack渲染补齐.md) | **ContextPack 渲染补齐**：`next_queries` 渲染进正文 + `answerable=false` 短路为结构化降级包（D-24） | 无 | `core/zace_core/contextpack/render.py`、`service/routers/query.py`(ask 分支) | pending |
+| [TASK-088](TASK-088-LLM总结接入.md) | **ask_project 接入 LLM 总结**（可配置 `ANSWER_*` + Grounded Prompt 七条 + Citation 回验 + 设置页展示） | 无 | `service/zace_service/{answer,config}.py`、`routers/{query,ops}.py`、`web/src/pages/SettingsPage.tsx` | pending |
+
+> **由来**（编排者实测，2026-09-14）：`ContextPack` 产出 8 类信号，但 Agent 实际只看到 5 类——
+> `next_queries` 已生成却不渲染、`answerable` 未用于分支、LLM 总结从未实现（`ANSWER_*` 配置全仓不存在）。
+> 设计依据：`docs/design/Module/04-AI总结.md` §2/§3/§4/§5/§6/§8（已定稿，本波是补实现）。
+
 > **TASK-084/085 的由来**（编排者实测，2026-09-13）：TASK-062/064 的**建表与方法已实现**，
 > 但（a）`record_query()` 全仓零调用、`audit.py` 不存在；（b）索引 run 记录只覆盖本地 attach 路径，
 > 客户端上传路径（Agent 实际用的）不记录。两张卡要求的验收测试文件也不存在。
