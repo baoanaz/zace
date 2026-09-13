@@ -356,6 +356,30 @@ class MetaDB:
         row = self._connect().execute("SELECT COUNT(*) AS n FROM users").fetchone()
         return int(row["n"])
 
+    def ensure_local_user(self, name: str = "local", *, now: int | None = None) -> User:
+        """取（或建）本地单用户模式的隐式账户（``is_local=1``）。
+
+        为什么需要它：TASK-061 §B 要求 ``attach`` 把归属登记给本地用户，而
+        :func:`zace_service.auth.local_user` 是**不落库的幻影**（R34）——``projects.user_id``
+        有指向 ``users(id)`` 的外键，没有真实行就写不进归属。
+
+        只在调用方已经决定要写归属时使用（即本地模式且 app 级 ``MetaDB`` 已存在，见
+        ``routers/projects._claim_project``）；**不在此处建库**（R34：本地模式默认无
+        ``zace-meta.db``）。
+        ``password_hash`` 恒为空串：本地隐式账户**没有密码**，也不得能用密码登录
+        （``verify_password`` 对非法编码串返回 ``False``）。
+        """
+        existing = self.get_user_by_name(name)
+        if existing is not None:
+            return existing[0]
+        try:
+            return self.create_user(name, "", is_local=True, now=now)
+        except sqlite3.IntegrityError:  # 并发首次 attach：另一个线程刚建好，取回它
+            raced = self.get_user_by_name(name)
+            if raced is None:  # pragma: no cover - 仅当行被并发删除才会走到
+                raise
+            return raced[0]
+
     # ------------------------------------------------------------------ 会话（TASK-060）
 
     def create_session(self, user_id: str, *, ttl_s: int, now: int | None = None) -> str:

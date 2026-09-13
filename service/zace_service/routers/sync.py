@@ -159,9 +159,9 @@ def report_deletions(payload: DeletionsRequest, request: Request) -> dict[str, l
 def sync_status(projectId: str, request: Request) -> dict[str, Any]:  # noqa: N803 - CF-05 路径参数名
     """同步/索引状态（core 全字段 + 同步侧追加字段）。"""
     manager = get_engine_manager(request)
-    if not manager.project_exists(projectId):
-        raise ApiError("project_not_found", f"项目不存在：{projectId}", 404)
-    return manager.sync_status(projectId)
+    # TASK-061 §C：经 require_project_id（存在 + 归属）；越权与不存在同为 404。
+    project_id = require_project_id(request, projectId)
+    return manager.sync_status(project_id)
 
 
 # --------------------------------------------------------------------------- 校验与工具

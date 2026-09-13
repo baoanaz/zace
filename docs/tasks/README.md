@@ -86,7 +86,7 @@
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
 | [TASK-060](TASK-060-鉴权与token.md) | **鉴权**（session + API token + 首个用户 bootstrap + `/healthz` 诚实性自检）；**修 TASK-051 A1** | TASK-030 | `service/zace_service/{auth,routers/auth,metadb}.py` | pending |
-| [TASK-061](TASK-061-租户双层.md) | 租户双层：token→user→owns project（D-36 逻辑授权层） | TASK-060 | `service/zace_service/{metadb,deps,routers}/*.py` | pending |
+| [TASK-061](TASK-061-租户双层.md) | 租户双层：token→user→owns project（D-36 逻辑授权层） | TASK-060 | `service/zace_service/{metadb,deps,routers}/*.py` | **review**（2026-09-13，补做完成；MCP 面归属未接，见卡内未决问题 1） |
 | [TASK-062](TASK-062-索引job与统计.md) | **索引 job 落库与统计**（成功/失败次数、平均耗时、历史） | TASK-034, TASK-060 | `service/zace_service/{metadb,indexer,runtime,routers}/*.py` | **review**（2026-09-23，TASK-085 补做完成） |
 | [TASK-064](TASK-064-查询审计与用量.md) | **查询审计与用量端点**（`/api/usage/**` 替换 501） | TASK-060 | `service/zace_service/{audit,metadb,routers}/*.py` | **review**（读取口/建表/聚合已合并；写入侧 `audit.py`+接线由 [TASK-084](TASK-084-查询审计接线.md) 补做，见卡内“补做记录”） |
 
