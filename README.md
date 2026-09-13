@@ -29,7 +29,7 @@ zace-core（纯库引擎：切片存储 → 检索 → 上下文组装 → AI �
 | `core/` | zace-core 纯库（Module/01-04）：切片存储 / 检索 / 上下文组装 / AI 总结 |
 | `service/` | zace-service 外壳（Module/06）：HTTP API、鉴权、租户、索引 job |
 | `client/` | zace-client（Rust，Module/05）：MCP stdio + 同步客户端（Phase 2） |
-| `web/` | zace-web SPA（Module/07，Phase 4） |
+| `web/` | zace-web SPA（Module/07，Phase 4）：管理面 + Playground，只消费 service 的 REST API |
 | `docs/design/` | 设计文档（INDEX.md 为入口，决策登记表 §3 为准） |
 | `docs/contracts/` | 冻结契约（DDL / JSON schema / OpenAPI / MCP tools）——变更须走编排流程 |
 | `docs/plan/` | roadmap / 编排流程 / 契约冻结清单 |

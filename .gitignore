@@ -35,3 +35,10 @@ data/
 .idea/
 .vscode/
 .DS_Store
+
+# --- Rust 构建产物（client/）已在上方覆盖；此处补 examples/ 的临时产物 ---
+client/target/
+
+# --- npm 分发（TASK-052）---
+npm/node_modules/
+npm/*.tgz

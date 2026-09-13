@@ -63,11 +63,13 @@
 | M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式 → **MCP 端点（demo 收口）** → 验收手册 —— **已完成** |
 | M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行）—— **已完成**（结论：沿用 e5-small） |
 | M2b-2 | `zace-lane-c` | TASK-036 | 多仓库规模自举 —— **已完成** |
-| **W7（当前）** | `zace-lane-a` | TASK-049 | **embedding 架构整理**：参数配置化（批/并发/上限按模型）+ provider 解耦 + 换模型只改配置（`docs/tasks/TASK-049-embedding架构整理.md`） |
 | **W6（已完成）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents —— **三张卡已合并进 main**；性能基准见 `benches/results/index-performance-w6.md` |
-| **W7（当前）** | `zace-lane-a` | TASK-049 | **embedding 架构整理**：参数配置化（批/并发/上限按模型）+ provider 解耦 + 为换模型铺路（`docs/plan/phase2-m2b-w6.md` §5 锤点） |
+| **W7（已完成）** | `zace-lane-a` | TASK-049 | **embedding 架构整理**：参数配置化（批/并发/上限按模型）+ provider 解耦，换模型只改配置 |
 | M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
+| **M2c 前置** | `zace-lane-d` | [TASK-051](TASK-051-云端MCP就绪度与远端身份预研.md) | 云端 MCP 就绪度盘点 + 远端身份预研（只出文档，为 TASK-040R 开卡）—— **review（2026-09-13）** |
+| **M2c** | `zace-lane-d` | [TASK-040R](TASK-040R-client骨架与同步代理.md) | **zace-client（Rust MCP stdio + 本地同步代理）**——MCP 最终形态（R38）；含跨语言身份一致性与端到端验收 —— **review（2026-09-13）** |
+| **M2c** | `zace-lane-d` | [TASK-052](TASK-052-npm分发.md) | **npm 分发**（`npx zace-client`）+ 二进制级 stdio 测试 + 五平台 release CI——供 Codex/Claude Code/pi 接入 —— **review（2026-09-13）** |
 | **Phase 3/4（本波，2026-09-13 开卡）** | `docs/cards-phase3_xwz0913` | TASK-060 → 061 → 062 → 064 ‖ **TASK-070（web，并行）** | 用户拍板：WebUI 先行。后端缺口（鉴权/token、租户、索引统计、查询用量）开成卡交编排者派活；`web/` 由本会话独占实现。**TASK-070 只依赖已 done 的端点，可与 060-064 并行**。详见下文「Phase 3 后端缺口卡片」与「Phase 4 卡片」 |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
@@ -114,8 +116,7 @@
 | [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
 | [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **done（W6-lane C，已合并）** |
 | [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— TASK-046 漏接的配置路径 | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done（编排者直接完成） |
-| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数按模型配置化 + provider 解耦 + 并发 + 切换手册） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/embedding-provider切换.md` | **pending（W7，待派活）** |
-| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数配置化 + provider 解耦 + 并发；为换模型铺路） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/embedding-provider切换.md` | **pending（W7）** |
+| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数按模型配置化 + provider 解耦 + 并发 + 切换手册） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/embedding-provider切换.md` | **done（核心已合并；手册与 `.env.example` 待补）** |
 | [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— **已由编排者直接完成**（TASK-046 漏接的配置路径） | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done |
 | [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
@@ -144,14 +145,24 @@
 7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **已完成**
 8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040 → TASK-045（lane A 串行）—— **已完成**
 9. 批 10（W5c，**整夜并行三泳道**）：lane A TASK-034→040→045（demo 收口）；lane B TASK-015A（模型选型）；lane C TASK-036（规模自举）—— **均已完成**（夜里机器重启，成果未丢）
-10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **当前波次**
-11. 批 12（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
-12. 批 13（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
-13. 批 14（2026-09-13，**WebUI 波次**，用户拍板）：lane A TASK-060 → 061 → 062 → 064（后端缺口：鉴权/租户/索引统计/查询用量，串行共用 `metadb.py`）；lane W **TASK-070**（`web/**` 独占，与 lane A **零文件重叠**，可完全并行）—— **开卡完成，待派活**
+10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **已完成并合并**
+11. 批 12（W7，**embedding 架构整理**）：lane A TASK-049（参数配置化 + provider 解耦 + 并发）—— **已完成并合并**
+12. 批 13（**云端 MCP 波次**，lane D）：TASK-051（就绪度盘点）→ TASK-040R（Rust client）→ TASK-052（npm 分发）—— **均 review**
+13. 批 14（**WebUI 波次**，用户拍板）：lane A TASK-060 → 061 → 062 → 064（后端缺口：鉴权/租户/索引统计/查询用量，串行共用 `metadb.py`）；lane W **TASK-070**（`web/**` 独占，与 lane A **零文件重叠**，可完全并行）—— **开卡完成，待派活**
+14. 批 15（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
+
+> **用户方向（2026-09-13）**：**不妥协，直奔最终版本**——MCP 的最终形态是本地 Rust client（stdio + 远端 sync，
+> 依 `docs/design/Background/01-notace-tool-rs.md`），本地 MCP（service 直出 Streamable HTTP，R38）**仅作短期验证**。
+> TASK-051 是其前置诊断，TASK-040R 已交付可用的 `client/`（33 单测 + 真实 service 端到端）。
+> **上线硬前置**：服务端鉴权（TASK-060/061，见就绪度报告 A1——当前非本地模式无鉴权）。
 
 > **本波次的并行安全论证**：TASK-070 只消费已 done 的端点（projects/query/healthz），
 > 文件所有权限定在 `web/**`；TASK-060..064 只改 `service/**`。两者无交集，且 web 端的
 > 未就绪页已显式标注依赖卡号，不会把“后端已支持”写错。
+>
+> **两条波次的关系（2026-09-13 核对）**：批 13（云端 MCP，`zace-lane-d`）与批 14（WebUI）**互不重叠**：
+> 前者只碰 `client/**`、`npm/**`、`server.json`、`scripts/check-version.sh`，后者只碰 `web/**`、`service/**`。
+> **交集只有 `docs/tasks/README.md`（本文件）**，已在合并时两边保留。
 
 > **编号说明（2026-09-13 修正）**：历史列表里出现过重复行（两次 W5b、两次 M2b 规划行），已去重；
 > 原先“云端 embedding 接入（R44-R46）”的引用已改为具体卡号：**R44 被 TASK-034 的 attach 端点占用**
