@@ -1,6 +1,6 @@
 # TASK-046：云端 embedding 接入与配置对齐（硅基流动 / bge-m3 为当前主路径）
 
-> 状态：pending ｜ 阶段：Phase 2（M2b / W6-lane B）｜ 硬依赖：TASK-008（双实现已存在）｜ soft 依赖：TASK-015A（选型报告）
+> 状态：done（2026-09-13 编排者评审合并；F1/F2/F3/F4 全部独立复验通过）｜ 硬依赖：TASK-008（双实现已存在）｜ soft 依赖：TASK-015A（选型报告）
 > 建议分支：`feature/task-046_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `core/zace_core/embedding/registry.py`（**仅** API 模型条目的 key / 别名与上限）

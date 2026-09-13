@@ -1,6 +1,6 @@
 # TASK-047：新评测靶场建立与 golden 重建（hello-agents）+ M2a 冒烟脚本
 
-> 状态：**review** ｜ 阶段：Phase 2（M2b / W6-lane C）｜ 硬依赖：无（core 可用即可）｜ soft 依赖：TASK-046（云端 embedding 让索引变快）
+> 状态：done（2026-09-13 编排者评审合并；31 条用例、基线报告、冒烟脚本均已独立验证）｜ 硬依赖：无（core 可用即可）｜ soft 依赖：TASK-046（云端 embedding 让索引变快）
 > 建议分支：`feature/task-047_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `benches/golden/hello-agents/`（**新建目录**：本靶场用例）

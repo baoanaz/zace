@@ -63,7 +63,7 @@
 | M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式 → **MCP 端点（demo 收口）** → 验收手册 —— **已完成** |
 | M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行）—— **已完成**（结论：沿用 e5-small） |
 | M2b-2 | `zace-lane-c` | TASK-036 | 多仓库规模自举 —— **已完成** |
-| **W6（当前）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents（规划：`docs/plan/phase2-m2b-w6.md`） |
+| **W6（已完成）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents —— **三张卡已合并进 main**（`01d9016`）；性能基准见 `benches/results/index-performance-w6.md` |
 | M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 
@@ -76,7 +76,7 @@
 |---|---|---|---|---|
 | [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | done |
 | [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | done |
-| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **in_progress（W6-lane A）** |
+| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **done（W6-lane A，已合并；§C/§D 测量缺口见备注）** |
 | [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
 | [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **done（W6-lane C，已合并）** |
 | [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
@@ -86,6 +86,12 @@
 > **TASK-037 的硬依赖已改**：原卡写 `TASK-036`（要求用其规模数字做前后对照），但 TASK-036 已完成
 > 且其靶场（hmi / systemservice / Trellis）**在当前环境不存在**；改以 `hello-agents` + `zace` 自身
 > 作前后对照靶场（理由与替代口径见 `docs/plan/phase2-m2b-w6.md` §3.1）。
+> **TASK-037 的已知缺口（编排者评审记录，2026-09-13）**：代码与语义对齐已验证（725 passed；
+> 与 ripgrep / `ignore` crate 语义一致），但实施 AI **未回填任务卡“执行记录”、未落盘 §C 前后对照表与 §D 检索回归**。
+> 编排者已独立复核：忽略规则在新靶场上使候选文件 1862 → 1825（-37），阈值层另跳过 389 个二进制/超限文件；
+> 完整 ingest 实测 1436 文件 / 9389 chunks / 230.9s。**一个已确认的语义分歧**：对 git **已跟踪**文件，
+> zace 与 `git check-ignore` 不一致（36 个 / 1.9%，因 zace 按 `ignore` crate 语义、不豁免 tracked 文件）；
+> 契约（R42 / Module 05 §3.1）要求的是 `ignore` crate 语义，故**实现合规**，但该差异需在产品文档中说明。
 > **TASK-038 的降级依据**：用户 2026-09-13 拍板当前全程用云端 embedding、本地 ONNX 暂缓（U1/U2），
 > 保留卡但不派活。
 
