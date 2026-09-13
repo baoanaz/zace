@@ -2,10 +2,11 @@
 
 对应任务卡"验收标准（DoD）"逐条；每条测试的 docstring 标注它守的是哪一条。
 
-TASK-034 说明（本文件唯一的后续改动）：§A 预授权的**新增路径**（``/api/projects/attach``、
-``/api/projects/{id}/rescan``）属 CF-05 的**扩展**，卡内已登记。本文件用
-:data:`TASK_034_EXTENSION_PATHS` 把"允许多出哪些"写死：除此之外路径集合仍必须与
-``docs/contracts/openapi.yaml`` **完全相等**（多一个/少一个/改名依然失败）。
+后续卡说明：TASK-034（attach/rescan）、TASK-060（meta/me/bootstrap）、TASK-062/064
+（overview/index-runs/index-stats/index-stats 汇总/usage summary）预授权的**新增路径**属
+CF-05 的**扩展**，卡内已登记。本文件用 :data:`TASK_EXTENSION_PATHS` 把"允许多出哪些"写死：
+除此之外路径集合仍必须与 ``docs/contracts/openapi.yaml`` **完全相等**
+（多一个/少一个/改名依然失败）。
 ``docs/contracts/openapi.yaml`` 的同步由编排者执行（实施 AI 不改契约文件）。
 """
 
@@ -27,10 +28,26 @@ from tests.conftest import make_app, make_client
 
 # --------------------------------------------------------------------------- CF-05 路径快照
 
-#: TASK-034 §A 预授权的 CF-05 **扩展路径**（卡内登记；编排者需同步 ``openapi.yaml``）。
+#: 各任务卡预授权的 CF-05 **扩展路径**（卡内登记；编排者需同步 ``openapi.yaml``）。
 #: 这个白名单是刻意的：它把"扩展"与"漂移"分开——白名单外的任何差异依然会让测试失败。
-TASK_034_EXTENSION_PATHS: frozenset[str] = frozenset(
-    {"/api/projects/attach", "/api/projects/{id}/rescan"}
+#:
+#: - TASK-034 §A：本地模式的 attach / rescan；
+#: - TASK-060：部署形态（``/api/meta``）、当前身份（``/api/auth/me``）、
+#:   首个用户初始化（``/api/auth/bootstrap``）；
+#: - TASK-062/064：账户概览、索引历史与统计、查询用量汇总。
+TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/projects/attach",
+        "/api/projects/{id}/rescan",
+        "/api/meta",
+        "/api/auth/me",
+        "/api/auth/bootstrap",
+        "/api/account/overview",
+        "/api/projects/{id}/index-runs",
+        "/api/projects/{id}/index-stats",
+        "/api/index-stats",
+        "/api/usage/summary",
+    }
 )
 
 
@@ -42,7 +59,7 @@ def test_openapi_paths_match_cf05_contract(
     路径多一个 / 少一个 / 改名（含路径参数名）都会失败，并在断言消息里给出两侧差异。
     """
     actual = set(app.openapi()["paths"])
-    expected = set(contract_paths) | set(TASK_034_EXTENSION_PATHS)
+    expected = set(contract_paths) | set(TASK_EXTENSION_PATHS)
     assert actual == expected, _path_diff(actual, expected)
 
 
@@ -104,29 +121,19 @@ def test_healthz_deep_reports_provider_failure_without_500(
 # --------------------------------------------------------------------------- 错误信封（CF-05）
 
 
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        # M2a-1 期间保持占位的端点：鉴权归 M2c，审计读取口归 M2c/Phase 3。
-        # （projects / query / sync 的真实行为由 TASK-031..033 的测试覆盖，不再是占位。）
-        ("post", "/api/auth/register"),
-        ("post", "/api/auth/login"),
-        ("post", "/api/auth/logout"),
-        ("post", "/api/auth/tokens"),
-        ("get", "/api/auth/tokens"),
-        ("delete", "/api/auth/tokens/abc"),
-        ("get", "/api/usage/projects/abc"),
-    ],
-)
-def test_placeholder_routes_return_501_envelope(
-    client: TestClient, method: str, path: str
-) -> None:
-    """占位路由：501 + ``{"error":{"code":"not_implemented"}}``（路径存在、实现待后续卡）。"""
-    response = client.request(method, path, json={})
-    assert response.status_code == 501
-    body = response.json()
-    assert body["error"]["code"] == "not_implemented"
-    assert body["error"]["message"]
+def test_not_implemented_helper_still_builds_501_envelope() -> None:
+    """``not_implemented`` 助手保留：501 + ``{"error":{"code":"not_implemented"}}``。
+
+    TASK-060/062/064 已把 CF-05 里最后的占位端点（``/api/auth/*``、``/api/usage/**``）落地，
+    因此不再有"路径存在但返 501"的路由；这个助手继续留给**未来**的新占位使用，
+    这里直接验证它的信封形状（否则它会成为无人使用的死代码）。
+    """
+    from zace_service.errors import not_implemented
+
+    error = not_implemented("某种能力", "TASK-XXX")
+    assert error.status == 501
+    assert error.code == "not_implemented"
+    assert error.message
 
 
 def test_unknown_path_uses_error_envelope(client: TestClient) -> None:

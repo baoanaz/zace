@@ -1,15 +1,19 @@
-"""``/healthz`` 与 ops 端点（TASK-030 §交付物；TASK-034 §D 追加 projects 进度）。
+"""``/healthz``、账户概览、索引历史与查询用量端点。
 
-``GET /healthz``（CF-05，``security: []``）：存活 + 依赖检查。口径：
+分工：
 
-- **不加载 embedding 模型**（默认路径必须毫秒级返回）：只做一次 ``zace_core`` 顶层导入
-  （纯 python 小模块），用于回答"内核是否可导入"；
-- ``projects``（TASK-034）：本地模式已绑定项目的 ``{projectId, attachedRoot, indexProgress}``，
-  **纯内存读取**（索引进行中也不变慢；不因索引中而返回非 200）；
-- ``?deep=1`` 才探测 embedding provider（构造 + 预热/试嵌），失败时返回 **200** 且
-  ``core.ok=false`` + ``reason``——探活端点自身不因依赖不可用而 500（否则监控无法区分
-  "服务挂了"与"依赖没配好"）；
-- reason 经 :func:`zace_service.logging.redact_text` 脱敏（provider 报错文本可能含 base_url/key）。
+| 端点 | 卡 | 语义 |
+|---|---|---|
+| ``GET /healthz`` | TASK-030/034 | 存活 + 依赖检查 + 项目进度（**免鉴权**） |
+| ``GET /api/account/overview`` | TASK-062/064 | 首页仪表盘：账户资料 + 索引成功/失败/平均耗时 |
+| ``GET /api/projects/{id}/index-runs`` | TASK-062 | 单项目索引历史 |
+| ``GET /api/projects/{id}/index-stats`` | TASK-062 | 单项目索引统计（当前进度 + 落库聚合） |
+| ``GET /api/usage/projects/{id}`` | TASK-064 | 单项目查询用量（**替换 501 占位**） |
+| ``GET /api/usage/summary`` | TASK-064 | 跨项目用量汇总 |
+
+口径见 ``docs/design/Module/04-AI总结.md`` §8（审计存档）与 ``docs/tasks/TASK-062`` §C/§D。
+**诚实性**：无数据时一律 ``null``/``0``；``citationCoverageAvg`` 在 LLM 接入前恒为 ``null``
+（"尚未测量"不是 0）。
 """
 
 from __future__ import annotations
@@ -18,13 +22,21 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from zace_service.deps import get_settings
-from zace_service.errors import not_implemented
-from zace_service.logging import redact_text
+from zace_service.deps import get_engine_manager, get_settings
+from zace_service.logging import get_logger, redact_text
+from zace_service.metadb import MetaDB
+from zace_service.stats import account_overview
 
 router = APIRouter(tags=["ops"])
 
-_USAGE_TASK = "M2c/Phase 3（审计存档读取口）"
+logger = get_logger("zace_service.routers.ops")
+
+#: 历史/用量端点的默认与上限查询条数。
+DEFAULT_LIMIT = 20
+MAX_LIMIT = 200
+#: 用量窗口默认与上限（天）。
+DEFAULT_DAYS = 30
+MAX_DAYS = 365
 
 
 @router.get("/healthz")
@@ -39,8 +51,8 @@ def healthz(request: Request, deep: int = 0) -> dict[str, Any]:
         "version": settings.version,
         "dataRoot": str(settings.data_root),
         "localMode": settings.local_mode,
-        # R34：M2a 本地单用户模式免鉴权；M2c 才接入 token/session。
-        "auth": "disabled(local)" if settings.local_mode else "enabled",
+        # TASK-060：按**真实**鉴权状态报告（此前按 local_mode 硬编码，TASK-051 A1 记为诚实性缺陷）。
+        "auth": "disabled(local)" if settings.local_mode else "required",
         "core": core,
         "projects": _project_progress(request),
     }
@@ -71,11 +83,134 @@ def _project_progress(request: Request) -> list[dict[str, Any]]:
     return projects
 
 
+# --------------------------------------------------------------------------- 账户概览
+
+
+@router.get("/api/account/overview")
+def overview(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
+    """首页仪表盘（账户资料 + 索引成功/失败/平均耗时 + 查询用量）。
+
+    身份与项目范围由 ``app.py`` 的鉴权依赖保证：这里只聚合**当前用户**的项目
+    （未鉴权时按本地模式的全量项目）。
+    """
+    manager = get_engine_manager(request)
+    db = _meta_db(request)
+    user = getattr(request.state, "zace_user", None)
+    window = max(1, min(int(days), MAX_DAYS))
+
+    listed = manager.list_projects()
+    user_id = getattr(user, "id", None)
+    if user_id is not None and db is not None:
+        owned = set(db.list_projects(user_id))
+        # 未登记归属的项目（本地 attach 后尚未 claim）不计入概览，避免"看到不属于自己的项目"。
+        listed = [item for item in listed if str(item["projectId"]) in owned]
+    return account_overview(
+        user_name=getattr(user, "name", "local"),
+        user_created_at=getattr(user, "created_at", 0),
+        is_local=bool(getattr(user, "is_local", True)),
+        project_ids=[str(item["projectId"]) for item in listed],
+        projects=listed,
+        db=db,
+        days=window,
+    )
+
+
+# --------------------------------------------------------------------------- 索引历史
+
+
+@router.get("/api/projects/{id}/index-runs")
+def project_index_runs(
+    id: str, request: Request, limit: int = DEFAULT_LIMIT
+) -> list[dict[str, Any]]:
+    """单项目索引历史（最近 ``limit`` 条，按结束时间倒序）。"""
+    db = _require_meta_db(request)
+    return [run.to_json() for run in db.index_runs(id, limit=_limit(limit))]
+
+
+@router.get("/api/projects/{id}/index-stats")
+def project_index_stats(id: str, request: Request, limit: int = DEFAULT_LIMIT) -> dict[str, Any]:
+    """单项目索引统计：内存态当前进度 + 落库历史聚合 + 磁盘占用。"""
+    manager = get_engine_manager(request)
+    return manager.index_stats(id, limit=_limit(limit))
+
+
+@router.get("/api/index-stats")
+def all_index_stats(request: Request, limit: int = DEFAULT_LIMIT) -> dict[str, Any]:
+    """跨项目索引汇总（当前用户的项目）。"""
+    manager = get_engine_manager(request)
+    db = _require_meta_db(request)
+    ids = _visible_project_ids(request, manager)
+    stats = db.all_index_stats(ids, limit=_limit(limit)).to_json()
+    stats["diskBytes"] = sum(
+        manager.index_stats(pid, limit=0)["diskBytes"] for pid in ids
+    )
+    return stats
+
+
+# --------------------------------------------------------------------------- 查询用量
+
+
 @router.get("/api/usage/projects/{id}")
-async def project_usage(id: str) -> None:  # noqa: A002 - 路径参数名与 CF-05 逐字对齐
-    """查询审计（Module/04 §8 存档的读取口）。"""
-    _ = id
-    raise not_implemented("GET /api/usage/projects/{id}（查询审计）", _USAGE_TASK)
+def project_usage(id: str, request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
+    """单项目查询用量（04 §8 审计存档的读取口；**替换 501 占位**）。"""
+    db = _require_meta_db(request)
+    summary = db.usage_summary([id], days=_days(days)).to_json()
+    summary["projectId"] = id
+    summary["days"] = _days(days)
+    return summary
+
+
+@router.get("/api/usage/summary")
+def usage_summary(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
+    """跨项目用量汇总（当前用户的项目）。"""
+    manager = get_engine_manager(request)
+    db = _require_meta_db(request)
+    ids = _visible_project_ids(request, manager)
+    summary = db.usage_summary(ids, days=_days(days)).to_json()
+    summary["days"] = _days(days)
+    return summary
+
+
+# --------------------------------------------------------------------------- 辅助
+
+
+def _meta_db(request: Request) -> MetaDB | None:
+    db = getattr(request.app.state, "meta_db", None)
+    return db if isinstance(db, MetaDB) else None
+
+
+def _require_meta_db(request: Request) -> MetaDB:
+    """元数据库不可用 → 503（而不是返回空列表让人以为"从来没有索引过"）。"""
+    db = _meta_db(request)
+    if db is None:
+        from zace_service.errors import ApiError
+
+        raise ApiError(
+            code="meta_db_unavailable",
+            message="元数据库未就绪（zace-meta.db）：请通过 create_app 启动服务",
+            status=503,
+        )
+    return db
+
+
+def _visible_project_ids(request: Request, manager: Any) -> list[str]:
+    """当前用户可见的 projectId（未鉴权时退化为全量，本地模式口径）。"""
+    all_ids = [str(item["projectId"]) for item in manager.list_projects()]
+    db = _meta_db(request)
+    user = getattr(request.state, "zace_user", None)
+    user_id = getattr(user, "id", None)
+    if db is None or user_id is None:
+        return all_ids
+    owned = set(db.list_projects(user_id))
+    return [pid for pid in all_ids if pid in owned]
+
+
+def _limit(value: int) -> int:
+    return max(1, min(int(value), MAX_LIMIT))
+
+
+def _days(value: int) -> int:
+    return max(1, min(int(value), MAX_DAYS))
 
 
 def _core_importable() -> bool:

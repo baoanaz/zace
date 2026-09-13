@@ -44,11 +44,15 @@ from zace_core.types import ChangeSet, ProjectHandle
 from zace_service.blobstore import BlobSource, BlobStore
 from zace_service.errors import embedding_failure_reason
 from zace_service.indexer import (
+    STATE_DONE,
+    STATE_FAILED,
     IndexProgress,
     ProjectIndexer,
     validate_local_root,
 )
 from zace_service.logging import redact_text
+from zace_service.metadb import MetaDB
+from zace_service.stats import dir_size_bytes
 from zace_service.sync_state import SyncState
 
 __all__ = ["AttachResult", "EngineManager"]
@@ -111,6 +115,8 @@ class EngineManager:
         self._local_roots: dict[str, Path] = {}
         self._indexers: dict[str, ProjectIndexer] = {}
         self._last_rescan: dict[str, float] = {}
+        #: 元数据库（TASK-062/064：索引历史与查询审计）；未注入时历史/统计退化为空而不报错。
+        self._meta_db: MetaDB | None = None
 
     @classmethod
     def open(
@@ -426,9 +432,64 @@ class EngineManager:
                     root,
                     ingest=lambda: self._engine.ingest_repo(project_id, root),
                     lock=lock,
+                    on_finish=(
+                        lambda progress, pid=project_id: self._record_index_run(pid, progress)
+                    ),
                 )
                 self._indexers[project_id] = indexer
             return indexer
+
+    # ------------------------------------------------------------------ 历史与统计（TASK-062/064）
+
+    def attach_meta_db(self, db: MetaDB) -> None:
+        """注入元数据库（``create_app`` 或测试调用；未注入时历史/统计不可用但不报错）。"""
+        self._meta_db = db
+
+    @property
+    def meta_db(self) -> MetaDB | None:
+        return self._meta_db
+
+    def _record_index_run(self, project_id: str, progress: IndexProgress) -> None:
+        """把一次索引的结束态写进 ``index_runs``（``running`` 不落库：服务被杀不留幽灵行）。
+
+        口径（TASK-062 §C/§D）：
+        - **成功与失败都落**（只记成功会让"失败次数"恒为 0）；
+        - ``state="done"`` 且 ``error`` 非空仍算 **succeeded**（那只是部分文件有解析问题），
+          ``errors`` 字段存条数、``error_text`` 存摘要；
+        - 回调异常在 ``ProjectIndexer._notify_finish`` 已吞掉，不让记帐拖垮索引。
+        """
+        db = self._meta_db
+        if db is None or progress.state not in (STATE_DONE, STATE_FAILED):
+            return
+        started = progress.started_at or progress.finished_at or int(time.time())
+        finished = progress.finished_at or int(time.time())
+        db.record_index_run(
+            project_id,
+            state=progress.state,
+            started_at=int(started),
+            finished_at=int(finished),
+            files_total=progress.total_files,
+            files_processed=progress.processed_files,
+            errors=_count_errors(progress.error),
+            error_text=progress.error,
+        )
+
+    def index_stats(
+        self, project_id: str, *, limit: int = 20, days: int | None = None
+    ) -> dict[str, Any]:
+        """单项目索引统计（内存态当前进度 + 落库历史；无 MetaDB 时只剩当前进度）。"""
+        current = self.index_progress(project_id).to_json()
+        history = (
+            self._meta_db.index_stats(project_id, limit=limit).to_json()
+            if self._meta_db is not None
+            else {"total": 0, "succeeded": 0, "failed": 0, "recent": []}
+        )
+        return {
+            "projectId": project_id,
+            "current": current,
+            "history": history,
+            "diskBytes": dir_size_bytes(self._engine.project_dir(project_id)),
+        }
 
     def _stop_indexer(self, project_id: str) -> None:
         """取消并等后台索引收尾（删除项目前调用；见 :meth:`delete_project`）。"""
@@ -449,3 +510,14 @@ class EngineManager:
                 lock = threading.Lock()
                 self._locks[project_id] = lock
             return lock
+
+
+def _count_errors(error_text: str | None) -> int:
+    """从 ``IndexProgress.error`` 摘要里数出条目数（逗号分隔的解析问题列表）。
+
+    口径：``state="done"`` 时它非空表示"索引完成，但这些文件有解析问题"（不是失败），
+    因此条数单独记在 ``errors`` 字段里，与 ``state`` 的含义互不覆盖。
+    """
+    if not error_text:
+        return 0
+    return len([item for item in (part.strip() for part in error_text.split(",")) if item])
