@@ -206,6 +206,7 @@ def test_from_env_reads_embed_variables() -> None:
             "EMBED_DIM": "1024",
             "EMBED_MAX_INPUT_TOKENS": "4096",
             "EMBED_BATCH_SIZE": "8",
+            "EMBED_BATCH_TOKEN_BUDGET": "24576",
             "EMBED_OFFLINE": "true",
         }
     )
@@ -216,7 +217,32 @@ def test_from_env_reads_embed_variables() -> None:
     assert config.dim == 1024
     assert config.max_input_tokens == 4096
     assert config.batch_size == 8
+    assert config.batch_token_budget == 24576
     assert config.offline is True
+
+
+def test_batch_token_budget_defaults_to_none_and_reaches_provider() -> None:
+    """TASK-048：未配置时保持 provider 自带的默认（None 不得写成 0 或覆盖）。"""
+    assert EmbeddingConfig.from_env(
+        {"EMBED_MODE": "api", "EMBED_MODEL": "bge-m3"}
+    ).batch_token_budget is None
+    provider = create_provider(
+        {
+            "mode": "api",
+            "model": "bge-m3",
+            "base_url": "https://api.example.com",
+            "api_key": "sk-x",
+            "batch_token_budget": 24576,
+            "batch_size": 128,
+        }
+    )
+    assert provider.batch_token_budget == 24576
+    assert provider.batch_size == 128
+
+
+def test_batch_token_budget_rejects_non_positive() -> None:
+    with pytest.raises(EmbeddingConfigError, match="batch_token_budget"):
+        EmbeddingConfig.from_env({"EMBED_BATCH_TOKEN_BUDGET": "0"})
 
 
 def test_from_env_defaults_to_local() -> None:

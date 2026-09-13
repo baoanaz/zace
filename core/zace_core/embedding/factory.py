@@ -92,6 +92,9 @@ class EmbeddingConfig:
     dim: int | None = None
     max_input_tokens: int | None = None
     batch_size: int | None = None
+    #: API 侧的**累计 token 预算**（TASK-046 §D 引入该参数；本字段是 TASK-048 新增的配置入口）。
+    #: 只有 API 模式消费；本地 ONNX 按 tokenizer 自行截断，与预算无关。
+    batch_token_budget: int | None = None
     cache_dir: str | None = None
     model_dir: str | None = None
     offline: bool = False
@@ -105,7 +108,7 @@ class EmbeddingConfig:
     def __post_init__(self) -> None:
         if self.mode not in ("local", "api"):
             raise EmbeddingConfigError(f"mode 必须是 'local' 或 'api'，收到 {self.mode!r}")
-        for name in ("dim", "max_input_tokens", "batch_size"):
+        for name in ("dim", "max_input_tokens", "batch_size", "batch_token_budget"):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise EmbeddingConfigError(f"{name} 必须 ≥ 1，收到 {value}")
@@ -128,6 +131,7 @@ class EmbeddingConfig:
             ("dim", "EMBED_DIM"),
             ("max_input_tokens", "EMBED_MAX_INPUT_TOKENS"),
             ("batch_size", "EMBED_BATCH_SIZE"),
+            ("batch_token_budget", "EMBED_BATCH_TOKEN_BUDGET"),
         ):
             raw = source.get(raw_key)
             if raw:
@@ -250,6 +254,11 @@ def _create_api(
         api_key=config.api_key,
         client=client,
         batch_size=config.batch_size or API_DEFAULT_BATCH_SIZE,
+        **(
+            {"batch_token_budget": config.batch_token_budget}
+            if config.batch_token_budget is not None
+            else {}
+        ),
         max_retries=config.max_retries,
         sleep=sleep or time.sleep,
         timeout_total=config.timeout_total,
