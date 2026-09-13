@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from zace_core.embedding.base import EmbeddingConfigError
 from zace_core.embedding.registry import (
+    API_MODEL_ALIASES,
     API_MODELS,
     DEFAULT_LOCAL_SLUG,
     LOCAL_MODELS,
@@ -62,3 +63,29 @@ def test_get_local_spec_unknown_slug_lists_candidates() -> None:
 def test_find_api_spec_returns_none_for_unregistered_model() -> None:
     assert find_api_spec("bge-m3") is API_MODELS["bge-m3"]
     assert find_api_spec("some-self-hosted-model") is None
+
+
+# --- TASK-046 §A：别名解析 -------------------------------------------------
+
+
+def test_vendor_prefixed_alias_resolves_to_registered_spec() -> None:
+    """官方文档的写法（BAAI/bge-m3）必须命中已登记条目，而不是“未登记模型”。"""
+    assert find_api_spec("BAAI/bge-m3") is API_MODELS["bge-m3"]
+
+
+def test_alias_does_not_change_fingerprint_id() -> None:
+    """别名与裸名是同一条目：model_id 相同 → 换写法不触发无谓重嵌（D-07）。"""
+    assert find_api_spec("BAAI/bge-m3").model_id == API_MODELS["bge-m3"].model_id == "api:bge-m3"
+
+
+def test_alias_targets_are_registered_keys() -> None:
+    for alias, canonical in API_MODEL_ALIASES.items():
+        assert canonical in API_MODELS, f"别名 {alias} 指向未登记条目 {canonical}"
+        assert alias not in API_MODELS, f"{alias} 应作为别名而非独立条目"
+
+
+def test_request_name_is_the_provider_facing_name() -> None:
+    """注册表 key 是 zace 侧的，发给 API 的必须是 provider 认的名字。"""
+    assert API_MODELS["bge-m3"].api_model == "BAAI/bge-m3"
+    # 未设 request_name 的条目回落 name
+    assert API_MODELS["text-embedding-3-small"].api_model == "text-embedding-3-small"

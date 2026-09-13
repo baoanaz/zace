@@ -268,4 +268,217 @@ $ curl -d '{"model":"BAAI/bge-m3","input":["word " * 9000]}' ...
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-13 ｜ 分支 `feature/task-046_xwz0913`（基于 main `3cc760c`）
+
+**总览**：F1（别名解析，路线 a）、F2（上限取模型实际能力 + `min` 语义）、F4（按 token 截断 + 按 token 预算
+分批）已实现；F3 手册已落地。F1/F4 双阻断项均已消除，`hello-agents` 全量 ingest **首次跑通**。
+
+---
+
+#### 1. F1 路线选择与理由（选了 **(a) 别名解析**）
+
+`registry.py` 新增 `ApiModelSpec.request_name`（发给 API 的 model 字段）与 `API_MODEL_ALIASES`
+（`BAAI/bge-m3` → `bge-m3`），`find_api_spec()` 先查 key 再查别名。
+
+理由：
+
+1. **不破坏既有配置**：`EMBED_MODEL=bge-m3` 仍可用（路线 b 会让它静默变成"未登记模型"）；
+2. **够容纳同名模型**：key 是「哪家的哪个模型」的稳定标识，将来 OpenAI 的 `text-embedding-3-small`
+   与别家同名模型可以靠 key 区分；
+3. **职责单一**：别名替换只发生在「发请求前」，其它路径（指纹、日志、错误信息）一律用 key。
+
+`profile.model_id` **用注册表 key**（`api:bge-m3`），不用 `request_name`。理由：key 才能区分 provider——
+换 provider（同名模型）会改 key → 改指纹 → 触发 D-07 二级失效（重嵌）；而改写法（`bge-m3` ↔ `BAAI/bge-m3`）
+指纹不变，**不会**触发无谓重嵌。两个方向都正确。
+
+实测：
+
+```console
+EMBED_MODEL='BAAI/bge-m3' -> model_id=api:bge-m3 dim=1024 max_input_tokens=8192 api_model='BAAI/bge-m3'
+EMBED_MODEL='bge-m3'      -> model_id=api:bge-m3 dim=1024 max_input_tokens=8192 api_model='BAAI/bge-m3'
+```
+
+#### 2. F2 上限默认值
+
+- 未给 `EMBED_MAX_INPUT_TOKENS` → 取**模型登记值**（bge-m3 = 8192）；未登记模型才回落
+  `UNKNOWN_API_MAX_INPUT_TOKENS`（2048）；
+- 给更小值 → 尊重（`min` 语义）；
+- 给**大于**模型能力的值 → 钳回 8192 + `UserWarning`（**顺带覆盖了 TASK-038 的 `min` 语义**，
+  但**未碰 `local.py`**——它仍是 TASK-038 的领地；本卡的钳制在 `factory.py` 的 API 分支内）。
+  实测：`max_input_tokens=99999` → 钳为 8192 并 warning。
+
+指纹用的是**生效值**（`replace()` 之后才进 `EmbeddingProfile`），所以"配置不同但生效值相同"不会重嵌。
+
+#### 3. F4 截断与分批（实现方式与选择理由）
+
+**截断选择：用 tokenizer（精确），带字节退路。**
+
+- `tokenizers>=0.20` 已是 `core/pyproject.toml` 正式依赖（已核实，非新增）；
+- 为 bge-m3 在 registry 登记 `tokenizer_repo_id="BAAI/bge-m3"`，provider 惰性加载（HF 缓存）；
+- **拿不到 tokenizer 时**回落按 **UTF-8 字节数**截断：byte-level BPE 每 token ≥ 1 字节，
+  故字节数是 token 数的**安全上界**——代价是英文欠填（~4 字节/token），但**绝不把超长输入发给 API**。
+- **不选"4 字符 ≈ 1 token"估算**：对 CJK 会低估（中文约 1 字符/token），超限风险不可控。
+
+**实现中发现并修掉一个真 bug**（值得评审注意）：最初的"解码→重编码→再解码"回验循环在边界抖动下
+**不收敛**（每轮只退 2 token，重编码又回到同长），8 次耗尽后退到字节退路 → **中文长文档被砍到
+1984/8192 token**（比不截断更糟）。改为**对原始 ids 递减切片**（每轮至少退 1 token，单调收缩）后，
+实测稳定填满 8191/8192。
+
+**分批选择：累计 token 预算 + 条数上限取先到者**（`DEFAULT_BATCH_TOKEN_BUDGET = 8192`，用于 64 条上限）。
+单条超预算的输入单独成批（不拆、不丢、不死循环）。**本地 provider 不受影响**（它按 token 自截断，
+批语义由 ONNX 侧决定）——两者语义一致：都是"发往模型前按 token 上限处理"。
+
+#### 4. 实测数字（实施 AI 本机复现，2026-09-13）
+
+| 探测 | 结果 |
+|---|---|
+| 裸名 `bge-m3` | `{"code":20012,"message":"Model does not exist..."}` |
+| 全名 `BAAI/bge-m3` | `200 OK`，dim=1024，0.22s |
+| **单条 token 上限** | **8192 token → 200（0.37s）；8193 token → `400 code=20015`** |
+| 超长输入截断后 | 337737 字符 → 截为 8191 token，嵌入成功（无 400） |
+| 前缀重复输入 `'word ' * N` | N≥800 时挂起/500 —— **探针假象**，真实文本无此现象 |
+
+> **口径校正（与卡内 §2.4 的差异）**：卡内记「8000 token 输入 0.27s 成功」，本机复测确认
+> **8192 是真实上限**（8192 OK / 8193 400），故 F2 默认值取 8192 正确。但卡内
+> 「默认 2048 导致长文档静默截断」在修复后不再成立——截断真实发生且按 8192 执行。
+
+#### 5. §D 端到端：`hello-agents` 完整 ingest（**本卡最重要证据**）
+
+修复前（复现编排者结论）：
+
+```console
+$ EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_DIM=1024 ... uv run zace-core ingest --repo .../hello-agents --data /tmp/zace-ha
+zace-core: ApiRateLimitError: embedding 被限流（HTTP 429 ... 已尝试 3 次）
+# 落库：files=1482 chunks=9971 vectors=0
+$ uv run zace-core search "ReAct 范式" ...
+warning: 向量索引为空（可能未重建）：chunks=9971，vectors=0
+```
+
+修复后（**`EMBED_MODEL=BAAI/bge-m3`，无 `EMBED_DIM`**——即用户主路径）：
+
+```console
+$ unset EMBED_DIM; uv run zace-core ingest --repo .../hello-agents --data /tmp/zace-ha3
+project: e9ee9dd1d41a7d2c (created)
+mode: incremental (invalidation=none)
+files: added=1482 modified=0 deleted=0 parsed=1482
+chunks: new=9971 reused=0 removed=0
+vectors: upserted=9971 deleted=0
+graph: edges_retargeted=3768 unresolved_resolved=69 spec_refs=20358 ambiguous=4081
+skipped: 380 个二进制/不可解码文件
+elapsed: 290.2s
+```
+
+`search` 侧：**`warning: 向量索引为空` 已消失**，命中项含 `vector 0.6316 + vector rank 13` —— 向量通道真的生效。
+
+#### 6. §D-4 失败可恢复性（实测，未改代码）
+
+对**失败库**（`/tmp/zace-ha`：chunks=9971、vectors=0）重跑：
+
+```console
+mode: incremental (invalidation=full_reparse)
+files: added=1482 modified=0 deleted=0 parsed=1482
+chunks: new=0 reused=9971 removed=0     ← 解析/切块未重做
+vectors: upserted=9971 deleted=0        ← 只有向量重算
+elapsed: 347.8s
+```
+
+**结论：能续上**。chunks 全部 `reused`（内容 hash 复用，TASK-014 语义成立），只重算向量。
+注意指纹判为 `full_reparse`——因为原失败库的 `index_config` 指纹与本次（`max_input_tokens` 2048 → 8192）不同，
+属于 D-07 的**正确**行为，不是缺陷。另外对已成功的库重跑是**幂等**的（`added=0 new=0 upserted=0`，1.4s）。
+
+#### 7. ⚠️ 与卡内 §D 前提的两处实测偏差（**请编排者重点看**）
+
+修复后回查数据，发现卡内 §D 对 F4 的**两个根因表述在本靶场上不成立**：
+
+**(1) “超长 chunk 直达 API 导致 400” —— 通过正常流水线不可达。**
+
+真正送嵌入的是 `embedding_text()`，而它受字符级 `EMBEDDING_BODY_MAX_CHARS=8000` 截断。实测：
+
+| 口径 | p50 | p90 | p99 | max | >8192 的条数 |
+|---|---|---|---|---|---|
+| `chunks.content`（卡内量的是这个） | 147 | 1052 | 12978 | **64138** | **182** |
+| `embedding_text()`（**真正发出去的**） | 162 | 1080 | 3814 | **4882** | **0** |
+
+那 182 条超大 chunk 经 `embedding_text()` 后 max 仅 4882 token，**无一条超 8192**。卡内的 400 探针
+是把 `content` 直发 API 得出的，不是流水线行为。
+
+**(2) “批 token 尖峰（几十万）触发 TPM 429” —— 在本靶场不成立。**
+
+按 `embedding_text` 实测：
+
+| 分批方式 | 批数 | 单批最大 token | 单批平均 token |
+|---|---|---|---|
+| 旧（按条数 64） | 156 | **106,330**（非“几十万”） | 27,740 |
+| 新（预算 8192） | 595 | 8,192 | 7,273 |
+
+且**两种方式的总 token 完全相同（4,327,564）**，所以按 token 预算分批**不减少总量**，
+因而不可能是“修好后 429 就消失”的原因。
+
+**那么 429 到底是什么？——是共用 key 的配额竞争。**
+
+时间线证据：修复前后代码相同的情况下，本机前期反复 429（41s / 164s 失败），而在泳道 A/C 的
+索引与 eval 进程停止后，**同一命令一次跑通（290s）**。即：
+
+> 429 的成因是**多个泳道/进程共用同一个 API key** 抢占配额，**不是**批尖峰、
+> **也不是** zace 的代码缺陷。
+
+**这不意味着 F4 无用**：
+
+- 截断仍是**真实潜在缺陷**的修复：任何直接调 provider 的调用方（或将来调大
+  `EMBEDDING_BODY_MAX_CHARS`、或换更小上限的模型）都会撞上 400；现在不会了。
+- 截断还修掉了一个**真实存在的 Bug**（见 §3 的“回验不收敛导致中文被砍到 1984/8192”）。
+- 按 token 预算分批使单批成本**有界且可预测**（8192而非106K），对限流容忍度与失败重试粒度都更好。
+- **代价**：请求数从 156 升到 595。RPM 侧仍充裕（约 2 req/s，远低于 2000 RPM），但
+  总耗时可能略微增加（本次全量 290s）。
+
+**建议**：卡内 §D 的“根因一/根因二”措辞建议由编排者按上表修正；另建议为“多进程配额协调”单独立卡。
+
+#### 8. 关于 429 的现场发现（补充）
+
+免费档 bge-m3 公开数据为 2000 RPM / 500,000 TPM；但本机全量实测 4.33M token / 290s ≈ **890K token/min**，
+**高于**该 TPM。说明要么实际配额更高，要么 TPM 非严格按每分钟切窗执行。因此单进程不是问题，
+**多进程并行会互相挤兑**。已写入手册 §4.3 排查顺序。
+
+#### 9. F3 推荐的 key 注入方式
+
+**推荐：项目根 `.env` + `set -a; source .env; set +a`。**
+理由：不依赖 shell 类型（`.bashrc` 有非交互守卫，子进程/脚本/CI 一律拿不到，本机已复现）；
+一条 `source` 对所有后续命令生效；`.env` 已被 `.gitignore` 第 30–32 行排除（`.env.example` 可提交）。
+
+**不推荐 `.bashrc`**：非交互进程拿不到（实测 `env -i bash -c ...` 与 `env -i bash -lc ...` 均为空），
+且把 key 与项目的绑定关系藏在 shell 配置里，换机器即失效。
+
+手册：`docs/handbook/云端embedding接入.md`（§2 完整命令序列、§3 实测数字区分来源、§4 行为说明、§5 隐私告知、§6 排查表）。
+
+#### 10. 验收命令与结果
+
+```console
+$ uv run pytest core/tests/embedding -o addopts="" -q
+100 passed, 1 skipped in 1.09s
+$ uv run pytest -o addopts="" -q
+694 passed, 2 skipped, 1 warning in 13.76s
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+```
+
+#### 11. 契约影响 / 与设计偏差 / 未决问题
+
+- **契约影响：无**。未改 `docs/contracts/**`、`interfaces.py`、`EmbeddingProfile` 字段与
+  `EmbeddingProvider` 签名（CF-09）。新增的只是 `ApiModelSpec` 的**新字段**（`request_name`、
+  `tokenizer_repo_id`）与模块级常量——`ApiModelSpec` 不是冻结契约（冻结的是字段**名**的既有部分）。
+- **与设计偏差：无**。`EmbeddingConfig.mode` 默认仍是 `local`（D-44）；未碰 `local.py`。
+- **未改 `service/zace_service/config.py`**：核实后**无必要**——service 通过进程环境间接使用
+  `EmbeddingConfig.from_env()`，key/模型名走 `EMBED_*` 环境变量即可，无需 service 侧新增配置项。
+- **未决问题**：
+  1. **卡内 §D 的两处根因表述与本靶场实测不符**（见 §7）——已如实记录，**未静默偏离设计**；
+     请编排者裁定是否需要修正卡内措辞。
+  2. **429 的根因是多进程共用 key**（见 §8）。若未来要“多泳道并行索引”，需要一个**进程间配额协调**
+     或按泳道发放不同 key —— 建议立卡，本卡不擅自扩范围。
+  3. 手册 §3.2 引用编排者的 token 分布数字未由本实施 AI 独立复现（已在本节 §7 用**两种口径**
+     重新量化并标注差异）。
+  4. **字符级上界 `EMBEDDING_BODY_MAX_CHARS=8000` 是实际生效的截断层**，对 CJK 可能先于 token 截断
+     生效（8000 字符中文 ≈ 8000 token）。当前不构成缺陷（token 截断仍在 provider 侧兜底），
+     但它意味着“长文档尾部证据”实际由**字符上界**决定而非模型能力（8192）——建议评估是否立卡。
+
