@@ -7,11 +7,19 @@ zace 的 MCP stdio 客户端：编辑器把它作为子进程拉起，它负责�
 
 ## 快速开始
 
+全局安装（装完 `zace-client` 进 `PATH`，首次启动更快）：
+
 ```bash
-npx zace-client --base-url http://127.0.0.1:8787
+npm install -g zace-client
 ```
 
-`npx` 会按平台下载对应二进制并启动服务（stdio）。
+也可以不安装，直接用 `npx`（按需下载二进制后启动）：
+
+```bash
+npx zace-client --base-url http://127.0.0.1:8787 --token "<你的 API Key>"
+```
+
+两种方式都会按平台下载对应二进制并启动服务（stdio）。
 
 ## 客户端配置
 
@@ -23,7 +31,7 @@ npx zace-client --base-url http://127.0.0.1:8787
 claude mcp add-json zace --scope user '{
   "type": "stdio",
   "command": "npx",
-  "args": ["zace-client", "--base-url", "http://127.0.0.1:8787"]
+  "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
 }'
 ```
 
@@ -34,7 +42,7 @@ claude mcp add-json zace --scope user '{
 ```toml
 [mcp_servers.zace]
 command = "npx"
-args = ["zace-client", "--base-url", "http://127.0.0.1:8787"]
+args = ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
 startup_timeout_ms = 60000
 ```
 
@@ -48,7 +56,7 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
   "mcpServers": {
     "zace": {
       "command": "npx",
-      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787"]
+      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
     }
   }
 }
@@ -61,7 +69,7 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
   "mcpServers": {
     "zace": {
       "command": "npx",
-      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787"]
+      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
     }
   }
 }
@@ -72,7 +80,7 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
 | 参数 | 环境变量 | 必填 | 说明 |
 |---|---|---|---|
 | `--base-url` | `ZACE_BASE_URL` | 是 | `zace-service` 基础地址（须带 `http://` 或 `https://`） |
-| `--token` | `ZACE_API_TOKEN` | 否 | 远端 API token（服务端鉴权落地后必填，见下） |
+| `--token` | `ZACE_API_TOKEN` | **服务端启用鉴权后必填** | 远端 API token：在管理面「API Key」页创建（`zace_` 前缀，明文只显示一次）。本地单用户模式（默认）无鉴权，可省略 |
 | `--cache-root` | `ZACE_CLIENT_CACHE` | 否 | 本地索引缓存根，默认 `~/.cache/zace` |
 
 命令行参数优先于环境变量。
@@ -97,8 +105,8 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
 
 ## 已知限制
 
-- **服务端鉴权尚未实现**（TASK-060/061）：`--token` 会被发送，但服务端当前放行所有请求；
-  上云前必须完成鉴权。
+- 服务端鉴权只在 `ZACE_LOCAL_MODE=false`（云端形态）下生效：本地单用户模式完全放行，
+  此时 `--token` 可省略（见 TASK-060）。云端形态下 token 无效/已撤销一律 401。
 - 首次索引大仓库时，第一个 tool call 会在上传期间等待（进度反馈属后续卡）。
 
 ## 从源码构建
