@@ -100,7 +100,18 @@
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
-| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 账户 console**（登录/注册/初始化 + 账户面板 + API Key + 历史记录 + Playground + 三按键接入指南） | 无（依赖 TASK-060/062/064 已合并） | `web/**` | **review**（`feature/task-070-webui_xwz0914`@lane-b；29 单测 + 真服务 e2e 通过） |
+| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 账户 console**（登录/注册/初始化 + 账户面板 + API Key + 历史记录 + Playground + 三按键接入指南） | 无（依赖 TASK-060/062/064 已合并） | `web/**` | **done**（已合并 `7e51802`；746 pytest + 29 单测 + lint/build 全绿） |
+| [TASK-080](TASK-080-接入指南两卡牌.md) | **接入指南重做**：两卡牌（npm 下载 + Agent 接入）+ 配置必带 `--token` | 无 | `web/src/app/connect-info.{ts,test.ts}`、`web/src/pages/ConnectPage.tsx`、`npm/README.md` | pending |
+| [TASK-081](TASK-081-密码长度放宽.md) | 密码长度下限 8 → **3**（含测试与文案同步） | 无 | `service/zace_service/routers/auth.py`、`service/tests/test_auth.py`、`web/src/api/client.ts` | pending |
+| [TASK-082](TASK-082-删除Playground与项目页.md) | **删除 Playground 与项目管理页**（导航/路由/死链/测试一并清理；仪表盘保留项目列表） | 无 | `web/src/app/{App,Layout}.tsx`、`web/src/pages/{Playground,Projects,ProjectDetail}*`、`DashboardPage.tsx`、`HistoryPage.tsx`、`e2e.test.tsx`、`web/src/api/client.ts` | pending |
+| [TASK-083](TASK-083-空态与错误态.md) | **空态/加载态/错误态统一**（`EmptyState` 组件 + 各页替换） | **TASK-082** | `web/src/components/ui.tsx`、`HistoryPage.tsx`、`DashboardPage.tsx`、`ApiKeysPage.tsx` | pending |
+| [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | pending |
+| [TASK-085](TASK-085-索引统计接上传路径.md) | **索引统计接上客户端上传路径**（补 TASK-062）：`npx zace-client` 索引后面板不再恒为 0 | TASK-060/062 | `service/zace_service/runtime.py`、`service/tests/test_index_stats.py`(新建) | pending |
+
+> **TASK-084/085 的由来**（编排者实测，2026-09-13）：TASK-062/064 的**建表与方法已实现**，
+> 但（a）`record_query()` 全仓零调用、`audit.py` 不存在；（b）索引 run 记录只覆盖本地 attach 路径，
+> 客户端上传路径（Agent 实际用的）不记录。两张卡要求的验收测试文件也不存在。
+> 因此 WebUI 的「使用记录」与「索引统计」在真实场景下**恒为空**——本波是补做，不是新功能。
 
 > TASK-070 的未就绪页（登录/注册/初始化/token/用量/设置）**显式标注依赖卡号**，不用假数据填充；
 > 后端落地后另开 TASK-071 补齐这六页（卡内已列为 soft 依赖）。
