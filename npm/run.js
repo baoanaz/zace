@@ -65,6 +65,18 @@ function assetName() {
   );
 }
 
+// 再一层回退：PATH 里已有 zace-client（例如 `cargo install --path client` 装的）。
+function fromPath(name) {
+  for (const directory of (process.env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, name);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return null;
+}
+
 function log(message) {
   console.error(`[${PACKAGE_NAME}] ${message}`);
 }
@@ -269,10 +281,19 @@ async function resolveBinary() {
           return candidate;
         }
       }
+      const onPath = fromPath(BINARY_NAME);
+      if (onPath && path.resolve(onPath) !== path.resolve(target)) {
+        log(`改用 PATH 里的二进制：${onPath}`);
+        return onPath;
+      }
       log("");
-      log("请任选一种方式安装：");
-      log("  1) 从源码构建：cd client && cargo build --release");
-      log(`  2) 手动放置二进制到：${target}`);
+      if (/HTTP 404|Not Found/.test(error.message)) {
+        log(`原因：v${packageVersion()} 的 GitHub Release 还没有该平台资产——通常是“先发了 npm 包、还没发 Release”。`);
+      }
+      log("请任选一种方式解决：");
+      log(`  1) 下载对应平台的 release 资产并放到：${target}`);
+      log("  2) 从源码构建：git clone 后执行  cd client && cargo build --release");
+      log("     （在仓库内运行时，包装器会自动发现 client/target/release/zace-client）");
       log(`  3) 从 release 页下载：https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`);
       process.exit(1);
     }

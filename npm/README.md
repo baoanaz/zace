@@ -84,6 +84,17 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
 | `search_context` | 检索与问题最相关的上下文（代码/调用链/文档证据包，带文件:行号） |
 | `ask_project` | 项目级问题；当前返回检索结果 + 降级说明（LLM 总结属 Phase 3） |
 
+## 二进制从哪来（三级回退）
+
+1. **缓存命中** —— `~/.cache/zace-client/<version>/zace-client` 已存在，直接拉起（不上网）；
+2. **下载** —— 从 `github.com/baoanaz/zace` 的 `v<version>` Release 取对应平台资产
+   （带文件锁防并发、指数退避重试）；
+3. **回退** —— 下载失败时依次尝试：仓库内已构建的 `client/target/{release,debug}/zace-client`
+   → `PATH` 里的 `zace-client`（如 `cargo install --path client` 装的）；都没有则打印安装指引并以非 0 退出。
+
+> 因此**发布顺序很重要**：必须**先发 GitHub Release（五平台资产）再发 npm 包**，
+> 否则用户首次运行会拿到 404（包装器会提示这一点）。
+
 ## 已知限制
 
 - **服务端鉴权尚未实现**（TASK-060/061）：`--token` 会被发送，但服务端当前放行所有请求；
@@ -97,4 +108,4 @@ git clone https://github.com/baoanaz/zace && cd zace/client
 cargo build --release        # 产物：target/release/zace-client
 ```
 
-`npm/run.js` 在下载不可用时会自动回退到 `client/target/{release,debug}/zace-client`。
+`npm/run.js` 在下载不可用时会自动回退到 `client/target/{release,debug}/zace-client` 或 PATH 里的 `zace-client`。

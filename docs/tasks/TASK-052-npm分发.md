@@ -127,8 +127,28 @@ a11af9dfebef5b3b                      # 客户端缓存目录
 
 1. 缓存命中 → 直接拉起（不上网）；
 2. 缓存未命中 → 从 `releases/tags/v<version>` 下载资产（带文件锁防并发、指数退避重试）；
-3. 下载失败（本机实测 **HTTP 404**，因为还没发布 Release）→ **回退到本地已构建的二进制**
-   `client/target/{release,debug}/zace-client`；再失败则给出三条可操作的安装指引并以非 0 退出。
+3. 下载失败（本机实测 **HTTP 404**，因为还没发布 Release）→ 依次回退：
+   **仓库内已构建的二进制** `client/target/{release,debug}/zace-client` → **PATH 里的 `zace-client`**
+   （如 `cargo install --path client`）；都没有则给出三条可操作的安装指引并非 0 退出。
+
+新增的两条**对外保证**（用户报错时不会再拿着"Could not download"发呆）：
+
+- 404 时明确指出原因：**"先发了 npm 包、还没发 Release"** —— 并据此把发布顺序写进 `npm/README.md`；
+- 明确指出"回退到了哪一个二进制"（实测两条日志：`改用本地已构建的二进制：…` / `改用 PATH 里的二进制：…`）。
+
+**npm 真实安装路径验证**（不只跑仓库内的 `node npm/run.js`）：
+
+```console
+$ npm pack                          # 生成 zace-client-0.0.1.tgz（5999 字节）
+$ npm install <该 tgz>              # 模拟用户 `npx zace-client`
+added 1 package in 139ms
+$ ls node_modules/.bin/
+zace-client                         # bin 链接正确
+```
+
+对于“为什么 `npx` 不会污染 MCP 的 stdout”这一关键疑虑，也做了实测：`npx -y cowsay` 的安装进度全部进
+**stderr**，stdout 只有程序本身的输出；包名写错时也是 `stdout=''`、错误全在 stderr。
+（`zace-tool-rs` 正是“包名写错”那一类：已确认它在 npm 上不存在，会得到 E404 而非静默失败。）
 
 **契约影响**：无（未改任何契约文件；`server.json` 是新增的 MCP registry 清单，非 CF-* 契约）。
 
@@ -137,10 +157,13 @@ a11af9dfebef5b3b                      # 客户端缓存目录
 
 **未决问题**
 
-1. **发布与命名**：包名暂定 `zace-client`，`server.json` 的 `name` 暂定 `io.github.baoanaz/zace-client`
-   —— 发布到公共 npm / MCP registry 前需确认命名与账号（**属发布动作，需用户执行**）。
-2. **CI 属首次引入 GitHub Release 流程**：`release.yml` 未在本机验证（无 CI 环境），
-   只能保证"资产名与包装器约定一致"；首次打 tag 时需实测一次。
-3. **鉴权（A1）**：配置文档里 `--token` 标注为"服务端鉴权落地后必填"；当前服务端放行所有请求。
-4. **平台覆盖**：仅五平台（Linux x64/arm64、macOS universal、Windows x64/arm64）；
+1. **包名已核实可用**：`npm view zace-client` → **E404（未被占用）**，故沿用 `zace-client`；
+   同时确认 `zace-tool-rs` 与 `@zace/client` 也未被占用。`server.json` 的 `name` 为
+   `io.github.baoanaz/zace-client`——**发布到公共 npm / MCP registry 需用户执行**（账号与仓库权限）。
+2. **发布顺序（重要）**：必须**先发 GitHub Release（五平台资产）再发 npm 包**，否则用户首次运行会
+   拿到 404（包装器会明确提示这一点，并回退到本地/PATH 二进制）。
+3. **CI 属首次引入 GitHub Release 流程**：`release.yml` 未在本机验证（无 CI 环境），
+   只能保证"资产名与包装器约定一致"（已用命令对账）；首次打 tag 时需实测一次。
+4. **鉴权（A1）**：配置文档里 `--token` 标注为"服务端鉴权落地后必填"；当前服务端放行所有请求。
+5. **平台覆盖**：仅五平台（Linux x64/arm64、macOS universal、Windows x64/arm64）；
    其它平台走"源码构建"路径（`run.js` 里给了指引）。

@@ -41,3 +41,4 @@ client/target/
 
 # --- npm 分发（TASK-052）---
 npm/node_modules/
+npm/*.tgz
