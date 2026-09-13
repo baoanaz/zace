@@ -16,6 +16,18 @@ import type {
   SearchResponse,
 } from "./types";
 
+// 页面从 `api/client` 取类型（唯一出口），避免到处 import types 的相对路径。
+export type {
+  AskResponse,
+  EvidenceSummaryItem,
+  Health,
+  IndexProgress,
+  PackMeta,
+  Project,
+  SearchResponse,
+  SyncStatus,
+} from "./types";
+
 /**
  * API 基址。
  *
@@ -76,6 +88,26 @@ export function errorHint(error: unknown): string | null {
       return "服务重启后未重新 attach：请重新绑定本地目录。";
     case "not_implemented":
       return "该能力尚未实现（后端仍是 501 占位），依赖卡号见页面的“未就绪”说明。";
+    // ---- TASK-060 鉴权 ----
+    case "unauthorized":
+      return "凭据无效或已失效：请重新登录（或检查 API Key 是否已被撤销）。";
+    case "register_disabled":
+      return "注册已关闭：首个账户请用初始化页面创建，或由管理员开启 ZACE_REGISTER_OPEN。";
+    case "already_initialized":
+      return "已存在账户：初始化接口已关闭，请直接登录。";
+    case "name_taken":
+      return "账户名已被占用：换一个名字。";
+    case "invalid_password":
+      return "密码不符合要求：至少 8 个字符（上限 200）。";
+    case "invalid_name":
+      return "账户名不能为空，且不超过 64 个字符。";
+    case "local_mode":
+      return "本地单用户模式没有账户与 API Key（R34）：把 ZACE_LOCAL_MODE 设为 false 才启用。";
+    case "token_not_found":
+      return "该 API Key 不存在或已被撤销。";
+    // ---- TASK-062/064 统计 ----
+    case "meta_db_unavailable":
+      return "元数据库（zace-meta.db）未就绪：历史与用量暂时读不到。";
     default:
       return null;
   }
@@ -173,4 +205,192 @@ export function ask(projectId: string, question: string): Promise<AskResponse> {
     method: "POST",
     body: { projectId, question },
   });
+}
+
+// --------------------------------------------------------------------------- 账户（TASK-060）
+
+/** 部署形态（`GET /api/meta`，**免鉴权**）：首屏据此决定显示登录/注册/初始化。 */
+export interface DeploymentMeta {
+  version: string;
+  localMode: boolean;
+  authRequired: boolean;
+  registerOpen: boolean;
+  needsBootstrap: boolean;
+  userCount: number | null;
+}
+
+/** 当前身份（`GET /api/auth/me`）。 */
+export interface Account {
+  userId: string;
+  name: string;
+  createdAt: number;
+  isLocal: boolean;
+  via: string;
+}
+
+/** API Key 列表项（**不含明文与哈希**）。 */
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+/** 创建 API Key 的响应（`token` 明文**仅此一次**）。 */
+export interface ApiKeyCreated extends ApiKeySummary {
+  token: string;
+}
+
+export function getMeta(): Promise<DeploymentMeta> {
+  return request<DeploymentMeta>("/api/meta");
+}
+
+export function getMe(): Promise<Account> {
+  return request<Account>("/api/auth/me");
+}
+
+export function login(name: string, password: string): Promise<Account> {
+  return request<Account>("/api/auth/login", { method: "POST", body: { name, password } });
+}
+
+export function register(name: string, password: string): Promise<Account> {
+  return request<Account>("/api/auth/register", { method: "POST", body: { name, password } });
+}
+
+/** 首个用户初始化（`users` 表为空时可用；用后自动关闭）。 */
+export function bootstrap(name: string, password: string): Promise<Account> {
+  return request<Account>("/api/auth/bootstrap", { method: "POST", body: { name, password } });
+}
+
+export async function logout(): Promise<void> {
+  await request<void>("/api/auth/logout", { method: "POST" });
+}
+
+export function listApiKeys(): Promise<ApiKeySummary[]> {
+  return request<ApiKeySummary[]>("/api/auth/tokens");
+}
+
+export function createApiKey(name: string): Promise<ApiKeyCreated> {
+  return request<ApiKeyCreated>("/api/auth/tokens", { method: "POST", body: { name } });
+}
+
+export function revokeApiKey(id: string): Promise<void> {
+  return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// --------------------------------------------------------------------------- 统计与历史（TASK-062/064）
+
+export interface IndexRun {
+  runId: number;
+  projectId: string;
+  state: string;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  filesTotal: number;
+  filesProcessed: number;
+  chunks: number;
+  errors: number;
+  error: string | null;
+}
+
+export interface IndexStats {
+  projectId?: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  avgDurationMs: number | null;
+  minDurationMs?: number | null;
+  maxDurationMs?: number | null;
+  lastRunAt: number | null;
+  lastState: string | null;
+  recent: IndexRun[];
+  diskBytes?: number;
+}
+
+/** 单项目索引统计：内存态当前进度 + 落库历史（两者口径不同，**不合成**）。 */
+export interface ProjectIndexStats {
+  projectId: string;
+  current: {
+    state: string;
+    startedAt: number | null;
+    finishedAt: number | null;
+    processedFiles: number;
+    totalFiles: number;
+    error: string | null;
+  };
+  history: IndexStats;
+  diskBytes: number;
+}
+
+export interface UsageRecord {
+  queryId: number;
+  projectId: string;
+  mode: string;
+  query: string;
+  answerable: boolean | null;
+  confidence: string | null;
+  degraded: boolean;
+  latencyMs: number;
+  evidenceCount: number;
+  docsCount: number;
+  usedTokens: number;
+  citationCoverage: number | null;
+  createdAt: number;
+}
+
+export interface UsageSummary {
+  projectId?: string;
+  days: number;
+  total: number;
+  succeeded: number;
+  insufficient: number;
+  failed: number;
+  avgLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  confidenceDistribution: Record<string, number>;
+  citationCoverageAvg: number | null;
+  topQueries: { query: string; count: number }[];
+  recent: UsageRecord[];
+}
+
+/** 首页仪表盘（账户资料 + 索引统计 + 查询用量）。 */
+export interface AccountOverview {
+  account: {
+    name: string;
+    createdAt: number;
+    isLocal: boolean;
+    projectCount: number;
+  };
+  index: IndexStats;
+  usage: UsageSummary;
+  projects: Project[];
+  days: number;
+}
+
+export function getAccountOverview(days = 30): Promise<AccountOverview> {
+  return request<AccountOverview>(`/api/account/overview?days=${days}`);
+}
+
+export function getProjectIndexStats(id: string, limit = 50): Promise<ProjectIndexStats> {
+  return request<ProjectIndexStats>(
+    `/api/projects/${encodeURIComponent(id)}/index-stats?limit=${limit}`,
+  );
+}
+
+export function getProjectIndexRuns(id: string, limit = 50): Promise<IndexRun[]> {
+  return request<IndexRun[]>(
+    `/api/projects/${encodeURIComponent(id)}/index-runs?limit=${limit}`,
+  );
+}
+
+export function getUsageSummary(days = 30, limit = 50): Promise<UsageSummary> {
+  return request<UsageSummary>(`/api/usage/summary?days=${days}&limit=${limit}`);
+}
+
+export function getProjectUsage(id: string, days = 30): Promise<UsageSummary> {
+  return request<UsageSummary>(
+    `/api/usage/projects/${encodeURIComponent(id)}?days=${days}`,
+  );
 }

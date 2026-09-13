@@ -288,3 +288,120 @@ $ ZACE_E2E=1 ZACE_E2E_BASE=http://127.0.0.1:8787 ZACE_E2E_PROJECT=e6fe81dbaebfb6
 - `web/src/components/progress.ts`：五态文案与手册 §2 的口径是否一致（尤其 `done+error`）；
 - `web/src/pages/ConnectPage.tsx`：页面上的命令/端点逐条能否跑通（接入指南最容易被写坏）；
 - `web/src/pages/PlaygroundPage.tsx`：是否真的**没有**自行拼装证据块（D-40 的硬约束）。
+
+---
+
+### 2026-09-14 · 实施 AI · 分支 `feature/task-070-webui_xwz0914`（工位 zace-lane-b，从 main @ 401c045 开出）
+
+**状态：实现完成，待编排者评审。**
+
+> 背景：仓库引入"一会话一工位"（`docs/plan/multi-ai-worktrees.md`）后，本会话
+> 从 `zace-lane-b` 工位恢复工作（原 WIP 由编排者存档在 `stash@{1}`），
+> 并**在 TASK-070 之上追加了账户 console 改造**（用户 2026-09-13 新需求）。
+> 新需求与原卡 §E/§F 的"未就绪占位"冲突，**已按用户指示覆盖**，偏差见下。
+
+#### 本阶段新增/变更（相对原 TASK-070 交付）
+
+| 变更 | 说明 |
+|---|---|
+| **首屏改为登录页** | `App.tsx` 做首屏门禁：云端+有账户→登录；云端+无账户→**初始化账户**；本地模式→直接进入 |
+| **首页改为账户仪表盘** | `DashboardPage.tsx`：账户资料 + 索引成功/失败次数、平均耗时、磁盘占用 + 使用次数面板 |
+| **新增 API Key 管理页** | `ApiKeysPage.tsx`：创建（明文只显示一次）/列表/撤销 |
+| **新增历史记录页** | `HistoryPage.tsx`：索引记录 + 使用记录两个页签（时间/项目/耗时/文件数/chunks/token） |
+| **接入指南重做** | 用户指定"只保留三个按键（Codex / Claude / pi）+ 一份可复制配置"，删掉全部背景段落 |
+| **删除 NotReadyPage** | 六个"未就绪"页全部替换为真实实现；旧路径 `/tokens`→`/keys`、`/usage`→`/history` 保留跳转 |
+
+#### 验收命令与结果（本机实测）
+
+```console
+# 仓库基线（工位 zace-lane-b）
+$ uv run ruff check .                      # All checks passed!
+$ uv run pytest -o addopts="" -q           # 746 passed, 2 skipped
+
+# 前端
+$ cd web && npm run lint                   # exit 0
+$ npm run build                            # dist 419 kB（gzip 133 kB）
+$ npx vitest run                           # 29 passed | 4 skipped（skipped = 需真实服务的 e2e）
+```
+
+#### 端到端联调（真实后端，非 mock）
+
+对已合并进 main 的后端（`401c045`：TASK-060/062/064）实测：
+
+```console
+# 1) 无凭据检索 → 401（TASK-051 A1 的缺口确认已关闭）
+$ curl -o /dev/null -w '%{http_code}\n' -X POST $B/api/query/search -d '{...}'
+401
+
+# 2) 首个账户初始化（users 为空时唯一入口）
+$ curl -c cookies -X POST $B/api/auth/bootstrap -d '{"name":"owner","password":"..."}'
+{"userId":"74c4…","name":"owner","createdAt":1789306572}        [201]
+
+# 3) 会话身份 / 创建 Key / Key 列表（列表无明文无哈希）
+$ curl -b cookies $B/api/auth/me
+{"userId":"74c4…","name":"owner","isLocal":false,"via":"session"}
+$ curl -b cookies -X POST $B/api/auth/tokens -d '{"name":"cursor-home"}'
+{"id":"0295…","token":"zace_aBnDg…","prefix":"zace_aBnDgQ"}     [200]
+$ curl -b cookies $B/api/auth/tokens
+[{"id":"0295…","name":"cursor-home","prefix":"zace_aBnDgQ","lastUsedAt":null}]
+
+# 4) Bearer Key 可用；撤销后立即失效
+$ curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer zace_aBnDg…" $B/api/projects
+200
+$ curl -X DELETE -b cookies $B/api/auth/tokens/0295…            [204]
+$ curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer zace_aBnDg…" $B/api/projects
+401
+```
+
+浏览器端 e2e（真实服务 + 真实页面，`web/src/pages/console.e2e.test.tsx`）：
+
+```console
+$ ZACE_E2E=1 ZACE_E2E_BASE=http://127.0.0.1:8891 ZACE_E2E_USER=owner ZACE_E2E_PASSWORD=… \
+    VITE_ZACE_API_BASE=http://127.0.0.1:8891 npx vitest run src/pages/console.e2e.test.tsx
+ ✓ 首屏是登录页；登录后进入账户面板并显示真实统计字段
+ ✓ 未测量项显示破折号/尚未测量，而不是 0（诚实性）
+ Test Files  1 passed (1) / Tests  2 passed (2)
+```
+
+`npx zace-client` 分发链路**已实测可用**（TASK-052 已发布 0.0.1，本地 `--help` 正常），
+因此接入指南里的配置片段是真能跑通的，不是示意。
+
+#### 契约影响
+
+**无**（只消费 CF-05）。新增的是 web 内部约定：
+
+- `VITE_ZACE_API_BASE`（构建期环境变量，默认同源）；
+- 接入指南的片段生成集中在 `web/src/app/connect-info.ts`（与 `npm/README.md` 的事实对齐）。
+
+> **注意**：迁移通知里写的 `GET/POST/DELETE /api/auth/keys` 与实际实现不符——
+> CF-05 与 `service/zace_service/routers/auth.py` 的真实路径是 **`/api/auth/tokens`**，
+> 本卡按实际实现对接。此差异已记入未决问题。
+
+#### 与设计偏差
+
+1. **覆盖了原卡的 §E/§F**（接入指南"六节完整版"、未就绪占位页）——按用户 2026-09-13
+   的明确指示改为"三按键 + 配置框"与"真实实现"，理由与结果见上表。
+2. **登录/Key/统计页不再等 TASK-061/062/064 的后端**：实际后端（TASK-060/062/064）已合并，
+   因而已接线到真实端点（**未依赖 TASK-061 租户隔离**，见未决问题 1）。
+3. **未引 UI 组件库、无状态管理库**（沿用原卡约定），图表未引入（历史页用表格而非图形）。
+
+#### 未决问题（交编排者裁定）
+
+1. **TASK-061（租户双层）未落地时的可见性**：现在所有已登录用户都能看到服务端全部项目
+   （`/api/projects` 不带归属过滤）。单人部署无影响；**多用户上云前必须先合 TASK-061**，
+   否则 web 会如实展示"看得见别人的项目"。
+2. **`avgDurationMs` 口径**：只统计成功的索引（失败 run 的耗时是"失败得多快"），
+   与 TASK-062 §D 一致；若产品希望"全部耗时"，需改后端而非前端。
+3. **索引记录页需要逐项目拉取**（跨项目端点只回聚合）：项目多时是 N 次请求。
+   建议在 TASK-062 增补"跨项目 `index-runs` 明细"端点（L2，交编排者）。
+4. **真正的浏览器验证缺口**：本卡只做到 jsdom + 真实服务（覆盖逻辑与契约），
+   **没有跑过真浏览器**（无 Playwright）。首次部署时建议人工点一遍六页。
+5. **CI 未覆盖 e2e**：`console.e2e.test.tsx` 默认跳过（需起服务），CI 只跑单测。
+   若要门禁，需要 CI 起服务 + 造数据，属独立任务。
+
+#### 建议复核点
+
+- `web/src/app/App.tsx` 的首屏门禁三分支（登录/初始化/直接进入）是否符合产品预期；
+- `web/src/pages/DashboardPage.tsx` 的面板口径（"平均耗时仅统计成功"、"未测量显示 —"）；
+- `web/src/app/connect-info.ts` 的三个片段是否与 `npm/README.md` 逐字一致（最容易被写坏）；
+- `Playground` 是否仍然**没有**自行拼装证据块（D-40 的硬约束，本阶段未改动该页）。
