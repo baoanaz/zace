@@ -67,6 +67,7 @@
 | M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
 | M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
 | **M2c 前置** | `zace-lane-d` | [TASK-051](TASK-051-云端MCP就绪度与远端身份预研.md) | 云端 MCP 就绪度盘点 + 远端身份预研（只出文档，为 TASK-040R 开卡）—— **review（2026-09-13）** |
+| **M2c** | `zace-lane-d` | [TASK-040R](TASK-040R-client骨架与同步代理.md) | **zace-client（Rust MCP stdio + 本地同步代理）**——MCP 最终形态（R38）；含跨语言身份一致性与端到端验收 —— **review（2026-09-13）** |
 
 > **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
 > 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
@@ -110,11 +111,12 @@
 10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **当前波次**
 11. 批 12（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
 12. 批 13（M2c，远端场景）：TASK-040R（Rust client）+ 多用户 + 部署
-13. 批 14（W7，**云端 MCP 前置**，`docs/plan/cloud-mcp-readiness.md`）：lane D TASK-051（就绪度盘点 + 远端身份预研，**只出文档**）—— **review**；其结论将裁定 A1（鉴权）/A3（身份归一化）的级别并拆分 TASK-040R 系列卡
+13. 批 14（W7，**云端 MCP**）：lane D TASK-051（就绪度盘点 + 远端身份预研，只出文档）→ **TASK-040R（Rust client，MCP 最终形态）** —— **均 review**
 
 > **用户方向（2026-09-13）**：**不妥协，直奔最终版本**——MCP 的最终形态是本地 Rust client（stdio + 远端 sync，
 > 依 `docs/design/Background/01-notace-tool-rs.md`），本地 MCP（service 直出 Streamable HTTP，R38）**仅作短期验证**。
-> 因此 TASK-040R 不再是「视情况」，而是必经之路；TASK-051 是其前置诊断卡。
+> TASK-051 是其前置诊断，TASK-040R 已交付可用的 `client/`（33 单测 + 真实 service 端到端）。
+> **上线硬前置**：服务端鉴权（TASK-060/061，见就绪度报告 A1——当前非本地模式无鉴权）。
 
 > **编号说明（2026-09-13 修正）**：历史列表里出现过重复行（两次 W5b、两次 M2b 规划行），已去重；
 > 原先“云端 embedding 接入（R44-R46）”的引用已改为具体卡号：**R44 被 TASK-034 的 attach 端点占用**

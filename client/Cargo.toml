@@ -1,0 +1,39 @@
+[package]
+name = "zace-client"
+version = "0.0.1"
+edition = "2021"
+description = "zace MCP stdio client: local scan/hash/upload proxy for a remote zace-service"
+license = "MIT OR Apache-2.0"
+# 为什么是 Rust（D-39 / Module/05）：MCP 最终形态是本地 client（stdio 对编辑器 + HTTPS 对远端
+# service）。本地 MCP（service 直出 Streamable HTTP，R38）只作短期验证。
+# 落点说明见 docs/tasks/TASK-040R-client骨架与同步代理.md「执行记录」。
+
+[lib]
+name = "zace_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zace-client"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+ignore = "0.4"          # D-28：.gitignore 真实解析（Module 05 §3.1 指定用 ignore crate）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
