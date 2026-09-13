@@ -102,7 +102,7 @@
 |---|---|---|---|---|
 | [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 账户 console**（登录/注册/初始化 + 账户面板 + API Key + 历史记录 + Playground + 三按键接入指南） | 无（依赖 TASK-060/062/064 已合并） | `web/**` | **done**（已合并 `7e51802`；746 pytest + 29 单测 + lint/build 全绿） |
 | [TASK-080](TASK-080-接入指南两卡牌.md) | **接入指南重做**：两卡牌（npm 下载 + Agent 接入）+ 配置必带 `--token` | 无 | `web/src/app/connect-info.{ts,test.ts}`、`web/src/pages/ConnectPage.tsx`、`npm/README.md` | pending |
-| [TASK-081](TASK-081-密码长度放宽.md) | 密码长度下限 8 → **3**（含测试与文案同步） | 无 | `service/zace_service/routers/auth.py`、`service/tests/test_auth.py`、`web/src/api/client.ts` | pending |
+| [TASK-081](TASK-081-密码长度放宽.md) | 密码长度下限 8 → **3**（含测试与文案同步） | 无 | `service/zace_service/routers/auth.py`、`service/tests/test_auth.py`、`web/src/api/client.ts` | review |
 | [TASK-082](TASK-082-删除Playground与项目页.md) | **删除 Playground 与项目管理页**（导航/路由/死链/测试一并清理；仪表盘保留项目列表） | 无 | `web/src/app/{App,Layout}.tsx`、`web/src/pages/{Playground,Projects,ProjectDetail}*`、`DashboardPage.tsx`、`HistoryPage.tsx`、`e2e.test.tsx`、`web/src/api/client.ts` | pending |
 | [TASK-083](TASK-083-空态与错误态.md) | **空态/加载态/错误态统一**（`EmptyState` 组件 + 各页替换） | **TASK-082** | `web/src/components/ui.tsx`、`HistoryPage.tsx`、`DashboardPage.tsx`、`ApiKeysPage.tsx` | pending |
 | [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | pending |
