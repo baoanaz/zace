@@ -60,19 +60,23 @@ def get_engine_manager(request: Request) -> EngineManager:
 def require_project_id(request: Request, project_id: str | None) -> str:
     """解析请求里的 ``projectId``（CF-05 扩展 R37：本地模式可省略）。
 
-    - 显式给出：必须存在，否则 404 ``project_not_found``；
+    语义（TASK-061 §C 扩展）：**存在 + 归属当前用户**。
+
+    - 显式给出：必须存在，否则 404 ``project_not_found``；已认证用户还必须是该项目的
+      归属者，否则**同样** 404 ``project_not_found``（不报 403：403 会泄露"这个 projectId
+      存在"，与 Module/06 §2.2"不给探测面"冲突）；
     - 省略：仅本地模式（``ZACE_LOCAL_MODE``）允许，取**唯一**的本地项目；
       本地 0 个项目 → 404（附"先 resolve"提示）；多于 1 个 → 409 ``ambiguous_project``
       （不猜、不隐式选一个：静默挑错项目比报错更糟）。
+
+    归属校验只在**有已认证用户**时生效（本地模式 ``zace_user`` 为 ``None``，无账户体系，
+    R34：行为与今天逐字一致）。
     """
     manager = get_engine_manager(request)
     if project_id:
         if not manager.project_exists(project_id):
-            raise ApiError(
-                code="project_not_found",
-                message=f"项目不存在：{project_id}",
-                status=404,
-            )
+            raise _project_not_found(project_id)
+        _require_ownership(request, project_id)
         return project_id
 
     settings = get_settings(request)
@@ -99,3 +103,33 @@ def require_project_id(request: Request, project_id: str | None) -> str:
             status=409,
         )
     return str(projects[0]["projectId"])
+
+
+def _require_ownership(request: Request, project_id: str) -> None:
+    """归属校验（TASK-061 §C）：未归属当前用户 → 404 ``project_not_found``。
+
+    - 本地模式（无 ``zace_user``）跳过——R34 的第一验收项要求行为与今天逐字一致；
+    - 云端形态元数据库缺失 → **fail closed**（按未归属处理），宁可拒绝也不放行越权；
+    - 与"项目不存在"**用同一个 code 与文案**：调用方无法据此区分"不存在"与"别人的"。
+    """
+    user_id = getattr(getattr(request.state, "zace_user", None), "id", None)
+    if user_id is None:
+        return
+    db = _meta_db(request)
+    if db is None or not db.owns_project(str(user_id), project_id):
+        raise _project_not_found(project_id)
+
+
+def _project_not_found(project_id: str) -> ApiError:
+    """统一的"项目不存在"错误（越权与真不存在共用，不给探测面）。"""
+    return ApiError(
+        code="project_not_found",
+        message=f"项目不存在：{project_id}",
+        status=404,
+    )
+
+
+def _meta_db(request: Request) -> MetaDB | None:
+    """app 级 ``MetaDB``（本地模式未建库 → ``None``；不在此处建库，避免破坏 R34）。"""
+    db = getattr(request.app.state, "meta_db", None)
+    return db if isinstance(db, MetaDB) else None

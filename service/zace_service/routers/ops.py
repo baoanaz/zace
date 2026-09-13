@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from zace_service.deps import get_engine_manager, get_settings
+from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.stats import account_overview
@@ -124,14 +124,17 @@ def project_index_runs(
 ) -> list[dict[str, Any]]:
     """单项目索引历史（最近 ``limit`` 条，按结束时间倒序）。"""
     db = _require_meta_db(request)
-    return [run.to_json() for run in db.index_runs(id, limit=_limit(limit))]
+    # TASK-061 §C：消费 projectId 的端点经 require_project_id（存在 + 归属）。
+    project_id = require_project_id(request, id)
+    return [run.to_json() for run in db.index_runs(project_id, limit=_limit(limit))]
 
 
 @router.get("/api/projects/{id}/index-stats")
 def project_index_stats(id: str, request: Request, limit: int = DEFAULT_LIMIT) -> dict[str, Any]:
     """单项目索引统计：内存态当前进度 + 落库历史聚合 + 磁盘占用。"""
     manager = get_engine_manager(request)
-    return manager.index_stats(id, limit=_limit(limit))
+    project_id = require_project_id(request, id)  # TASK-061 §C
+    return manager.index_stats(project_id, limit=_limit(limit))
 
 
 @router.get("/api/index-stats")
@@ -154,8 +157,9 @@ def all_index_stats(request: Request, limit: int = DEFAULT_LIMIT) -> dict[str, A
 def project_usage(id: str, request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     """单项目查询用量（04 §8 审计存档的读取口；**替换 501 占位**）。"""
     db = _require_meta_db(request)
-    summary = db.usage_summary([id], days=_days(days)).to_json()
-    summary["projectId"] = id
+    project_id = require_project_id(request, id)  # TASK-061 §C：存在 + 归属
+    summary = db.usage_summary([project_id], days=_days(days)).to_json()
+    summary["projectId"] = project_id
     summary["days"] = _days(days)
     return summary
 
