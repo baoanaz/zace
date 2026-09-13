@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from zace_service.deps import get_engine_manager, get_settings
 from zace_service.errors import ApiError
 from zace_service.indexer import LocalRootError
+from zace_service.metadb import MetaDB
 
 router = APIRouter(tags=["projects"])
 
@@ -54,13 +55,47 @@ class AttachRequest(BaseModel):
 
 @router.post("/api/projects/resolve")
 def resolve_project(payload: ResolveRequest, request: Request) -> dict[str, Any]:
-    """幂等解析/创建项目（同 identityKey 两次 → 同 projectId，第二次 ``created=false``）。"""
+    """幂等解析/创建项目（同 identityKey 两次 → 同 projectId，第二次 ``created=false``）。
+
+    TASK-061 §B：resolve 出 projectId 后**claim 给当前用户**（幂等）。
+    为什么必须 claim：``/api/index-stats`` 与 ``/api/account/overview`` 只汇总"已归属当前用户"
+    的项目（TASK-061 的逻辑授权层），而上传路径按 §B **不隐式 claim**（避免"知道 id 就能抢"）。
+    两个决定合起来意味着：不在这里 claim，客户端上传完后统计端点就永远看不到数据。
+    本机实测：TASK-061 的 ``claim_project`` 曾写成但**从未被任何入口调用**，
+    ``projects`` 表恒空 → Agent 接入路径的索引统计全为 0（TASK-085 与 ORCH 实测）。
+
+    归属冲突的处理见下方注释：单用户场景保持 TASK-061 §B 的"先到先得"，
+    但在多用户场景不能把"项目已存在"当成越权信号（本项目共用仓库是常态）。
+    """
     identity_key = payload.identityKey.strip()
     if not identity_key:
         raise ApiError("invalid_identity_key", "identityKey 不能为空白字符串", 400)
     manager = get_engine_manager(request)
     handle = manager.resolve_project(identity_key, payload.displayName.strip())
+    _claim_project(request, handle.project_id, payload.displayName.strip())
     return {"projectId": handle.project_id, "created": handle.created}
+
+
+def _claim_project(request: Request, project_id: str, display_name: str) -> None:
+    """把 projectId 的归属登记给当前用户（TASK-061 §B；幂等）。
+
+    只在两张情况下写：
+    - 云端形态（有账户体系 + MetaDB）；
+    - 当前请求有已认证用户（本地模式 ``zace_user`` 为 ``None``，没有"谁"可归属 —— R34）。
+
+    ``claim_project`` 返回 ``(False, owner)`` 表示已被**他人** claim。本函数**不因此报错**：
+    TASK-061 §B 的 "403 project_owned_by_other" 是为"每人独立仓库"设计的，而本项目常见
+    形态是多人共用同一仓库（同一 identityKey → 同一 projectId）——deps.require_project_id
+    今天并没有强制归属校验，在这里报错会把"共用仓库的第二人"直接卡死（回归）。
+    真正的越权面由后续的归属校验卡负责，归 TASK-061。
+    """
+    user = getattr(request.state, "zace_user", None)
+    if user is None:
+        return
+    db = getattr(request.app.state, "meta_db", None)
+    if not isinstance(db, MetaDB):
+        return
+    db.claim_project(getattr(user, "id", ""), project_id, display_name)
 
 
 @router.post("/api/projects/attach")

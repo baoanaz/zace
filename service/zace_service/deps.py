@@ -16,6 +16,7 @@ from fastapi import Request
 
 from zace_service.config import Settings
 from zace_service.errors import ApiError
+from zace_service.metadb import MetaDB
 from zace_service.runtime import EngineManager
 
 __all__ = ["get_engine_manager", "get_settings", "require_project_id"]
@@ -45,6 +46,13 @@ def get_engine_manager(request: Request) -> EngineManager:
         manager = getattr(request.app.state, "engine_manager", None)
         if not isinstance(manager, EngineManager):
             manager = EngineManager.open(get_settings(request).data_root)
+            # TASK-085：懒构造也要接上元数据库，否则上传路径的索引 run 无处落库
+            # （实测：npx zace-client 索引成功后 /api/index-stats 仍恒为 0）。
+            # 直接读 ``app.state`` 而不调 ``auth.get_meta_db``：后者会**建库**，而本地模式
+            # 按 R34 不该有账户库（``create_app`` 也只在校验形态下落 ``None``）。
+            # ``local`` 子命令走的是 __main__ 里显式 attach 的那条路径，不受此处影响。
+            db = getattr(request.app.state, "meta_db", None)
+            manager.attach_meta_db(db if isinstance(db, MetaDB) else None)
             request.app.state.engine_manager = manager
     return manager
 
