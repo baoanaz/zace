@@ -2,6 +2,22 @@
 
 本文件约束所有在本仓库工作的 AI 会话（含子 AI）。与 `docs/design/INDEX.md` §3 决策登记表冲突时，以决策登记表为准；本文件只讲"怎么干活"，不复述"设计成什么样"。
 
+## 0. 工作区隔离（2026-09-13 新增，**开工前第一件事**）
+
+**一个 AI 会话 = 一个独占工作区（git worktree）= 一个分支；主工作区只用于集成。**
+
+```bash
+cd /home/xuwenzheng/github/ACE/zace
+bash scripts/lane-worktrees.sh status          # 看哪个 lane 空闲
+bash scripts/lane-worktrees.sh claim <lane> TASK-xxx   # 认领（写 .lane-owner）
+cd /home/xuwenzheng/github/ACE/zace-lane-<lane>       # 切到自己的工作区
+```
+
+- **绝不在主工作区（`/home/xuwenzheng/github/ACE/zace`）里改代码或提交**；
+  多个会话共用同一目录会导致 `git commit` 落到“别人最后切到的分支”上（实测已造成提交错位与一次重做）；
+- 收工：回填记录 → 提交 → **不 push**（推送由编排者统一做）→ `bash scripts/lane-worktrees.sh release <lane>`；
+- 完整规程与事故记录：`docs/plan/multi-ai-worktrees.md`。
+
 ## 1. 开工前必读
 
 1. `docs/design/INDEX.md`（文档地图 + 决策登记表 + 术语表）；
@@ -22,9 +38,12 @@
 
 ## 3. Git 纪律
 
+- **工作区分高**（§0）：一个会话一个 worktree，禁止共用一个目录。
 - 每张任务卡一个分支：`feature/task-<编号>_<缩写><MMDD>`（如 `feature/task-001_xwz0910`）；泳道模式下第一张卡从 `main` 开分支，后续卡从上一张卡的分支串联创建。
 - 不直推 `main`、不使用 `git push --force`；泳道模式下只需**本地提交**（无需 push/PR），评审与合并由总览 AI 执行。
 - 一次提交只做任务卡范围内的事；提交信息用英文祈使句 + 任务号，例：`task-001: add sqlite schema and FTS5 writer`。
+- **不在共享工作区用 `git add -A`**：它会把别人未提交的改动一起卷进你的提交。只 `git add` 自己的文件。
+- 共享文件（`docs/tasks/README.md` / `docs/plan/contracts.md` / 根 `pyproject.toml`）**只做最小改动**，不要顺手重排格式（会让别人的 diff 全部冲突）。
 - 不提交运行时产物（数据库、`.zace/`、构建输出）；不提交任何 secret/token。
 
 ## 4. 验证纪律
@@ -32,6 +51,7 @@
 - 任务卡"验收标准"里的命令必须本地跑通，并把关键输出贴进 PR/完成报告；测试失败不得声明完成。
 - 新增逻辑必须有单元测试；测试数据用临时目录/内存库，禁止依赖本机绝对路径。
 - 全仓库基线检查必须保持绿：`uv run ruff check .`、`uv run python scripts/check_dependency_direction.py`、`uv run pytest`。
+  **注意**：根 `pyproject.toml` 设了 `addopts = "-q"`，直接跑 `uv run pytest` **不打印** passed/failed 汇总行；要看数字用 `uv run pytest -o addopts="" -q`。
 
 ## 5. 完成后必须回填
 
