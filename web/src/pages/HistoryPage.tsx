@@ -5,9 +5,14 @@
  * - 索引记录来自 `index_runs`（成功与失败都落库；`running` 不落库）；
  * - 使用记录来自 `query_audit`（**不含源码内容**，只存 evidence 元数据与耗时）；
  * - 时间窗口默认 30 天；空数据一律显示"没有记录"，不填假行。
+ *
+ * TASK-083：空态改由 `EmptyState` 渲染；并且**不再吞掉单项目读失败**——旧实现
+ * 用 `catch { return [] }` 把"某个项目读历史失败"渲染成"还没有索引记录"，
+ * 让后端故障看起来像"还没用"。现在失败的项目会与成功数据一起如实列出。
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   type IndexRun,
@@ -17,7 +22,7 @@ import {
   getUsageSummary,
   listProjects,
 } from "../api/client";
-import { ErrorBlock, LoadingBlock } from "../components/ui";
+import { EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
 import { formatDuration, formatTime } from "./DashboardPage";
 
 type Tab = "index" | "usage";
@@ -25,32 +30,41 @@ type Tab = "index" | "usage";
 const WINDOW_DAYS = 30;
 const ROW_LIMIT = 100;
 
+/** 单个项目历史读取失败：**保留下来显示**，不当作"没有数据"。 */
+type RunReadFailure = { projectId: string; error: unknown };
+
 export function HistoryPage() {
   const [tab, setTab] = useState<Tab>("index");
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [runs, setRuns] = useState<{ projectId: string; run: IndexRun }[] | null>(null);
+  const [runFailures, setRunFailures] = useState<RunReadFailure[]>([]);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setError(null);
+    setRunFailures([]);
     try {
       const listed = await listProjects();
       setProjects(listed);
       // 逐项目取历史再合并：跨项目端点只回聚合，而"什么时候索引了哪个项目"需要明细。
+      // 单项目读失败不静默吞掉——降级为"保留其余数据 + 明确列出失败的项目"。
       const perProject = await Promise.all(
         listed.map(async (project) => {
           try {
             const items = await getProjectIndexRuns(project.projectId, ROW_LIMIT);
-            return items.map((run) => ({ projectId: project.projectId, run }));
-          } catch {
-            return []; // 单项目读失败（如无 MetaDB）不该让整页失败
+            return { items: items.map((run) => ({ projectId: project.projectId, run })) };
+          } catch (err) {
+            return { items: [], error: { projectId: project.projectId, error: err } };
           }
         }),
       );
+      setRunFailures(
+        perProject.flatMap((item) => (item.error === undefined ? [] : [item.error])),
+      );
       setRuns(
         perProject
-          .flat()
+          .flatMap((item) => item.items)
           .sort((left, right) => right.run.finishedAt - left.run.finishedAt)
           .slice(0, ROW_LIMIT),
       );
@@ -58,6 +72,7 @@ export function HistoryPage() {
     } catch (err) {
       setError(err);
       setRuns(null);
+      setRunFailures([]);
       setUsage(null);
     }
   }, []);
@@ -97,7 +112,9 @@ export function HistoryPage() {
         ))}
       </div>
 
-      {tab === "index" && <IndexHistory runs={runs} projects={projects} />}
+      {tab === "index" && (
+        <IndexHistory runs={runs} projects={projects} failures={runFailures} />
+      )}
       {tab === "usage" && <UsageHistory usage={usage} />}
     </div>
   );
@@ -106,74 +123,116 @@ export function HistoryPage() {
 function IndexHistory({
   runs,
   projects,
+  failures,
 }: {
   runs: { projectId: string; run: IndexRun }[] | null;
   projects: Project[] | null;
+  failures: RunReadFailure[];
 }) {
-  if (runs === null) return <LoadingBlock />;
-  if (runs.length === 0) {
-    return (
-      <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
-        还没有索引记录。让客户端同步一次（或在编辑器里接入后同步）即可产生。
-      </p>
-    );
-  }
-
   const nameOf = (projectId: string) =>
     projects?.find((item) => item.projectId === projectId)?.displayName || projectId;
 
+  if (runs === null) return <LoadingBlock />;
+
+  if (runs.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        {failures.length > 0 ? (
+          <div className="space-y-2 p-4">
+            <p className="text-sm font-medium text-rose-800">
+              索引记录读取失败：{failures.map((item) => nameOf(item.projectId)).join("、")}
+            </p>
+            <p className="text-sm text-slate-500">
+              这**不代表还没有数据**——请先解决上面的错误，再判断是否有记录。
+            </p>
+            {failures.map((item) => (
+              <ErrorBlock key={item.projectId} error={item.error} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="还没有索引记录"
+            hint="在编辑器里接入 Agent 后让它同步一次（本地模式也可用客户端 attach 目录），这里就会出现每次索引的结果。"
+            action={
+              <Link className="text-xs underline" to="/connect">
+                去接入指南
+              </Link>
+            }
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="text-left text-xs text-slate-500">
-            <th className="px-4 py-2 font-normal">结束时间</th>
-            <th className="px-4 py-2 font-normal">项目</th>
-            <th className="px-4 py-2 font-normal">结果</th>
-            <th className="px-4 py-2 font-normal">耗时</th>
-            <th className="px-4 py-2 font-normal">文件（解析/总数）</th>
-            <th className="px-4 py-2 font-normal">chunks</th>
-            <th className="px-4 py-2 font-normal">解析问题</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map(({ projectId, run }) => (
-            <tr key={`${projectId}-${run.runId}`} className="border-t border-slate-100">
-              <td className="px-4 py-2 text-xs text-slate-500">{formatTime(run.finishedAt)}</td>
-              <td className="px-4 py-2">{nameOf(projectId)}</td>
-              <td className="px-4 py-2">
-                <span
-                  className={`rounded px-1.5 py-0.5 text-xs ${
-                    run.state === "done"
-                      ? "bg-emerald-50 text-emerald-700"
-                      : "bg-rose-50 text-rose-700"
-                  }`}
-                >
-                  {run.state === "done" ? "成功" : "失败"}
-                </span>
-                {run.error && (
-                  <span
-                    title={run.error}
-                    className="ml-2 cursor-help text-xs text-amber-700 underline decoration-dotted"
-                  >
-                    有解析问题
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-2">{formatDuration(run.durationMs)}</td>
-              <td className="px-4 py-2">
-                {run.filesProcessed} / {run.filesTotal}
-              </td>
-              <td className="px-4 py-2">{run.chunks}</td>
-              <td className="px-4 py-2 text-xs text-slate-500">{run.errors || "—"}</td>
-            </tr>
+    <div className="space-y-3">
+      {failures.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-900">
+            部分项目的索引记录读取失败：
+            {failures.map((item) => nameOf(item.projectId)).join("、")}
+          </p>
+          <p className="text-xs text-amber-800">
+            下表**只包含读取成功的项目**，这些项目可能还有未显示的记录。
+          </p>
+          {failures.map((item) => (
+            <ErrorBlock key={item.projectId} error={item.error} />
           ))}
-        </tbody>
-      </table>
-      <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-        "文件（解析/总数）"两列不是同一量纲（总数含二进制/超限文件），**不换算百分比**；
-        失败记录没有有意义的耗时，因此不参与平均耗时的计算。
-      </p>
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="text-left text-xs text-slate-500">
+              <th className="px-4 py-2 font-normal">结束时间</th>
+              <th className="px-4 py-2 font-normal">项目</th>
+              <th className="px-4 py-2 font-normal">结果</th>
+              <th className="px-4 py-2 font-normal">耗时</th>
+              <th className="px-4 py-2 font-normal">文件（解析/总数）</th>
+              <th className="px-4 py-2 font-normal">chunks</th>
+              <th className="px-4 py-2 font-normal">解析问题</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map(({ projectId, run }) => (
+              <tr key={`${projectId}-${run.runId}`} className="border-t border-slate-100">
+                <td className="px-4 py-2 text-xs text-slate-500">{formatTime(run.finishedAt)}</td>
+                <td className="px-4 py-2">{nameOf(projectId)}</td>
+                <td className="px-4 py-2">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-xs ${
+                      run.state === "done"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-rose-50 text-rose-700"
+                    }`}
+                  >
+                    {run.state === "done" ? "成功" : "失败"}
+                  </span>
+                  {run.error && (
+                    <span
+                      title={run.error}
+                      className="ml-2 cursor-help text-xs text-amber-700 underline decoration-dotted"
+                    >
+                      有解析问题
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-2">{formatDuration(run.durationMs)}</td>
+                <td className="px-4 py-2">
+                  {run.filesProcessed} / {run.filesTotal}
+                </td>
+                <td className="px-4 py-2">{run.chunks}</td>
+                <td className="px-4 py-2 text-xs text-slate-500">{run.errors || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+          "文件（解析/总数）"两列不是同一量纲（总数含二进制/超限文件），**不换算百分比**；
+          失败记录没有有意义的耗时，因此不参与平均耗时的计算。
+        </p>
+      </div>
     </div>
   );
 }
@@ -221,9 +280,17 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
       )}
 
       {usage.recent.length === 0 ? (
-        <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
-          这段时间还没有查询记录。从编辑器里问一次即可产生。
-        </p>
+        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <EmptyState
+            title="这段时间还没有查询记录"
+            hint="在编辑器里接入 Agent 后向它提问，每次查询都会记录在这里（默认看近 30 天）。"
+            action={
+              <Link className="text-xs underline" to="/connect">
+                去接入指南
+              </Link>
+            }
+          />
+        </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
           <table className="w-full border-collapse text-sm">

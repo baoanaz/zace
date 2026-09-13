@@ -15,7 +15,7 @@ import {
   listApiKeys,
   revokeApiKey,
 } from "../api/client";
-import { CopyButton, ErrorBlock, LoadingBlock } from "../components/ui";
+import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
 import { formatTime } from "./DashboardPage";
 
 export function ApiKeysPage() {
@@ -131,9 +131,10 @@ export function ApiKeysPage() {
         {keys === null ? (
           <LoadingBlock />
         ) : keys.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-slate-500">
-            还没有 API Key。创建后它会出现在这里（只显示前缀，完整值只在创建时可见）。
-          </p>
+          <EmptyState
+            title="还没有 API Key"
+            hint="用上方表单创建一把，再把完整 Key 配置到编辑器 / CLI 客户端里；只有创建那一刻能看到完整值。"
+          />
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
