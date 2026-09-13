@@ -116,6 +116,26 @@
 | [TASK-087](TASK-087-ContextPack渲染补齐.md) | **ContextPack 渲染补齐**：`next_queries` 渲染进正文 + `answerable=false` 短路为结构化降级包（D-24） | 无 | `core/zace_core/contextpack/render.py`、`service/routers/query.py`(ask 分支) | pending |
 | [TASK-088](TASK-088-LLM总结接入.md) | **ask_project 接入 LLM 总结**（可配置 `ANSWER_*` + Grounded Prompt 七条 + Citation 回验 + 设置页展示） | 无 | `service/zace_service/{answer,config}.py`、`routers/{query,ops}.py`、`web/src/pages/SettingsPage.tsx` | pending |
 
+### Phase 5 — 上线与质量（2026-09-14 开卡，用户拍板）
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-089](TASK-089-MCP面归属校验.md) | **MCP 面归属校验**（上云前最后越权口；不含改 CF-06） | TASK-061 | `service/zace_service/{mcp,deps}.py`、`service/tests/` | pending |
+| [TASK-090](TASK-090-请求日志与trace查询.md) | **请求日志持久化 + trace id 查询**（用户报错可追溯，有界窗口保留） | TASK-084 | `service/zace_service/{logging,requestlog,metadb,config,routers/ops}.py`、`.env.example` | pending |
+| [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（60-100 条真实用例 + 指标设计；为 TASK-050 建立可信标尺） | 无 | `benches/**` | pending |
+| [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
+| [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
+
+### 用户后续人工任务（非 AI 卡片，记录在案）
+
+> 用户 2026-09-14 明确：
+> 1. **打磨两个工具的返回内容**（人工）——依赖 TASK-087/088 落地后；
+> 2. **补全多个真实问题 + 打磨 benchmark 设计**（人工 + TASK-091/093）；
+> 3. **架构稳定后**：用户请求 LOG 缓存窗口机制（→ TASK-090）；
+> 4. **全部稳定后**：VPS 部署 + 公网 IP 发布（→ TASK-092）；
+> 5. **tool 与质量做好后**：发布给其他人使用并压测（→ TASK-092 之后）。
+> 质量参数解冻（R29/R30）需要用户单独授权 + TASK-093 的数据充分 —— **TASK-050 暂不开卡**。
+
 > **由来**（编排者实测，2026-09-14）：`ContextPack` 产出 8 类信号，但 Agent 实际只看到 5 类——
 > `next_queries` 已生成却不渲染、`answerable` 未用于分支、LLM 总结从未实现（`ANSWER_*` 配置全仓不存在）。
 > 设计依据：`docs/design/Module/04-AI总结.md` §2/§3/§4/§5/§6/§8（已定稿，本波是补实现）。

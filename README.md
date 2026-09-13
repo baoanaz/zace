@@ -7,6 +7,8 @@
 >
 > 对 Agent 只暴露两个工具：`search_context`（Fast，不调 LLM）/ `ask_project`（Deep，grounded answer + citation 回验）。
 
+> **新人/新会话先读 [`HANDOFF.md`](HANDOFF.md)**：项目现状、下一步任务、环境事实、协作纪律与已知缺口，一份读完即可开工。
+
 ## 仓库布局（monorepo，D-35）
 
 ### 顶层
