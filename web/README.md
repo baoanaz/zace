@@ -1,8 +1,8 @@
 # zace-web
 
-zace 的**账户 console**：登录、账户面板、API Key、历史记录、Playground、接入指南。
-静态 SPA，直连 `zace-service` REST API；**不做检索与渲染** —— ContextPack → Markdown 由服务端完成
-（Module 07 / D-40），web 只做分节包装与元数据展示。
+zace 的**账户 console**：登录、账户面板、API Key、历史记录、接入指南。
+静态 SPA，直连 `zace-service` REST API；**不做检索与渲染** —— 检索与 ContextPack → Markdown
+由服务端与编辑器侧 Agent 完成（Module 07 / D-40），web 只做面板与元数据展示。
 
 ```text
 浏览器 ── 静态 SPA（本目录产物）── REST /api ──► zace-service ──► zace-core
@@ -13,12 +13,15 @@ zace 的**账户 console**：登录、账户面板、API Key、历史记录、Pl
 | 页面 | 路径 | 后端端点 | 状态 |
 |---|---|---|---|
 | 登录 / 注册 / 初始化账户 | `/login` | `GET /api/meta`、`POST /api/auth/{login,register,bootstrap}` | ✅ |
-| 账户面板（首页） | `/` | `GET /api/auth/me`、`GET /api/account/overview` | ✅ |
-| 项目（绑定 / 重扫 / 删除） | `/projects`、`/projects/:id` | `GET/POST/DELETE /api/projects*` | ✅ |
-| Playground | `/playground` | `POST /api/query/{search,ask}` | ✅ |
+| 账户面板（首页，含项目列表） | `/` | `GET /api/auth/me`、`GET /api/account/overview` | ✅ |
 | API Key 管理 | `/keys` | `GET/POST/DELETE /api/auth/tokens` | ✅ |
 | 历史记录（索引 / 使用） | `/history` | `GET /api/projects/{id}/index-runs`、`GET /api/usage/summary` | ✅ |
 | 接入指南 | `/connect` | `GET /api/meta`（取部署形态） | ✅ |
+
+> **TASK-082（2026-09-23）已删除 `/projects`、`/projects/:id`、`/playground` 三条路由与页面**（导航同步移除）。
+> 项目列表仍保留在仪表盘首页；`/api/projects*` 与 `/api/query/{search,ask}` 端点未删，仍供客户端与本地模式使用。
+> 随之失去全部引用的是 `components/Markdown.tsx` 与 `components/MetaPanel.tsx`（仅 Playground 使用）——
+> 不在 TASK-082 文件所有权清单内，**本次保留**，已在卡片"未决问题"登记。
 
 ## 首屏行为（重要）
 
@@ -83,7 +86,7 @@ cookie jar，而生产形态是同源（浏览器自动带 cookie）。转发器
 src/
   api/         唯一请求出口（client.ts）+ CF-05 类型（types.ts）+ 错误码文案
   app/         路由与首屏门禁（App.tsx）、外壳（Layout.tsx）、接入片段（connect-info.ts）
-  components/  展示组件（Markdown 是唯一渲染入口）、indexProgress 口径
+  components/  展示组件（ui 基础件、indexProgress 口径、MetaPanel/Markdown 展示件）
   pages/       每页一个文件（请求 + 组合）
 ```
 
@@ -93,12 +96,12 @@ src/
 - **`indexProgress` 不显示百分比**（core 无进度回调，宁可信息少不可信息假）；
 - **统计不美化**：`avgDurationMs` 只统计成功索引；未测量显示 `—`（如 `citationCoverageAvg` 在 LLM
   接入前恒为 `null`，**不填 0**）；
-- **不自研 ContextPack 渲染**（D-21/D-40）：只渲染服务端 `markdown`，不解析 `[E1]` 语义。
+- **不自研 ContextPack 渲染**（D-21/D-40）：只展示服务端给的 markdown 字符串，不解析 `[E1]` 语义。
 
 ## 与设计文档的对应
 
 - `docs/design/Module/07-WebUI.md`：页面骨架与对接原则
-- `docs/design/INDEX.md` §3 **D-40**：V1 = 管理面 + Playground，复用服务端渲染
+- `docs/design/INDEX.md` §3 **D-40**：V1 = 管理面（Playground 已按用户要求于 TASK-082 删除）
 - `docs/contracts/openapi.yaml`（CF-05）：唯一消费的接口契约
 - `docs/tasks/TASK-070-web骨架与Playground.md`：任务卡与本阶段执行记录（含偏差与未决问题）
 - `npm/README.md`：接入指南里三个 agent 配置片段的**事实来源**（改片段必须同步这里）
