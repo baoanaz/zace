@@ -88,7 +88,7 @@
 | [TASK-060](TASK-060-鉴权与token.md) | **鉴权**（session + API token + 首个用户 bootstrap + `/healthz` 诚实性自检）；**修 TASK-051 A1** | TASK-030 | `service/zace_service/{auth,routers/auth,metadb}.py` | pending |
 | [TASK-061](TASK-061-租户双层.md) | 租户双层：token→user→owns project（D-36 逻辑授权层） | TASK-060 | `service/zace_service/{metadb,deps,routers}/*.py` | pending |
 | [TASK-062](TASK-062-索引job与统计.md) | **索引 job 落库与统计**（成功/失败次数、平均耗时、历史） | TASK-034, TASK-060 | `service/zace_service/{metadb,indexer,runtime,routers}/*.py` | pending |
-| [TASK-064](TASK-064-查询审计与用量.md) | **查询审计与用量端点**（`/api/usage/**` 替换 501） | TASK-060 | `service/zace_service/{audit,metadb,routers}/*.py` | pending |
+| [TASK-064](TASK-064-查询审计与用量.md) | **查询审计与用量端点**（`/api/usage/**` 替换 501） | TASK-060 | `service/zace_service/{audit,metadb,routers}/*.py` | **review**（读取口/建表/聚合已合并；写入侧 `audit.py`+接线由 [TASK-084](TASK-084-查询审计接线.md) 补做，见卡内“补做记录”） |
 
 > **串行约束**：060 → 061 → 062 → 064。**060、061、062、064 均改 `service/zace_service/metadb.py`**（新建后共用），
 > 同一时间只允许一张 in_progress；061 必须从 060 的分支串联创建。
@@ -105,7 +105,7 @@
 | [TASK-081](TASK-081-密码长度放宽.md) | 密码长度下限 8 → **3**（含测试与文案同步） | 无 | `service/zace_service/routers/auth.py`、`service/tests/test_auth.py`、`web/src/api/client.ts` | **review**（`feature/task-081-password_xwz0923`；已合并） |
 | [TASK-082](TASK-082-删除Playground与项目页.md) | **删除 Playground 与项目管理页**（导航/路由/死链/测试一并清理；仪表盘保留项目列表） | 无 | `web/src/app/{App,Layout}.tsx`、`web/src/pages/{Playground,Projects,ProjectDetail}*`、`DashboardPage.tsx`、`HistoryPage.tsx`、`e2e.test.tsx`、`web/src/api/client.ts` | **review**（`feature/task-082-remove-pages_xwz0923`；lint/test/build 全绿，26 passed） |
 | [TASK-083](TASK-083-空态与错误态.md) | **空态/加载态/错误态统一**（`EmptyState` 组件 + 各页替换） | **TASK-082** | `web/src/components/ui.tsx`、`HistoryPage.tsx`、`DashboardPage.tsx`、`ApiKeysPage.tsx` | pending |
-| [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | pending |
+| [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | **review**（本地模式端到端 `total` 0→3；云端 summary 待 TASK-061 归属写入，见卡内未决问题） |
 | [TASK-085](TASK-085-索引统计接上传路径.md) | **索引统计接上客户端上传路径**（补 TASK-062）：`npx zace-client` 索引后面板不再恒为 0 | TASK-060/062 | `service/zace_service/runtime.py`、`service/tests/test_index_stats.py`(新建) | pending |
 
 > **TASK-084/085 的由来**（编排者实测，2026-09-13）：TASK-062/064 的**建表与方法已实现**，
