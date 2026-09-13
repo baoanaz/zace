@@ -125,6 +125,7 @@
 | [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（60-100 条真实用例 + 指标设计；为 TASK-050 建立可信标尺） | 无 | `benches/**` | pending |
 | [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
+| [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id**（用户 3 条补充） | **TASK-090**（抢 metadb/ops）、TASK-088 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx` | pending |
 
 ### 用户后续人工任务（非 AI 卡片，记录在案）
 
