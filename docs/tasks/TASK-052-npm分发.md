@@ -155,9 +155,38 @@ zace-client                         # bin 链接正确
 **与设计偏差**：无。落点 `npm/` 与既有 `client/`、`web/` 平级，属 monorepo 内的分发目录，
 不违反 D-33（四物理单元指运行组件；npm 是打包层）。
 
+**发布前校验脚本**（`scripts/check-version.sh`）：npm 包装器按 `v<package.json 版本>` 找 Release 资产，
+三者（`client/Cargo.toml` / `npm/package.json` / `server.json`）与 tag 不一致就会让用户拿到 404——
+这是最难排查的一类故障，故加脚本在发布前卡住：
+
+```console
+$ bash scripts/check-version.sh v0.0.1
+client/Cargo.toml:     0.0.1
+npm/package.json:      0.0.1
+server.json:           0.0.1
+✓ 三个文件版本一致：0.0.1
+✓ tag 与版本号一致
+```
+
+**下载→解压→执行 路径的真实验证**：此前只验证了"下载失败的回退链"，**下载成功**那条路径从未跑过。
+本卡用公开的 Release 资产（notace v1.0.2）作为替身，把我们 `run.js` 的仓库/版本/资产名替换后跑通：
+
+```console
+$ node run_mock.js          # 我们的下载/解压/chmod/spawn 代码，无本地回退
+[zace-dltest] 下载 v1.0.2 的 not-ace-tool-rs_Linux_x86_64.tar.gz …
+[zace-dltest] 已安装到 /home/xuwenzheng/.cache/zace-dltest/1.0.2/not-ace-tool-rs
+not-ace-tool-rs: missing Finnian base URL; pass --base-url or set FINNIAN_BASE_URL
+                              ↑ 二进制真的被下载、解压、chmod、执行成功（这行是它自己的报错）
+```
+
+**`npm publish --dry-run`**（包内容与元数据校验）：tarball 3 个文件 6.7 kB（`run.js` / `package.json` /
+`README.md`），`bin` 映射与 `os`/`cpu` 声明均正确。
+
 **未决问题**
 
-1. **包名已核实可用**：`npm view zace-client` → **E404（未被占用）**，故沿用 `zace-client`；
+1. **npm publish 需用户登录**：本机 `npm whoami` → `ENEEDAUTH`（未登录，`~/.npmrc` 只有代理配置），
+   且环境无 `NPM_TOKEN`。**publish 与 `git push`（打 tag）是唯一需要用户授权的两步**——
+   其余（版本校验、包内容、下载链路）均已在本地验证通过。**包名已核实可用**：`npm view zace-client` → **E404（未被占用）**，故沿用 `zace-client`；
    同时确认 `zace-tool-rs` 与 `@zace/client` 也未被占用。`server.json` 的 `name` 为
    `io.github.baoanaz/zace-client`——**发布到公共 npm / MCP registry 需用户执行**（账号与仓库权限）。
 2. **发布顺序（重要）**：必须**先发 GitHub Release（五平台资产）再发 npm 包**，否则用户首次运行会
