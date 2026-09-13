@@ -24,6 +24,7 @@ from pathlib import Path
 from zace_service import __version__
 
 __all__ = [
+    "COOKIE_SECURE_ENV",
     "DATA_ROOT_ENV",
     "DEFAULT_DATA_ROOT",
     "DEFAULT_HOST",
@@ -32,6 +33,8 @@ __all__ = [
     "DEFAULT_PORT",
     "LOCAL_MODE_ENV",
     "LOCAL_RESCAN_INTERVAL_ENV",
+    "PROJECTS_DIRNAME",
+    "REGISTER_OPEN_ENV",
     "Settings",
 ]
 
@@ -41,6 +44,12 @@ DATA_ROOT_ENV = "ZACE_DATA_ROOT"
 LOCAL_MODE_ENV = "ZACE_LOCAL_MODE"
 #: 懒重扫间隔环境变量（TASK-034 §C；0 = 禁用）。
 LOCAL_RESCAN_INTERVAL_ENV = "ZACE_LOCAL_RESCAN_INTERVAL"
+#: 注册开关（TASK-060；默认关闭：自部署单人场景够用，Module/06 §2.2）。
+REGISTER_OPEN_ENV = "ZACE_REGISTER_OPEN"
+#: session cookie 的 Secure 属性（TASK-060；HTTPS 部署必须置 true）。
+COOKIE_SECURE_ENV = "ZACE_COOKIE_SECURE"
+#: 数据根子目录名（core 的 ``projects/``）与元数据库文件名（TASK-060）。
+PROJECTS_DIRNAME = "projects"
 #: 默认懒重扫间隔（秒）：本地模式下检索前最多每 2s 扫一次（Module/05 §3.6 的 freshness 语义）。
 DEFAULT_LOCAL_RESCAN_INTERVAL_S = 2.0
 #: 默认数据根（core 的 ``DEFAULT_DATA_ROOT`` 同值；service 只读 settings，不重复定义语义）。
@@ -63,7 +72,21 @@ class Settings:
     log_level: str = DEFAULT_LOG_LEVEL
     local_mode: bool = True
     local_rescan_interval_s: float = DEFAULT_LOCAL_RESCAN_INTERVAL_S
+    #: 注册开关（TASK-060）：默认关闭；首个账户走 ``POST /api/auth/bootstrap``。
+    register_open: bool = False
+    #: session cookie 的 ``Secure``（TASK-060）：本地 http 调试为 False，上云必须 True。
+    cookie_secure: bool = False
     version: str = __version__
+
+    @property
+    def auth_required(self) -> bool:
+        """是否要求凭据（= 非本地模式，Module/06 §2.2）；本地模式免鉴权（R34）。"""
+        return not self.local_mode
+
+    @property
+    def meta_db_path(self) -> Path:
+        """``zace-meta.db`` 的落点（与 core 的 ``projects/`` 同级，Module/06 §4-A）。"""
+        return self.data_root / "zace-meta.db"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -78,6 +101,8 @@ class Settings:
                 LOCAL_RESCAN_INTERVAL_ENV,
                 default=DEFAULT_LOCAL_RESCAN_INTERVAL_S,
             ),
+            register_open=_as_bool(source.get(REGISTER_OPEN_ENV), REGISTER_OPEN_ENV, default=False),
+            cookie_secure=_as_bool(source.get(COOKIE_SECURE_ENV), COOKIE_SECURE_ENV, default=False),
         )
 
 

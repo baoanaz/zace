@@ -41,6 +41,7 @@ from zace_service.config import (
     LOCAL_RESCAN_INTERVAL_ENV,
     Settings,
 )
+from zace_service.metadb import MetaDB
 from zace_service.runtime import AttachResult, EngineManager
 
 __all__ = ["build_parser", "main"]
@@ -176,6 +177,10 @@ def _run_local(args: argparse.Namespace, base: Settings, settings: Settings) -> 
             file=sys.stderr,
         )
     manager = EngineManager.open(settings.data_root)
+    # 本地模式也记索引历史（TASK-062）：用户看得到每次索引的耗时与成功/失败，
+    # 而账户/API Key 仍不可用（无账户体系，R34）。
+    manager.attach_meta_db(MetaDB.open(settings.meta_db_path))
+    app.state.meta_db = manager.meta_db
     app.state.engine_manager = manager
     try:
         attached = manager.attach_local(

@@ -189,14 +189,39 @@ def test_attach_is_idempotent_for_the_same_root(local: SimpleNamespace, repo: Pa
 
 
 def test_attach_requires_local_mode(tmp_path: Path, repo: Path) -> None:
-    """非本地模式 → 403 ``local_mode_required``（DoD：远端模式没有共同文件系统）。"""
+    """非本地模式 → 403 ``local_mode_required``（DoD：远端模式没有共同文件系统）。
+
+    TASK-060 补充：非本地模式下**先要过鉴权**（401），因此本用例带一个有效 Bearer token——
+    "鉴权（401，你是谁）先于授权（403，这个能力在本地模式才开放）"是刻意的顺序：
+    未认证调用者不该从 403 里推断出"这个部署支持本地模式"。
+    """
     _app, manager, client = _make(tmp_path, local_mode=False)
+    headers = _issue_token(_app)
     with client:
-        response = client.post("/api/projects/attach", json={"root": str(repo)})
+        unauthenticated = client.post("/api/projects/attach", json={"root": str(repo)})
+        assert unauthenticated.status_code == 401
+
+        response = client.post(
+            "/api/projects/attach", json={"root": str(repo)}, headers=headers
+        )
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "local_mode_required"
         assert client.get("/healthz").json()["localMode"] is False
     manager.close()
+
+
+def _issue_token(app: FastAPI) -> dict[str, str]:
+    """在非本地模式的 app 上初始化首个账户并签一个 API Key（供鉴权用例复用）。"""
+    from zace_service.metadb import MetaDB
+
+    db = app.state.meta_db
+    assert isinstance(db, MetaDB)
+    user = db.create_user("tester", "x")  # 密码哈希在校验路径之外，这里只关心凭据载体
+    from zace_service.auth import create_api_token
+
+    raw, digest, prefix = create_api_token()
+    db.create_token(user.id, token_hash=digest, prefix=prefix, name="test")
+    return {"Authorization": f"Bearer {raw}"}
 
 
 @pytest.mark.parametrize("bad_root", ["/nonexistent/path/for-sure", "   "])

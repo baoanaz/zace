@@ -108,11 +108,15 @@ class ProjectIndexer:
         *,
         ingest: Callable[[], IngestReport],
         lock: threading.Lock,
+        on_finish: Callable[[IndexProgress], None] | None = None,
     ) -> None:
         self._project_id = project_id
         self._root = root
         self._ingest_repo = ingest
         self._lock = lock
+        #: 结束回调（TASK-062）：把这一次的 run 落进 ``index_runs``。**成功与失败两条路径都调**
+        #: （只记成功会让"失败次数"恒为 0）。回调自身的异常不得影响索引结果。
+        self._on_finish = on_finish
         self._guard = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancelled = threading.Event()
@@ -232,6 +236,7 @@ class ProjectIndexer:
             report.deleted,
             len(report.errors),
         )
+        self._notify_finish()
 
     def _fail(self, exc: BaseException) -> None:
         message = redact_text(f"{type(exc).__name__}: {exc}")
@@ -243,6 +248,16 @@ class ProjectIndexer:
                 error=message,
             )
         logger.error("索引失败：%s（root=%s）", self._project_id, self._root, exc_info=exc)
+        self._notify_finish()
+
+    def _notify_finish(self) -> None:
+        """把结束态交给回调（TASK-062 落库）。**回调异常只记日志**，不影响索引结果与进度。"""
+        if self._on_finish is None:
+            return
+        try:
+            self._on_finish(self.progress())
+        except Exception:  # 记不上账不能把已经成功的索引变成失败
+            logger.exception("索引记录落库失败（不影响索引结果）：%s", self._project_id)
 
     def _reset_to_idle(self) -> None:
         with self._guard:
