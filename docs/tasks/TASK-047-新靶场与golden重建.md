@@ -1,6 +1,6 @@
 # TASK-047：新评测靶场建立与 golden 重建（hello-agents）+ M2a 冒烟脚本
 
-> 状态：pending ｜ 阶段：Phase 2（M2b / W6-lane C）｜ 硬依赖：无（core 可用即可）｜ soft 依赖：TASK-046（云端 embedding 让索引变快）
+> 状态：**review** ｜ 阶段：Phase 2（M2b / W6-lane C）｜ 硬依赖：无（core 可用即可）｜ soft 依赖：TASK-046（云端 embedding 让索引变快）
 > 建议分支：`feature/task-047_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `benches/golden/hello-agents/`（**新建目录**：本靶场用例）
@@ -163,4 +163,129 @@ commit: 4f7682c（git remote: https://github.com/datawhalechina/hello-agents.git
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-13 ｜ 分支 `feature/task-047_xwz0913` ｜ 状态：完成（待评审）
+
+#### §A 新靶场 golden
+
+- `benches/golden/hello-agents/helloagents.jsonl`：**31 条**（29 正例 + 2 负例），
+  `repo_hint=hello-agents`，`commit=4f7682ceafe573d07cd8a7d0b89908500e83227d`。
+- 分布：`symbol` 16 ｜ `spec` 12 ｜ `path` 1 ｜ `negative` 2；语言 `zh` 23 ｜ `en` 8。
+- **跨章节覆盖 14 章**：ch1/2/3/4/7/8/9/10/11/12/13/14/15/16（未挤在 ch4/ch8）。
+- 每条 `expected` 的核验脚本：
+  ① 路径在磁盘存在；② 路径**在被索引的文件集内**（`DirectorySource` 口径，非 git 工作区）；
+  ③ 若给了 `symbol`，该串确实出现在目标文件里。核验结果 **problems: 0**。
+- 负例核验（对被索引的文件集，`grep -ril`，含未跟踪文件）：
+  `reconcile`/`kubebuilder`/`CustomResourceDefinition` = 0；`Redlock`/`分布式锁`/`distributed lock` = 0。
+- **未挑用例子集**：失败用例保留在集合里（R29/R30）。
+
+#### §B 基线（`benches/results/phase2-helloagents-baseline.md`）
+
+命令（完整可复现命令与 embedding 配置见报告的 §1）：
+
+```bash
+uv run zace-core eval --golden benches/golden/hello-agents \
+  --repo /home/xuwenzheng/github/hello-agents --data /tmp/zace-ha \
+  --report benches/results/phase2-helloagents-baseline.md
+```
+
+| 分组 | 用例数 | recall@5 | recall@10 | MRR |
+|---|---|---|---|---|
+| **总体（正例）** | 29 | **0.655** | **0.690** | **0.460** |
+| zh | 22 | 0.636 | 0.682 | 0.424 |
+| en | 7 | 0.714 | 0.714 | 0.571 |
+| symbol | 16 | 0.562 | 0.625 | 0.333 |
+| spec | 12 | 0.750 | 0.750 | 0.625 |
+| path | 1 | 1.000 | 1.000 | 0.500 |
+| **负例** | 2 | — | — | **2/2 通过** |
+
+向量通道降级用例数：**0**。
+
+#### §C 旧靶场文件处置
+
+`benches/golden/{aibox-super-sdk,linux-mtk-mw-cameraservice}/` **原样保留**（`git status` 无变更）。
+`benches/README.md` **追加**「靶场变更（2026-09-13）」一节（+50 行，**0 删除**）。
+
+#### §D 冒烟脚本（真实输出）
+
+`scripts/m2a-smoke.sh` 在本机**真跑通过**（数据根 `/tmp/zace-smoke-clean`，`--max-retries 5`）：
+
+```text
+$ bash scripts/m2a-smoke.sh --repo /home/xuwenzheng/github/hello-agents \
+      --data-root /tmp/zace-smoke-clean --port 8792 --query "记忆工具如何实现多轮检索？"
+[1/5] key 已就绪（来源已解析，长度 51，不回显内容）
+[2/5] 起服务：zace-service local --repo /home/xuwenzheng/github/hello-agents --data-root /tmp/zace-smoke-clean --port 8792
+        projectId=e9ee9dd1d41a7d2c ｜ 服务日志：/tmp/zace-smoke-clean/zace-smoke-service.log
+[3/5] 等索引完成（上限 1800s，每 5s 轮询一次；被 429 中断时最多重试 5 次）
+        state=running，本次已解析 0/1862 个文件…
+        （约 5 分钟后）
+        索引完成：state=done，本次解析 1482/1862 个文件（无改动时 processed=0 属正常）
+[4/5] 调 MCP tools/call search_context（断言返回里有「文件:行号」）
+[zace] answerable=true · confidence=medium · evidence=22 · docs=4 · mode=fast · channels=bm25,vector · degraded=false
+
+## Relevant Context
+### Code
+[E2] search_memory_demo — code/chapter8/01_MemoryTool_Basic_Operations.py:78-106
+     reason: bm25 -14.9703 + bm25 rank 38 + vector 0.6394 + vector rank 6 + entry point / exported symbol +0.2
+     78 | def search_memory_demo(memory_tool):
+     79 |     """搜索记忆演示 - 实现语义理解的检索"""
+     ...
+[OK] 冒烟通过：MCP 返回包含「文件:行号」证据。          ← 退出码 0
+[5/5] 已清理数据根：/tmp/zace-smoke-clean（--keep 可保留）
+```
+
+断言是 `grep -Eq '([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):[0-9]+'`，**不是**只看 exit code。
+
+#### §E 手册补充
+
+`docs/handbook/M2a-验收手册.md` **追加** `## 10. 一键冒烟（可选）`（+80 行，**0 删除**；0-9 节未动）。
+
+#### 索引范围实测
+
+```text
+files: added=1482 modified=0 deleted=0 parsed=1482
+chunks: new=9971 reused=0 removed=0
+vectors: upserted=9971 deleted=0
+skipped: 380 个二进制/不可解码文件
+elapsed: 364.1s
+```
+
+| 口径 | 数字 |
+|---|---|
+| 目录列举（`list_files()`） | 1862 |
+| 实际解析 | 1482 |
+| 跳过二进制 | 380（345 `.png` + 20 `.jpg` + 其余 `.db/.mp3/.pdf/.docx/.xlsx/.ogg/.ico`） |
+| chunks / vectors | 9971 / 9971 |
+| 解析语言分布 | python 749 ｜ markdown 227 ｜ fallback 506 |
+| 解析错误 | 0（`files.parse_errors` 全为 `[]`） |
+
+#### 验收标准（DoD）自查
+
+- [x] `benches/golden/hello-agents/` 存在，31 条（含负例 2），每条 `expected` 经 grep 核验
+- [x] `zace-core eval` 跑通，报告落盘 `benches/results/phase2-helloagents-baseline.md`
+- [x] 报告中每个数字可追溯到命令；分 category 与语言拆开
+- [x] `benches/README.md` 追加靶场变更节（既有内容未动）
+- [x] 旧 golden 目录仍在（未被删除/修改）
+- [x] `scripts/m2a-smoke.sh` 本机跑通，断言了 `文件:行号`（输出见上）
+- [x] 手册追加 §10（0-9 节未动）
+- [x] 基线三条全绿：`ruff` clean ｜ 依赖方向 通过 ｜ **668 passed, 2 skipped**（14.12s）
+- [x] 本执行记录已回填；任务板对应行改 `review`
+
+#### 与设计的偏差
+
+无。未改 `core/**`、`service/**`、`docs/contracts/**`、`docs/design/**`；未碰 `hello-agents` 仓库。
+
+#### 未决问题（需编排者裁定）
+
+1. **基线产生于 TASK-046 之前**：索引时 `max_input_tokens` 走「未登记模型」分支 = **2048**（不是 bge-m3
+   的 8192）。TASK-046 合入后若继续把本报告当长期护栏，**需裁定是否重跑**（长 chunk 的向量会变）。
+   本卡不擅自重跑。
+2. **F4 的实测补充（归属 TASK-046 §D）**：本机 TPM 限流约 **200K tokens/分钟**；且 `api.py` 一次 429
+   即终结整次 ingest（实测复现 `chunks=9971 / vectors=0` 的静默降级形态）。本卡以 `EMBED_BATCH_SIZE=4`
+   规避（未改 core），但**这正是泳道 B 要修的问题**——建议 B 的实现把「按 token 截断 + 按 token 分批 +
+   429 有界重试」作为验收项。
+3. **`symbol` 类指标偏低（0.562）**：失败模式是「文档挤掉代码」（`helloagents-0001/0002/0003/0017`），
+   与 **R21 是同一现象在新靶场的再现**。按 R29/R30 **本卡不做任何调参**；证据留作 TASK-050 的素材。
+4. **与 TASK-037 的接口**：本报告的「索引范围实测」是 TASK-037 的**前对照**（1862 列举 / 380 二进制跳过）；
+   037 落地后 `list_files()` 预期降到 ~976，届时需更新本节数字。
+5. **不要并发指向同一 `--data-root`**（实测会导致向量表 rebuild 清零）——已写进 `benches/README.md`
+   与手册 §10 的提醒。

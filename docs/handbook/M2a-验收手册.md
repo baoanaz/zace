@@ -536,3 +536,83 @@ $ curl -s http://127.0.0.1:8792/healthz
 - [ ] 改一个文件、等 2 秒再问相关问题，能命中新代码
 - [ ] 故意问一个不存在的路径 → 看到"未知项目"的可读报错（不是 500）
 - [ ] 带 `Origin: http://evil.example` 发一次请求 → 403（防护生效）
+
+---
+
+## 10. 一键冒烟（可选）
+
+第 1–4 节的步骤可以压缩成一条命令：`scripts/m2a-smoke.sh` 会**起服务 → 等索引 → 用 MCP 调一次
+`search_context` → 断言返回里有「文件:行号」**，并在结束时停服务、清理数据根（默认不保留）。
+
+```console
+$ bash scripts/m2a-smoke.sh --repo /home/xuwenzheng/github/hello-agents \
+      --data-root /tmp/zace-smoke --query "记忆工具如何实现多轮检索？"
+[1/5] key 已就绪（来源已解析，长度 51，不回显内容）
+[2/5] 起服务：zace-service local --repo /home/xuwenzheng/github/hello-agents --data-root /tmp/zace-smoke --port 8799
+        projectId=e9ee9dd1d41a7d2c ｜ 服务日志：/tmp/zace-smoke/zace-smoke-service.log
+[3/5] 等索引完成（上限 1800s，每 5s 轮询一次；被 429 中断时最多重试 3 次）
+        state=running，本次已解析 0/1862 个文件…
+        ...（约 5 分钟）
+        索引完成：state=done，本次解析 1482/1862 个文件（无改动时 processed=0 属正常）
+[4/5] 调 MCP tools/call search_context（断言返回里有「文件:行号」）
+[zace] answerable=true · confidence=medium · evidence=22 · docs=4 · mode=fast · channels=bm25,vector · degraded=false
+
+## Relevant Context
+### Code
+[E2] search_memory_demo — code/chapter8/01_MemoryTool_Basic_Operations.py:78-106
+     reason: bm25 -14.9703 + bm25 rank 38 + vector 0.6394 + vector rank 6 + entry point / exported symbol +0.2
+     78 | def search_memory_demo(memory_tool):
+     79 |     """搜索记忆演示 - 实现语义理解的检索"""
+     ...
+[OK] 冒烟通过：MCP 返回包含「文件:行号」证据。
+[5/5] 已清理数据根：/tmp/zace-smoke（--keep 可保留）
+```
+
+> 上面是本机**真实输出**（2026-09-13，`hello-agents` 全量 1862 文件 / 9971 chunks）。
+> 索引阶段约 5 分钟；输出的文件数（1862/1482）会随仓库不同而变，但形态一致。
+
+**它替你固化了本环境的两个坑**（这两条是实测踩过的，见 `docs/plan/phase2-m2b-w6.md` §2.4）：
+
+| 坑 | 脚本的处理 |
+|---|---|
+| **F3：非交互 shell 拿不到 key**——`~/.bashrc` 的 `export zace_embeding_API_KEY=` 只对**交互式** shell 生效；脚本、子 AI、CI 都是非交互进程 | 脚本按 `$EMBED_API_KEY` → `--env-file`（默认 `./.env`）→ `~/.bashrc` 的 `--key-var`（默认 `zace_embeding_API_KEY`）顺序自己解析；**找不到时明确报错并打印三条解决命令**（不静默继续、不回显 key） |
+| **本机有 `http_proxy`** → 客户端把 `127.0.0.1:8799` 也走代理，连接失败 | 脚本 `export NO_PROXY=127.0.0.1,localhost`（MCP 客户端进程内也再设一次，同 §4.2） |
+
+**用法**
+
+```bash
+bash scripts/m2a-smoke.sh --help          # 全部参数
+bash scripts/m2a-smoke.sh --repo <仓库绝对路径> [--data-root /tmp/zace-smoke] [--port 8799]
+#   --query  "你自己的真实问题"   # 默认是一个演示问题，换掉更贴近你的仓库
+#   --timeout 1800                # 等索引上限（秒）
+#   --keep                        # 结束后保留数据根与服务日志，便于排错
+```
+
+**前置**
+
+- 依赖已装：`uv sync --all-packages --all-extras`（MCP 客户端用 `mcp` 官方 SDK）；
+- **云端 embedding 的 key**（脚本会把 `EMBED_MODE=api` / `EMBED_MODEL=BAAI/bge-m3` / `EMBED_DIM=1024`
+  / `EMBED_BATCH_SIZE=4` 等导出给 `zace-service` 子进程，可用同名环境变量覆盖）——不想给 key 就先用
+  `EMBED_MODE=local` + 本地模型（见 `.env.example` 末段）；
+- **`--data-root` 不要落在被索引仓库内部**（脚本会拒绝，避免污染仓库）。
+
+> **为什么要指定批大小**：脚本默认 `EMBED_BATCH_SIZE=4`。API 的默认批次是 64，实测在真实仓库上会撞
+> provider 的 **TPM 限流（429）**，而当前实现里**一次 429 会让整次 ingest 失败**（TASK-046 §D 的 F4，
+> 泳道 B 在修）。脚本对 429 有**有界重试**（默认 3 次 × 等 90s 后 `POST /rescan`），可用
+> `--max-retries` / `--retry-wait` 调整；若反复 429，先把 `EMBED_BATCH_SIZE` 调小。
+
+> **注意**：同一 `--data-root` **不要并发跑两个服务/两个脚本**（会触发向量表重建，把已嵌入的向量清空）。
+
+**失败时怎么排查**
+
+| 现象 | 先看哪里 |
+|---|---|
+| `[错误] 找不到 embedding API key` | 按提示三选一注入；确认 `~/.bashrc` 里的变量名（`grep -n zace_embeding_API_KEY ~/.bashrc`） |
+| 服务 60s 内未就绪 | 脚本会打印服务日志尾部；手动起一次看完整报错：`uv run zace-service local --repo … --port …` |
+| 等索引超时（state 一直 `running`） | 这是**真实进度**（服务端没有百分比，§2）；加大 `--timeout`，或检查是否撞了 provider 限流（日志里有 `429`） |
+| 日志里反复 `HTTP 429` / `TPM limit reached` | 降低批次后重跑：`EMBED_BATCH_SIZE=2 bash scripts/m2a-smoke.sh …`；或加大重试 `--max-retries 6 --retry-wait 120`（根因属 TASK-046 §D） |
+| 断言失败（没有「文件:行号」） | ① `--query` 换成仓库里确实存在的概念；② 查 `GET /api/projects/{id}` 的 `sync.chunks` 是否 > 0；③ 若 `channels` 只有 `bm25`，说明向量还没就绪 |
+| 想留着现场 | 加 `--keep`，然后按第 1–4 节手工继续查 |
+
+> **与第 9 节的关系**：第 9 节是**人工**逐项验收（含编辑器、改代码重扫、安全防护）；本脚本只做
+> **自动化的最小闭环**（服务可用 + 索引完成 + MCP 有带行号的证据）。两者互补，不要用脚本替代第 9 节。
