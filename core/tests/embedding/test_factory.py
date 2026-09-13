@@ -62,7 +62,7 @@ def test_api_mode_uses_registry_dim_and_batch_size() -> None:
     assert isinstance(provider, EmbeddingProvider)
     assert provider.profile.model_id == "api:bge-m3"
     assert provider.profile.dim == 1024
-    assert provider.batch_size == 64  # API 默认批大小（卡内 §A）
+    assert provider.batch_size == 256  # TASK-049：厂商级安全批大小（siliconflow）
 
 
 def test_api_mode_requires_model_and_base_url() -> None:

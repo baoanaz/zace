@@ -22,9 +22,6 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from zace_core.embedding.api import (
-    DEFAULT_BATCH_SIZE as API_DEFAULT_BATCH_SIZE,
-)
-from zace_core.embedding.api import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_TIMEOUT_CONNECT,
     DEFAULT_TIMEOUT_TOTAL,
@@ -42,6 +39,7 @@ from zace_core.embedding.registry import (
     ApiModelSpec,
     find_api_spec,
     get_local_spec,
+    resolve_transport,
 )
 from zace_core.interfaces import EmbeddingProvider
 
@@ -95,6 +93,12 @@ class EmbeddingConfig:
     #: API 侧的**累计 token 预算**（TASK-046 §D 引入该参数；本字段是 TASK-048 新增的配置入口）。
     #: 只有 API 模式消费；本地 ONNX 按 tokenizer 自行截断，与预算无关。
     batch_token_budget: int | None = None
+    #: （TASK-049）并发批数。``None`` → 按模型/厂商推荐值，最终回落 1（串行）。
+    #: **默认 1 是有意的**：免费档限流脆弱，并发应由用户显式开启。
+    concurrency: int | None = None
+    #: （TASK-049）显式指定厂商（``siliconflow`` / ``voyage`` / ``openai`` / ``generic``）。
+    #: ``None`` 时按模型条目或 ``base_url`` 推断。
+    provider: str | None = None
     cache_dir: str | None = None
     model_dir: str | None = None
     offline: bool = False
@@ -108,7 +112,7 @@ class EmbeddingConfig:
     def __post_init__(self) -> None:
         if self.mode not in ("local", "api"):
             raise EmbeddingConfigError(f"mode 必须是 'local' 或 'api'，收到 {self.mode!r}")
-        for name in ("dim", "max_input_tokens", "batch_size", "batch_token_budget"):
+        for name in ("dim", "max_input_tokens", "batch_size", "batch_token_budget", "concurrency"):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise EmbeddingConfigError(f"{name} 必须 ≥ 1，收到 {value}")
@@ -132,10 +136,14 @@ class EmbeddingConfig:
             ("max_input_tokens", "EMBED_MAX_INPUT_TOKENS"),
             ("batch_size", "EMBED_BATCH_SIZE"),
             ("batch_token_budget", "EMBED_BATCH_TOKEN_BUDGET"),
+            ("concurrency", "EMBED_CONCURRENCY"),
         ):
             raw = source.get(raw_key)
             if raw:
                 data[name] = _as_int(raw, raw_key)
+        provider = source.get("EMBED_PROVIDER")
+        if provider:
+            data["provider"] = provider.strip() or None
         offline = source.get("EMBED_OFFLINE")
         if offline:
             data["offline"] = offline.strip().lower() in ("1", "true", "yes", "on")
@@ -240,6 +248,7 @@ def _create_api(
             name=config.model,
             dim=config.dim,
             max_input_tokens=config.max_input_tokens or UNKNOWN_API_MAX_INPUT_TOKENS,
+            transport=config.provider,
             notes="运行时显式配置（未登记模型）",
         )
     else:
@@ -248,17 +257,23 @@ def _create_api(
             dim=config.dim or spec.dim,
             max_input_tokens=_clamp_to_model_limit(spec, config.max_input_tokens),
         )
+    # TASK-049 §3.2：批参数三级回落 env > 模型 > 厂商 > 全局默认。
+    transport = resolve_transport(spec, base_url=config.base_url, provider=config.provider)
+    batch_size = config.batch_size or spec.batch_size or transport.safe_batch_items
+    budget = config.batch_token_budget or spec.batch_token_budget
     return OpenAiCompatibleEmbeddingProvider(
         spec,
         base_url=config.base_url,
         api_key=config.api_key,
         client=client,
-        batch_size=config.batch_size or API_DEFAULT_BATCH_SIZE,
+        batch_size=batch_size,
         **(
-            {"batch_token_budget": config.batch_token_budget}
-            if config.batch_token_budget is not None
-            else {}
+            {"batch_token_budget": budget}
+            if budget is not None
+            else {"batch_token_budget": transport.max_batch_tokens}
         ),
+        transport=transport,
+        concurrency=config.concurrency or spec.concurrency or 1,
         max_retries=config.max_retries,
         sleep=sleep or time.sleep,
         timeout_total=config.timeout_total,

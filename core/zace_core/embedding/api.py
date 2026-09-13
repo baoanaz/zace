@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -43,7 +44,7 @@ from zace_core.embedding.base import (
     l2_normalize,
     with_prefix,
 )
-from zace_core.embedding.registry import ApiModelSpec
+from zace_core.embedding.registry import ApiModelSpec, ApiTransportSpec, get_transport
 from zace_core.interfaces import EmbeddingProfile
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型检查期需要
@@ -112,14 +113,31 @@ class OpenAiCompatibleEmbeddingProvider:
         extra_headers: Mapping[str, str] | None = None,
         tokenizer: Tokenizer | None = None,
         batch_token_budget: int = DEFAULT_BATCH_TOKEN_BUDGET,
+        transport: ApiTransportSpec | None = None,
+        concurrency: int = 1,
     ) -> None:
         if batch_size < 1:
             raise EmbeddingConfigError(f"batch_size 必须 ≥ 1，收到 {batch_size}")
         if batch_token_budget < 1:
             raise EmbeddingConfigError(f"batch_token_budget 必须 ≥ 1，收到 {batch_token_budget}")
+        if concurrency < 1:
+            raise EmbeddingConfigError(f"concurrency 必须 ≥ 1，收到 {concurrency}")
         if max_retries < 0:
             raise EmbeddingConfigError(f"max_retries 不能为负，收到 {max_retries}")
         self._spec = spec
+        # TASK-049：厂商传输特征（未注入时回落到 generic 的保守默认）。
+        self._transport = transport or get_transport("generic")
+        if batch_size > self._transport.max_batch_items:
+            raise EmbeddingConfigError(
+                f"batch_size={batch_size} 超过 {self._transport.provider} 的条数上限 "
+                f"{self._transport.max_batch_items}（超限会被 API 拒绝，TASK-049 §8）"
+            )
+        if batch_token_budget > self._transport.max_batch_tokens:
+            raise EmbeddingConfigError(
+                f"batch_token_budget={batch_token_budget} 超过 {self._transport.provider} 的 "
+                f"token 上限 {self._transport.max_batch_tokens}（TASK-049 §8）"
+            )
+        self._concurrency = concurrency
         self._endpoint = embeddings_endpoint(base_url)
         self._api_key = api_key or None
         self._owns_client = client is None
@@ -162,6 +180,16 @@ class OpenAiCompatibleEmbeddingProvider:
     def batch_token_budget(self) -> int:
         return self._batch_token_budget
 
+    @property
+    def transport(self) -> ApiTransportSpec:
+        """生效的厂商传输配置（TASK-049）。"""
+        return self._transport
+
+    @property
+    def concurrency(self) -> int:
+        """并发批数（1 = 串行，TASK-049 §3.3）。"""
+        return self._concurrency
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(model_id={self._spec.model_id!r}, "
@@ -192,14 +220,36 @@ class OpenAiCompatibleEmbeddingProvider:
         prefix = self._spec.query_prefix if side == "query" else self._spec.passage_prefix
         # 截断 + 按 token 预算分批（TASK-046 §D）：发请求前就消掉超长输入与批次尖峰。
         prepared = [self._prepare(with_prefix(text, prefix)) for text in items]
+        batches = list(
+            iter_batches_by_token_budget(
+                prepared,
+                batch_size=self._batch_size,
+                token_budget=self._batch_token_budget,
+                count_tokens=self._estimate_tokens,
+            )
+        )
+        # TASK-049 §3.3：并发发送（默认 1 = 串行，行为与之前完全一致）。
+        # **顺序必须保持**：结果按批次原顺序拼接（_embed_batch 内部已按 index 排序）。
+        if self._concurrency > 1 and len(batches) > 1:
+            return self._embed_batches_concurrent(batches)
         vectors: list[list[float]] = []
-        for batch in iter_batches_by_token_budget(
-            prepared,
-            batch_size=self._batch_size,
-            token_budget=self._batch_token_budget,
-            count_tokens=self._estimate_tokens,
-        ):
+        for batch in batches:
             vectors.extend(self._embed_batch(batch))
+        return vectors
+
+    def _embed_batches_concurrent(self, batches: Sequence[Sequence[str]]) -> list[list[float]]:
+        """并发发送多批（TASK-049 §3.3）。
+
+    失败语义与串行一致：**任一批最终失败 → 整次抛 ``EmbeddingError``**（不部分成功）。
+    线程数取 ``min(concurrency, 批数)``；``httpx.Client`` 是线程安全的。
+    """
+        workers = min(self._concurrency, len(batches))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # map 保持输入顺序；异常在取值时抛出。
+            results = list(pool.map(self._embed_batch, batches))
+        vectors: list[list[float]] = []
+        for rows in results:
+            vectors.extend(rows)
         return vectors
 
     # -- 截断与分批 -------------------------------------------------------

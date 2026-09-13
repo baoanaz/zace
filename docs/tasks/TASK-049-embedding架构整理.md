@@ -204,3 +204,49 @@ httpx.RemoteProtocolError: peer closed connection without sending complete messa
 ## 执行记录
 
 （实施 AI 在此填写。）
+
+## 执行记录
+
+**日期**：2026-09-13 ｜ **实施**：编排者（W7）｜ **状态**：核心完成，待回填手册
+
+### 交付
+
+| 文件 | 内容 |
+|---|---|
+| `core/zace_core/embedding/registry.py` | `ApiTransportSpec`（厂商传输特征）+ `API_TRANSPORTS` 表（siliconflow / voyage / openai / generic，数字全部来自实测）+ `resolve_transport()`（按 provider/模型/base_url 推断）+ 模型条目补 `transport`/`batch_size`/`batch_token_budget`/`concurrency`/`output_dimension`；新增 `bge-m3-pro`、`voyage-4-lite`、`voyage-code-4` |
+| `core/zace_core/embedding/api.py` | 批上限校验（超厂商上限即报可读错误）+ `concurrency` 实现（`ThreadPoolExecutor`，默认为 1 = 串行）+ `transport`/`concurrency` 只读属性 |
+| `core/zace_core/embedding/factory.py` | 三级回落（env > 模型 > 厂商 > 全局）；新增 `EMBED_CONCURRENCY` / `EMBED_PROVIDER` |
+
+### 实测（本机，hello-agents 1436 文件 / 9389 chunks）
+
+| 配置 | 耗时 | 指标 |
+|---|---|---|
+| voyage-4-lite, concurrency=1 | **80.2s** | — |
+| voyage-4-lite, concurrency=8（默认） | **43.6s**（1.84×） | recall@5 0.690 / r@10 0.759 / MRR 0.501（与串行**完全一致**） |
+| 硅基流动 bge-m3, concurrency=1（对照） | 230.9s | recall@5 0.655 / r@10 0.690 / MRR 0.460 |
+
+### 三级回落验证
+
+```text
+voyage-4-lite  → transport=voyage       batch= 500 budget=300000 conc=8
+bge-m3         → transport=siliconflow  batch= 256 budget= 75000 conc=1
+（bge-m3 的 conc=1 是刻意的：免费档限流脆弱）
+```
+
+### 基线
+
+`uv run pytest core/tests -o addopts="" -q` → **576 passed, 2 skipped**；
+`ruff check .` clean；依赖方向通过。
+（注：全仓 `uv run pytest` 当前被**另一个会话的 WIP 文件** `service/tests/test_auth.py` 阻断收集，
+与本卡无关，该文件是未追踪状态。）
+
+### 未完成（后续）
+
+- `docs/handbook/embedding-provider切换.md` 手册（含"额度用完怎么换"）；
+- `.env.example` 补新变量与 voyage 示例；
+- 并发失败语义的专项测试（当前只验证了正常路径）。
+
+### 与设计偏差
+
+无。`output_dimension` 字段已加入 spec 但**尚未接线到请求体**（降维会改变向量空间，
+需先评估检索质量，见 §8.1；不属本卡 DoD）。
