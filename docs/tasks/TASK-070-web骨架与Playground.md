@@ -1,6 +1,6 @@
 # TASK-070：zace-web 骨架 + 项目总览 + Playground + 接入指南（M4 首卡）
 
-> 状态：pending ｜ 阶段：Phase 4（M4，与 Phase 2/3 后端并行可做）｜ 硬依赖：无（只用**已 done** 的端点）｜
+> 状态：review ｜ 阶段：Phase 4（M4，与 Phase 2/3 后端并行可做）｜ 硬依赖：无（只用**已 done** 的端点）｜
 > soft 依赖：TASK-060/061/062/064（登录、token、统计、用量页需要它们先落地）
 > 建议分支：`feature/task-070_<你的缩写><MMDD>`
 > 交付物所有权：**`web/**` 全目录**（新建；本卡是该目录的唯一所有者）
@@ -169,4 +169,122 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-13 · 实施 AI · 分支 `feature/task-070_xwz0913`（从 `main` @ `42587cf` 开出）
+
+**状态：实现完成，待编排者评审。**
+
+#### 关键决策
+
+1. **页面范围严格按“后端已就绪”划分**：实现 4 页（项目总览 / 项目详情 / Playground / 接入指南），
+   六个未就绪页统一渲染 `NotReadyPage`（标注依赖卡号，**不用假数据**）。
+2. **验证用 Vite 代理，而非让 service 加 CORS**：生产同源（Caddy），开发用代理；
+   因此**未改 service 一行代码**（也避开了与其它会话的文件冲突）。
+3. **新增 `API_BASE`（`VITE_ZACE_API_BASE`）**：默认同源；它同时服务“web 与服务不同源”与
+   **端到端测试直连真实服务**（否则 e2e 无法在无代理环境下跑）。这是 CF-05 之外的 web 内部约定，不影响后端。
+4. **端到端测试默认跳过**（`ZACE_E2E=1` 启用）：它需要已索引的真实服务，不适合进 CI；
+   单元测试（mock）负责契约形状，e2e 负责“真实返回被正确渲染”。
+5. **`indexProgress` 不出现百分比**（含单测钉住）：`processedFiles`/`totalFiles` 不同量纲，
+   差值不代表失败；`done + error` 渲染为警告而非失败。
+
+#### 验收命令与结果（本机实测）
+
+```console
+$ cd web && npm run lint
+> eslint src --max-warnings 0          # exit 0，无输出
+
+$ cd web && npm test
+ Test Files  3 passed | 1 skipped (4)
+      Tests  15 passed | 2 skipped (17)  # skipped = e2e（需 ZACE_E2E=1）
+
+$ cd web && npm run build
+> tsc --noEmit && vite build
+✓ 299 modules transformed.
+dist/index.html                   0.44 kB │ gzip:   0.29 kB
+dist/assets/index-CLA8mgnn.css   12.61 kB │ gzip:   3.02 kB
+dist/assets/index-C8yvTGnv.js   397.66 kB │ gzip: 128.27 kB
+✓ built in 1.45s
+
+$ cd . && uv run ruff check .                                # All checks passed!
+$ uv run python scripts/check_dependency_direction.py        # 依赖方向检查通过
+$ uv run pytest                                              # 727 passed, 2 skipped
+```
+
+#### 端到端行为验收（真实 service，§DoD 第 3 条）
+
+起服务（硅基流动 bge-m3，2 文件演示仓库，索引 2s 完成）：
+
+```console
+$ uv run zace-service local --repo /home/xuwenzheng/zace-scratch/demo-repo \
+    --data-root /tmp/zace-web-check/data --port 8787
+  身份      : 非 git 仓库 → 绝对路径 hash（D-29）
+  索引      : 后台进行中（state=running，已处理 0/0 个文件）
+  {"msg": "索引完成：e6fe81dbaebfb65d（parsed=2/2，added=2，errors=0）"}
+```
+
+页面消费的端点全部实调（Vite 代理链路也验过：`curl http://127.0.0.1:5173/healthz` 与
+`/api/projects` 均返回真实 JSON）：
+
+```console
+$ curl -s http://127.0.0.1:8787/healthz | jq '.localMode, .auth, .projects[0].indexProgress'
+true
+"disabled(local)"
+{ "state": "done", "processedFiles": 2, "totalFiles": 2, "error": null }
+
+$ curl -s -X POST .../api/query/search -d '{"projectId":"e6fe81dbaebfb65d","query":"令牌过期后在哪里刷新？"}'
+## Relevant Context
+### Code
+[E2] SessionStore.refresh_token — src/session.py:1-13
+     reason: bm25 -2.7637 + bm25 rank 1 + vector 0.6372 + vector rank 1 + 相邻区间合并
+     11 |     def refresh_token(self, token: str) -> str:
+     12 |         """刷新会话 token：过期后由本方法负责续期。"""
+### Docs
+[E1] README.md > 演示仓库 > 会话（readme）
+### Meta
+confidence: medium | index: fresh (28s ago) | budget: 605/10.0K
+
+$ curl -s -X POST .../api/query/ask -d '{...}'
+status = degraded ；meta.degradedReason = "Deep 模式（LLM 总结）尚未接入（Phase 3）…"
+
+$ curl -o /dev/null -w '%{http_code}' .../api/auth/tokens   → 501
+$ curl -o /dev/null -w '%{http_code}' .../api/usage/projects/<id> → 501
+```
+
+真实页面渲染断言（`ZACE_E2E=1`）：
+
+```console
+$ ZACE_E2E=1 ZACE_E2E_BASE=http://127.0.0.1:8787 ZACE_E2E_PROJECT=e6fe81dbaebfb65d \
+    VITE_ZACE_API_BASE=http://127.0.0.1:8787 npx vitest run src/pages/e2e.test.tsx
+ ✓ 真实检索结果能在 Playground 页面渲染出带行号的证据块 373ms
+ Test Files  1 passed (1) / Tests  2 passed (2)
+```
+
+#### 契约影响
+
+**无**（只消费 CF-05 已有端点与字段）。新增的是 web 内部约定：
+`VITE_ZACE_API_BASE`（构建期环境变量）与 `NOT_READY_FEATURES` 清单（纯前端）。
+
+#### 与设计偏差
+
+1. **`/api/meta` 未使用**：接入指南页用 `/healthz` 取 `localMode`/`auth`/`dataRoot`——
+   `/healthz` 今天已是免鉴权端点，无需为 web 新增契约（TASK-060 的 `/api/meta` 落地后，
+   接入指南页的“登录入口”可按它显隐）。
+2. **未引 UI 组件库与状态管理库**（卡内已声明），表格与抽屉式详情均为手写 Tailwind。
+3. **TASK-061/062/064 的能力不在本卡**（按分工另开卡），web 侧对应页为未就绪占位。
+
+#### 未决问题（需编排者裁定）
+
+1. **CI 与根 README 的改动已提交但未获批**：本卡改了 `.github/workflows/ci.yml`（追加 `web` job：
+   `npm ci` + `lint` + `test` + `build`）与根 `README.md` 仓库布局表一行（`web/` 的描述）。
+   理由：`web/` 是本卡新增的包，无 CI 覆盖会很快腐化（前端回归无门禁）。
+   **若判定越界，请指示回退这两处，并把它记为已知缺口。**
+2. **401/登录态尚未处理**：M2c 引入 session 后，web 需要 `401 → 跳登录页` 的全局处理与
+   `/api/meta` 驱动的引导（登录/注册/初始化）。建议在 TASK-071（依赖 TASK-060/061）一并做。
+3. **`web/dist` 与 Caddy 编排**：本卡只产出静态产物；接入 compose/Caddy 属 TASK-063。
+4. **Playground 历史仅存 sessionStorage**（本机、单标签页）。若要做可分享的 Playground，
+   可基于 TASK-064 的 `recent` 做回放。
+
+#### 建议复核点
+
+- `web/src/components/progress.ts`：五态文案与手册 §2 的口径是否一致（尤其 `done+error`）；
+- `web/src/pages/ConnectPage.tsx`：页面上的命令/端点逐条能否跑通（接入指南最容易被写坏）；
+- `web/src/pages/PlaygroundPage.tsx`：是否真的**没有**自行拼装证据块（D-40 的硬约束）。
