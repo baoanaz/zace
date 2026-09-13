@@ -24,9 +24,6 @@ import { ConnectPage } from "../pages/ConnectPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { LoginPage } from "../pages/LoginPage";
-import { PlaygroundPage } from "../pages/PlaygroundPage";
-import { ProjectDetailPage } from "../pages/ProjectDetailPage";
-import { ProjectsPage } from "../pages/ProjectsPage";
 import { Layout } from "./Layout";
 
 type AuthState =
@@ -127,9 +124,6 @@ function buildRouter(options: {
       element: <Layout account={account} onSignedOut={onSignedOut} />,
       children: [
         { index: true, element: <Guard><DashboardPage account={account} /></Guard> },
-        { path: "projects", element: <Guard><ProjectsPage /></Guard> },
-        { path: "projects/:id", element: <Guard><ProjectDetailPage /></Guard> },
-        { path: "playground", element: <Guard><PlaygroundPage /></Guard> },
         { path: "keys", element: <Guard><ApiKeysPage /></Guard> },
         { path: "history", element: <Guard><HistoryPage /></Guard> },
         { path: "connect", element: <Guard><ConnectPage /></Guard> },

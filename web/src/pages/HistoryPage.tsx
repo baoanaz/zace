@@ -8,7 +8,6 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 
 import {
   type IndexRun,
@@ -115,8 +114,7 @@ function IndexHistory({
   if (runs.length === 0) {
     return (
       <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
-        还没有索引记录。在 <Link className="underline" to="/projects">项目管理</Link>{" "}
-        绑定本地目录（或让客户端同步一次）即可产生。
+        还没有索引记录。让客户端同步一次（或在编辑器里接入后同步）即可产生。
       </p>
     );
   }
@@ -142,11 +140,7 @@ function IndexHistory({
           {runs.map(({ projectId, run }) => (
             <tr key={`${projectId}-${run.runId}`} className="border-t border-slate-100">
               <td className="px-4 py-2 text-xs text-slate-500">{formatTime(run.finishedAt)}</td>
-              <td className="px-4 py-2">
-                <Link className="underline" to={`/projects/${projectId}`}>
-                  {nameOf(projectId)}
-                </Link>
-              </td>
+              <td className="px-4 py-2">{nameOf(projectId)}</td>
               <td className="px-4 py-2">
                 <span
                   className={`rounded px-1.5 py-0.5 text-xs ${
@@ -228,8 +222,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
 
       {usage.recent.length === 0 ? (
         <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
-          这段时间还没有查询记录。去 <Link className="underline" to="/playground">Playground</Link>{" "}
-          或从编辑器里问一次即可产生。
+          这段时间还没有查询记录。从编辑器里问一次即可产生。
         </p>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">

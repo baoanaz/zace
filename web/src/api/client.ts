@@ -9,7 +9,6 @@
  */
 
 import type {
-  AskResponse,
   ErrorEnvelope,
   Health,
   Project,
@@ -168,27 +167,6 @@ export function listProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
 }
 
-export function getProject(id: string): Promise<Project> {
-  return request<Project>(`/api/projects/${encodeURIComponent(id)}`);
-}
-
-export function attachProject(root: string, displayName?: string): Promise<Project> {
-  const body: Record<string, unknown> = { root };
-  if (displayName) body.displayName = displayName;
-  return request<Project>("/api/projects/attach", { method: "POST", body });
-}
-
-export function rescanProject(id: string): Promise<{ indexProgress: unknown }> {
-  return request<{ indexProgress: unknown }>(
-    `/api/projects/${encodeURIComponent(id)}/rescan`,
-    { method: "POST" },
-  );
-}
-
-export function deleteProject(id: string): Promise<void> {
-  return request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
-
 export function search(
   projectId: string,
   query: string,
@@ -197,13 +175,6 @@ export function search(
   return request<SearchResponse>("/api/query/search", {
     method: "POST",
     body: { projectId, query, maxTokens },
-  });
-}
-
-export function ask(projectId: string, question: string): Promise<AskResponse> {
-  return request<AskResponse>("/api/query/ask", {
-    method: "POST",
-    body: { projectId, question },
   });
 }
 

@@ -7,8 +7,6 @@ import { type Account, logout } from "../api/client";
 /** 大页面导航（用户 2026-09-13 指定的信息架构）。 */
 const NAV = [
   { to: "/", label: "账户", end: true },
-  { to: "/projects", label: "项目", end: false },
-  { to: "/playground", label: "Playground", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
   { to: "/connect", label: "接入指南", end: false },

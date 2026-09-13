@@ -98,7 +98,7 @@ describe.skipIf(!enabled)("端到端：账户console（真实服务）", () => {
       // "平均耗时"在索引与用量两个面板各有一个（口径不同），因此按数量断言。
       expect(screen.getAllByText("平均耗时")).toHaveLength(2);
       // 导航包含全部大页面。
-      for (const label of ["项目", "Playground", "API Key", "历史记录", "接入指南"]) {
+      for (const label of ["账户", "API Key", "历史记录", "接入指南"]) {
         expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
       }
     } finally {

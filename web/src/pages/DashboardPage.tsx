@@ -154,8 +154,8 @@ export function DashboardPage({ account }: { account: Account | null }) {
       <Panel title="项目">
         {data.projects.length === 0 ? (
           <p className="text-sm text-slate-500">
-            还没有项目。去 <Link className="underline" to="/projects">项目管理</Link> 绑定本地目录，
-            或在编辑器里接入后让客户端同步。
+            还没有项目。在编辑器里接入后让客户端同步一次即可出现（本地模式可用客户端 attach
+            本地目录）。
           </p>
         ) : (
           <table className="w-full border-collapse text-sm">
@@ -172,9 +172,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
               {data.projects.map((project) => (
                 <tr key={project.projectId}>
                   <td className="border-b border-slate-100 py-1">
-                    <Link className="underline" to={`/projects/${project.projectId}`}>
-                      {project.displayName || project.projectId}
-                    </Link>
+                    {project.displayName || project.projectId}
                   </td>
                   <td className="border-b border-slate-100 py-1 font-mono text-xs">
                     {project.projectId}
