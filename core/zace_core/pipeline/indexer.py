@@ -26,6 +26,10 @@ R4（``FileDelta`` 三集合）、R8（imports 边缘）、R10（向量相似度
 - **单文件失败隔离**（TASK-018 §C，Module/01 §4.3 per-file 韧性）：解析失败走 fallback；
   但“切分/落库”环节的意外异常只写 ``report.errors`` 并跳过该文件，**不**中断整次 ingest，
   也**不**计入 added/modified。崩溃、静默丢数据都比“如实报告后继续”更差。
+- **索引范围阈值（TASK-037 §B / R43）**：``> 128 KB``（可配置）与二进制（前 8 KB 中不可打印
+  字符 ``> 10%``）的文件在**读取之后、解析之前**跳过，理由记入 ``skip_reasons``（``skipped_files``
+  保持“路径列表”语义不变，见 ``pipeline/ignore.py`` 的模块 docstring）。阈值判定在 Indexer 而不是
+  ``DirectorySource``：service 上传路径（blob 内容已在内存）也必须走同一阈值，且跳过必须可观测。
 """
 
 from __future__ import annotations
@@ -50,6 +54,11 @@ from zace_core.chunking import (
 from zace_core.hashing import file_content_hash
 from zace_core.interfaces import EmbeddingProvider
 from zace_core.parsing.registry import EXTENSION_LANGUAGE, detect_language, get_parser
+from zace_core.pipeline.ignore import (
+    SKIP_REASON_BINARY,
+    IndexScope,
+    oversize_reason,
+)
 from zace_core.pipeline.source import SourceProvider
 from zace_core.storage import Store
 from zace_core.types import ChangeSet, ChunkDef, ParsedFile, VectorRow
@@ -90,6 +99,7 @@ class IngestReport:
     spec_refs: int = 0            # 新写入的 spec_references 行数
     ambiguous_refs: int = 0       # 多义引用条数（全连 / 裸名边未定）
     skipped_files: tuple[str, ...] = ()     # 二进制/不可解码而跳过的文件
+    skip_reasons: tuple[str, ...] = ()     # 等长的 ``"path:reason"``（TASK-037 §B）
     orphan_files: tuple[str, ...] = ()      # 删除时无法枚举 chunk id（向量可能残留）的文件
     languages: tuple[str, ...] = ()         # 本次处理后仓库已见语言集合（R1 抬升输入）
 
@@ -114,8 +124,26 @@ class _Accumulator:
     ambiguous_refs: int = 0
     errors: list[str] = field(default_factory=list)
     skipped_files: list[str] = field(default_factory=list)
+    skip_reasons: list[str] = field(default_factory=list)
     orphan_files: list[str] = field(default_factory=list)
+    _skipped_seen: set[str] = field(default_factory=set)
     languages: tuple[str, ...] = ()
+
+    def skip(self, path: str, reason: str) -> None:
+        """记录一个被跳过（未索引）的文件与原因（TASK-037 §B / R43）。
+
+        ``skipped_files`` 只放路径（既有契约：service 当作 ``skipped: [path]`` 返回，
+        ``service/tests/test_sync_api.py`` 精确断言），原因进平行的 ``skip_reasons``。
+
+        **幂等**：``full_reparse`` 会枚举两次清单（``_collect_inputs`` 解析一轮，
+        ``_rebuild_vectors`` 为取回存量 chunk id 再枚举一轮），同一路径会被判两次。
+        重复条目会让"按原因分组"统计翻倍，因此按路径去重（保留首次的原因）。
+        """
+        if path in self._skipped_seen:
+            return
+        self._skipped_seen.add(path)
+        self.skipped_files.append(path)
+        self.skip_reasons.append(f"{path}:{reason}")
 
     def report(self) -> IngestReport:
         return IngestReport(
@@ -135,6 +163,7 @@ class _Accumulator:
             spec_refs=self.spec_refs,
             ambiguous_refs=self.ambiguous_refs,
             skipped_files=tuple(self.skipped_files),
+            skip_reasons=tuple(self.skip_reasons),
             orphan_files=tuple(self.orphan_files),
             languages=self.languages,
         )
@@ -168,11 +197,16 @@ class Indexer:
         embedding: EmbeddingProvider,
         vectors: VectorStore,
         source: SourceProvider,
+        *,
+        scope: IndexScope | None = None,
     ) -> None:
         self._store = store
         self._embedding = embedding
         self._vectors = vectors
         self._source = source
+        #: 索引范围阈值（TASK-037 §B / R43）：默认 ``IndexScope.from_env()``，
+        #: 即 128 KB / 10% 可配置阈值（``ZACE_MAX_FILE_BYTES`` / ``ZACE_BINARY_RATIO``）。
+        self._scope = scope if scope is not None else IndexScope.from_env()
         self._languages = _load_languages(store)
         #: path → 本进程写入过的 chunk id（整文件删除时清向量；见模块 docstring 的边界说明）
         self._known_chunks: dict[str, tuple[str, ...]] = {}
@@ -183,6 +217,11 @@ class Indexer:
     def languages(self) -> tuple[str, ...]:
         """仓库已见语言集合（R1 抬升输入）。"""
         return tuple(sorted(self._languages))
+
+    @property
+    def scope(self) -> IndexScope:
+        """本索引器使用的大小/二进制阈值（TASK-037 §B）。"""
+        return self._scope
 
     def fingerprint(self) -> IndexFingerprint:
         return IndexFingerprint.build(self._embedding.profile)
@@ -266,6 +305,14 @@ class Indexer:
             for path in self._source.list_files():
                 if path in deleted:
                     continue
+                # 大小预判：能拿到元数据时**不读内容**就拦掉超限文件（TASK-036 §C.1 的代价：
+                # 308 MB 文件整份读入内存）。拿不到 size 的 provider 继续往下走，由下面兜底。
+                size = self._source_size(path)
+                if size is not None:
+                    readable, reason = self._scope.should_read(path, size)
+                    if not readable:
+                        acc.skip(path, reason or oversize_reason(size))
+                        continue
                 data = _safe_read(self._source, path, acc)
                 if data is None:
                     continue
@@ -276,10 +323,31 @@ class Indexer:
             items[blob.path] = _Input(path=blob.path, data=blob.content, kind="modified")
         return [items[path] for path in sorted(items)]
 
+    def _source_size(self, path: str) -> int | None:
+        """``source.file_size(path)``（可选协议）；不支持时返回 ``None``（安全降级）。"""
+        probe = getattr(self._source, "file_size", None)
+        if probe is None:
+            return None
+        try:
+            return probe(path)
+        except Exception:  # noqa: BLE001 - 元数据探测失败不该影响索引（继续走 read 兜底）
+            return None
+
     def _index_file(self, item: _Input, repo_is_cpp: bool, acc: _Accumulator) -> _Indexed | None:
+        # §B 阈值（R43）：大小在读取**之前**可判（``_collect_inputs`` 已按 ``_safe_read`` 拿到字节，
+        # 这里用真实长度即可），二进制需要内容——两者都必须在"入库"之前拦掉，否则噪声文件既吃
+        # 解析时间又进检索池。
+        readable, size_reason = self._scope.should_read(item.path, len(item.data))
+        if not readable:
+            acc.skip(item.path, size_reason or oversize_reason(len(item.data)))
+            return None
+        decodable, binary_reason_value = self._scope.check_bytes(item.data)
+        if not decodable:
+            acc.skip(item.path, binary_reason_value or SKIP_REASON_BINARY)
+            return None
         text = _decode(item.data)
         if text is None:
-            acc.skipped_files.append(item.path)
+            acc.skip(item.path, SKIP_REASON_BINARY)
             return None
         language = _language_for(item.path, repo_is_cpp)
         parsed = self._parse(item.path, text, language, acc)
@@ -379,11 +447,28 @@ class Indexer:
         for path in self._source.list_files():
             if path in processed:
                 continue
+            size = self._source_size(path)
+            if size is not None:
+                readable, reason = self._scope.should_read(path, size)
+                if not readable:
+                    acc.skip(path, reason or oversize_reason(size))
+                    continue
             data = _safe_read(self._source, path, acc)
             if data is None:
                 continue
+            # §B 阈值同样适用于重建路径：被跳过的文件不会进向量表（否则同一文件的
+            # "该不该索引"在增量/全量两条路径下结论不一致）。
+            readable, size_reason = self._scope.should_read(path, len(data))
+            if not readable:
+                acc.skip(path, size_reason or oversize_reason(len(data)))
+                continue
+            decodable, binary_reason_value = self._scope.check_bytes(data)
+            if not decodable:
+                acc.skip(path, binary_reason_value or SKIP_REASON_BINARY)
+                continue
             text = _decode(data)
             if text is None:
+                acc.skip(path, SKIP_REASON_BINARY)
                 continue
             language = _language_for(path, "cpp" in self._languages)
             parsed = self._parse(path, text, language, acc)
