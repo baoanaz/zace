@@ -1,0 +1,297 @@
+/**
+ * 历史记录（TASK-071）：两个页签——**索引记录**与**使用记录**。
+ *
+ * 口径（与首页一致，不重复造数）：
+ * - 索引记录来自 `index_runs`（成功与失败都落库；`running` 不落库）；
+ * - 使用记录来自 `query_audit`（**不含源码内容**，只存 evidence 元数据与耗时）；
+ * - 时间窗口默认 30 天；空数据一律显示"没有记录"，不填假行。
+ */
+
+import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+
+import {
+  type IndexRun,
+  type Project,
+  type UsageSummary,
+  getProjectIndexRuns,
+  getUsageSummary,
+  listProjects,
+} from "../api/client";
+import { ErrorBlock, LoadingBlock } from "../components/ui";
+import { formatDuration, formatTime } from "./DashboardPage";
+
+type Tab = "index" | "usage";
+
+const WINDOW_DAYS = 30;
+const ROW_LIMIT = 100;
+
+export function HistoryPage() {
+  const [tab, setTab] = useState<Tab>("index");
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [runs, setRuns] = useState<{ projectId: string; run: IndexRun }[] | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const listed = await listProjects();
+      setProjects(listed);
+      // 逐项目取历史再合并：跨项目端点只回聚合，而"什么时候索引了哪个项目"需要明细。
+      const perProject = await Promise.all(
+        listed.map(async (project) => {
+          try {
+            const items = await getProjectIndexRuns(project.projectId, ROW_LIMIT);
+            return items.map((run) => ({ projectId: project.projectId, run }));
+          } catch {
+            return []; // 单项目读失败（如无 MetaDB）不该让整页失败
+          }
+        }),
+      );
+      setRuns(
+        perProject
+          .flat()
+          .sort((left, right) => right.run.finishedAt - left.run.finishedAt)
+          .slice(0, ROW_LIMIT),
+      );
+      setUsage(await getUsageSummary(WINDOW_DAYS, ROW_LIMIT));
+    } catch (err) {
+      setError(err);
+      setRuns(null);
+      setUsage(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <h1 className="text-lg font-semibold">历史记录</h1>
+        <span className="text-xs text-slate-500">
+          使用记录窗口：近 {usage?.days ?? WINDOW_DAYS} 天
+        </span>
+      </div>
+
+      {error !== null && <ErrorBlock error={error} />}
+
+      <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
+        {(
+          [
+            ["index", "索引记录"],
+            ["usage", "使用记录"],
+          ] as [Tab, string][]
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTab(value)}
+            className={`px-4 py-1.5 ${
+              tab === value ? "bg-slate-900 text-white" : "bg-white hover:bg-slate-50"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "index" && <IndexHistory runs={runs} projects={projects} />}
+      {tab === "usage" && <UsageHistory usage={usage} />}
+    </div>
+  );
+}
+
+function IndexHistory({
+  runs,
+  projects,
+}: {
+  runs: { projectId: string; run: IndexRun }[] | null;
+  projects: Project[] | null;
+}) {
+  if (runs === null) return <LoadingBlock />;
+  if (runs.length === 0) {
+    return (
+      <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+        还没有索引记录。在 <Link className="underline" to="/projects">项目管理</Link>{" "}
+        绑定本地目录（或让客户端同步一次）即可产生。
+      </p>
+    );
+  }
+
+  const nameOf = (projectId: string) =>
+    projects?.find((item) => item.projectId === projectId)?.displayName || projectId;
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="text-left text-xs text-slate-500">
+            <th className="px-4 py-2 font-normal">结束时间</th>
+            <th className="px-4 py-2 font-normal">项目</th>
+            <th className="px-4 py-2 font-normal">结果</th>
+            <th className="px-4 py-2 font-normal">耗时</th>
+            <th className="px-4 py-2 font-normal">文件（解析/总数）</th>
+            <th className="px-4 py-2 font-normal">chunks</th>
+            <th className="px-4 py-2 font-normal">解析问题</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map(({ projectId, run }) => (
+            <tr key={`${projectId}-${run.runId}`} className="border-t border-slate-100">
+              <td className="px-4 py-2 text-xs text-slate-500">{formatTime(run.finishedAt)}</td>
+              <td className="px-4 py-2">
+                <Link className="underline" to={`/projects/${projectId}`}>
+                  {nameOf(projectId)}
+                </Link>
+              </td>
+              <td className="px-4 py-2">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-xs ${
+                    run.state === "done"
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-rose-50 text-rose-700"
+                  }`}
+                >
+                  {run.state === "done" ? "成功" : "失败"}
+                </span>
+                {run.error && (
+                  <span
+                    title={run.error}
+                    className="ml-2 cursor-help text-xs text-amber-700 underline decoration-dotted"
+                  >
+                    有解析问题
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-2">{formatDuration(run.durationMs)}</td>
+              <td className="px-4 py-2">
+                {run.filesProcessed} / {run.filesTotal}
+              </td>
+              <td className="px-4 py-2">{run.chunks}</td>
+              <td className="px-4 py-2 text-xs text-slate-500">{run.errors || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+        "文件（解析/总数）"两列不是同一量纲（总数含二进制/超限文件），**不换算百分比**；
+        失败记录没有有意义的耗时，因此不参与平均耗时的计算。
+      </p>
+    </div>
+  );
+}
+
+function UsageHistory({ usage }: { usage: UsageSummary | null }) {
+  if (usage === null) return <LoadingBlock />;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4 rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm sm:grid-cols-4">
+        <Stat label="查询次数" value={String(usage.total)} />
+        <Stat label="有答案" value={String(usage.succeeded)} />
+        <Stat label="证据不足" value={String(usage.insufficient)} />
+        <Stat label="失败" value={String(usage.failed)} />
+        <Stat
+          label="平均耗时"
+          value={usage.avgLatencyMs === null ? "—" : `${usage.avgLatencyMs} ms`}
+        />
+        <Stat
+          label="P95 耗时"
+          value={usage.p95LatencyMs === null ? "—" : `${usage.p95LatencyMs} ms`}
+        />
+        <Stat
+          label="引用覆盖率"
+          value={
+            usage.citationCoverageAvg === null
+              ? "—"
+              : `${(usage.citationCoverageAvg * 100).toFixed(1)}%`
+          }
+        />
+        <Stat label="用量 token" value={String(sumTokens(usage))} />
+      </div>
+
+      {Object.keys(usage.confidenceDistribution).length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold text-slate-800">confidence 分布</h2>
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(usage.confidenceDistribution).map(([key, count]) => (
+              <span key={key} className="rounded bg-slate-100 px-2 py-1 text-xs">
+                {key}: {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {usage.recent.length === 0 ? (
+        <p className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+          这段时间还没有查询记录。去 <Link className="underline" to="/playground">Playground</Link>{" "}
+          或从编辑器里问一次即可产生。
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500">
+                <th className="px-4 py-2 font-normal">时间</th>
+                <th className="px-4 py-2 font-normal">模式</th>
+                <th className="px-4 py-2 font-normal">查询</th>
+                <th className="px-4 py-2 font-normal">结果</th>
+                <th className="px-4 py-2 font-normal">耗时</th>
+                <th className="px-4 py-2 font-normal">证据</th>
+                <th className="px-4 py-2 font-normal">token</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usage.recent.map((record) => (
+                <tr key={record.queryId} className="border-t border-slate-100">
+                  <td className="px-4 py-2 text-xs text-slate-500">
+                    {formatTime(record.createdAt)}
+                  </td>
+                  <td className="px-4 py-2 text-xs">{record.mode}</td>
+                  <td className="px-4 py-2">{record.query}</td>
+                  <td className="px-4 py-2 text-xs">
+                    {record.answerable === null
+                      ? record.degraded
+                        ? "降级"
+                        : "—"
+                      : record.answerable
+                        ? "有答案"
+                        : "证据不足"}
+                    {record.confidence && (
+                      <span className="ml-1 text-slate-400">({record.confidence})</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-xs">{record.latencyMs} ms</td>
+                  <td className="px-4 py-2 text-xs">
+                    {record.evidenceCount} / {record.docsCount}
+                  </td>
+                  <td className="px-4 py-2 text-xs">{record.usedTokens}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+            审计只保存证据的元数据（id/路径/行号/分层/分数），**不含源码内容**。
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function sumTokens(usage: UsageSummary): number {
+  return usage.recent.reduce((total, record) => total + record.usedTokens, 0);
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-lg font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+}

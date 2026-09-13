@@ -100,7 +100,7 @@
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
-| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 骨架 + 项目总览/详情 + Playground + 接入指南**（M4 首卡；只依赖已 done 的端点） | 无（soft：TASK-060/061/062/064） | `web/**` | **review**（`feature/task-070_xwz0913`；15 单测 + 真服务 e2e 通过） |
+| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 账户 console**（登录/注册/初始化 + 账户面板 + API Key + 历史记录 + Playground + 三按键接入指南） | 无（依赖 TASK-060/062/064 已合并） | `web/**` | **review**（`feature/task-070-webui_xwz0914`@lane-b；29 单测 + 真服务 e2e 通过） |
 
 > TASK-070 的未就绪页（登录/注册/初始化/token/用量/设置）**显式标注依赖卡号**，不用假数据填充；
 > 后端落地后另开 TASK-071 补齐这六页（卡内已列为 soft 依赖）。
