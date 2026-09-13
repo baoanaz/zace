@@ -1,7 +1,7 @@
 # TASK-061：租户双层（token → user → owns project）
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-060 ｜ soft 依赖：无
-> 建议分支：`feature/task-061_<你的缩写><MMDD>`（**从 TASK-060 的分支串联创建**）
+> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-060、**TASK-085（已合并 `735bfc3`）** ｜ soft 依赖：无
+> 建议分支：`feature/task-061-tenancy_<你的缩写><MMDD>`（**从 `main` 开，已含 TASK-085**）
 > 交付物所有权：
 > - `service/zace_service/metadb.py`（追加 `projects` 归属表与查询）
 > - `service/zace_service/deps.py`（`require_project_id` 增加归属校验）
@@ -49,6 +49,33 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
 ```
+
+## §A0 当前基线（2026-09-23 编排者核实，**先读**）
+
+TASK-085 已合并（`735bfc3`），它**已经把本卡的一部分做掉了**，你要接着做剩余部分：
+
+| 已有（TASK-085 做的，**不要重做**） | 剩余（**本卡要做的**） |
+|---|---|
+| `metadb.claim_project/owns_project/list_projects` 已实现（TASK-060 产出） | `require_project_id` 的**归属校验**（§C） |
+| `POST /api/projects/resolve` 已补 `_claim_project`（写归属行） | `POST /api/projects/attach` 的 claim（§B 第二行） |
+| `_claim_project` 的边界口径已定：**已被他人 claim 时不报错**（理由见下） | `batch-upload` 未归属 → 403（§B 第三行） |
+| `GET /api/projects` 已被 `ops.py` 按 `list_projects(user_id)` 过滤 | `routers/{projects,sync,query,ops}.py` 的**逐端点**归属校验（§C 穷举） |
+| — | `service/tests/test_tenancy.py`（新建） |
+
+> **重要：TASK-085 已改过 `routers/projects.py`**，你从它的分支串联即可，不要重写 `_claim_project`。
+
+### 已被裁定的一件事（不要推翻）
+
+TASK-085 在 `resolve` 处**刻意不实现** §B 的「已被他人 claim → 403 `project_owned_by_other`」，
+理由是：`require_project_id` 当时没有归属校验，报错会把"多人共用同一仓库的第二人"直接卡死（回归）。
+
+**本卡的任务就是把那个前提补上**：一旦归属校验（§C）落地，共用仓库的第二人本来就会在检索时拿到 404，
+此时是否要在 `resolve` 处报 403 就变成了一个**产品选择**——两种口径都自洽：
+
+- **口径 A（保守，推荐）**：`resolve` 保持 TASK-085 的行为（不报错），越权一律由 §C 的 404 拦；
+- **口径 B（严格，按卡内 §B 原文）**：`resolve` 报 403，让"抢注"在第一时间被拒。
+
+**你必须在报告里明确写了哪个口径及理由**，并在 "未决问题" 里把另一口径的成本写清楚，交编排者复核。
 
 ## §B 归属的产生（谁"认领"一个 projectId）
 
