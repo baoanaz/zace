@@ -52,7 +52,7 @@
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 A：索引存储线】。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 启动会话时应把工作目录设为该路径。若当前工作目录不是它，先停下来提醒我，不要改任何文件。
 
 【开工】
@@ -85,7 +85,7 @@
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 B：解析线（Python → C → C++）】。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-b
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-b
 启动会话时应把工作目录设为该路径。若当前工作目录不是它，先停下来提醒我，不要改任何文件。
 
 【开工】
@@ -122,7 +122,7 @@
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 C：Markdown 文档线 + 向量存储线】。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-c
 启动会话时应把工作目录设为该路径。若当前工作目录不是它，先停下来提醒我，不要改任何文件。
 
 【开工】
@@ -158,7 +158,7 @@
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 D：Embedding Provider 双实现】。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-d
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-d
 启动会话时应把工作目录设为该路径。若当前工作目录不是它，先停下来提醒我，不要改任何文件。
 
 【开工】
@@ -193,7 +193,7 @@
 你是 zace 项目的实施工程师，本会话负责【泳道 A 续：Chunk 模型与索引流水线】。
 上一波（TASK-001）已由总览 AI 合并进本地 main，本波从本地 main 开始。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】本地 main 已含 W1 全部产出（TASK-001/002-004/005/008/009）。执行：
@@ -235,7 +235,7 @@
 你是 zace 项目的实施工程师，本会话负责【泳道 E：检索线（通道融合 → 图扩展/rerank → ContextPack）】。
 W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已由总览 AI 合并进本地 main。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-e
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-e
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】本地 main 已含 W1 全部产出。执行：
@@ -277,7 +277,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 背景：编排者的端到端实测发现中文自然语言查询在 BM25 通道恒零命中（FTS5 隐式 AND），
 导致 answerable 恒为 False——这是一个已定位、已给出修复方向的真实缺陷。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-b
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-b
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -321,7 +321,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 你是 zace 项目的实施工程师，本会话负责【泳道 C：ContextPack 证据块行号单调性修复】。
 背景：编排者的端到端实测发现渲染出的证据块行号回跳（9→6→14→1），会误导 agent 对齐编辑。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-c
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -354,7 +354,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 ```text
 你是 zace 项目的实施工程师，本会话负责【泳道 F：core CLI + engine 装配 + golden runner】。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-f
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-f
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -392,7 +392,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 背景：TASK-013 的自举实测发现，在真实 zace 仓库上执行 `zace-core ingest --repo .` 会直接崩溃
 （sqlite3.IntegrityError: UNIQUE constraint failed: chunks.id）。根因已由编排者定位并写在任务卡里。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -435,7 +435,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 你是 zace 项目的实施工程师，本会话负责【泳道 C：spec 保底块重复装填修复 + 预算不变量测试】。
 背景：TASK-013 在真实仓库自举时发现同一 spec 块被装填两次（占两个 E 编号、吃掉约 1.4K token）。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-c
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -471,7 +471,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 背景：core 引擎（Phase 1）已完成并在真实仓库上验证；现在要做"服务化外壳"，让编辑器里的 MCP 客户端能连上来。
 本波四张卡串联（同一泳道、有依赖），做完一张立刻做下一张，不要等我确认。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -533,7 +533,7 @@ core/zace_core/{types,interfaces,hashing}.py；遇到契约/设计冲突先停�
 背景：service 的骨架/查询/同步 API 已完成并合并。本波三张卡做完，用户就能在编辑器里用真实问题验证系统（M2 验收）。
 三张卡串联（同泳道、有依赖），做完一张立刻做下一张，不要等我确认。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -589,7 +589,7 @@ core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问�
 你是 zace 项目的实施工程师，本会话负责【泳道 A 续做：完成本地单用户模式 → service 侧 MCP 端点 → 验收手册】。
 上一轮已经写完 TASK-034 的代码（未提交），本会话从当前工作区接着做完。做完就能在编辑器里用真实问题验证系统。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-a
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-a
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前先看清现状】
@@ -646,7 +646,7 @@ core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问�
 这是长任务：模型下载 + 多个模型各自独立建索引 + 评测，预计数小时，**不要为了快而抽掉候选模型或缩小靶场**，
 但要把每一步的中间结果落盘，便于断点续跑。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-b
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-b
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
@@ -701,7 +701,7 @@ core/zace_core/{types,interfaces,hashing}.py；不改任何排序/装填参数�
 这是长任务：要在本机多个真实仓库（最大 4400+ 文件 / 880 MB / 含 308MB 二进制）上跑全量索引并修 bug。
 上一次同类自举发现了阻断 M1 的崩溃（chunk id 冲突），这次靶场规模大一个数量级，请认真对待。
 
-【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-c
+【工作区】/home/xuwenzheng/github/ACE/zace-lane-c
 （会话工作目录设为此路径；若 CWD 不是它，先停下提醒我，不要改任何文件。）
 
 【开工前核验】
