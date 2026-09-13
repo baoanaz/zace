@@ -23,16 +23,25 @@
      （用户会以为没上传过，从而陷入"同步→重试"的无限循环）；
 - ``ask`` **绝不 500**：Phase 2 没有 LLM，``Engine.ask()`` 抛 ``NotImplementedError``，
   本实现不调用它，而是返回带 ``status="degraded"`` 的检索包（诚实降级，D-26）。
+
+查询审计（TASK-084，旁路）：两个端点各自被 :func:`_audited` 包住，把本次查询落进
+``query_audit``（``fast`` / ``deep``）。三条纪律：**记账失败不得让检索失败**、
+**不存源码内容**、**query 文本与失败摘要先脱敏再落库**——实现集中在
+``zace_service.audit``，本文件只负责"把真实值交出去"。
 """
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from zace_core.contextpack import render_markdown
 
+from zace_service import audit
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import (
     CODE_EMBEDDING_UNAVAILABLE,
@@ -40,6 +49,7 @@ from zace_service.errors import (
     ApiError,
 )
 from zace_service.logging import get_logger, redact_text
+from zace_service.metadb import MetaDB
 from zace_service.packmeta import evidence_summary, pack_meta
 from zace_service.runtime import EngineManager
 
@@ -81,55 +91,194 @@ class AskRequest(BaseModel):
 def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
     """Fast 模式检索：返回服务端渲染的 Markdown 与 ``meta``（CF-05 SearchResponse）。"""
     manager = get_engine_manager(request)
-    project_id = require_project_id(request, payload.projectId)
-    query = _require_query(payload.query)
-    _require_max_tokens(payload.maxTokens)
-    _require_index(manager, project_id)
+    # 审计上下文最先建立：这样连 "项目不存在" "query 校验失败" 这类**在解析出 projectId
+    # 之前**就抛出的业务失败也能落一条（TASK-084 §B"异常路径也要记"）。
+    with _audited(request, mode=audit.MODE_SEARCH, query=payload.query) as ctx:
+        project_id = require_project_id(request, payload.projectId)
+        ctx["projectId"] = project_id
+        query = _require_query(payload.query)
+        _require_max_tokens(payload.maxTokens)
+        _require_index(manager, project_id)
 
-    rescan = _rescan_before_query(manager, request, project_id)
-    trace = manager.search(project_id, query, payload.maxTokens)
-    meta = pack_meta(
-        trace.pack,
-        project_id=project_id,
-        channels=trace.channels_used,
-        degraded=trace.degraded,
-        # core 的降级原因会带上 provider 原始报错（TASK-035 §A 的同一纪律：secret 不进响应）。
-        reason=redact_text(trace.degraded_reason) if trace.degraded_reason else None,
-        candidate_count=trace.candidate_count,
-        checkpoint_id=payload.checkpointId,
-        include_pack=payload.includePack,
-    )
-    meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
-    return {"markdown": render_markdown(trace.pack), "meta": meta}
+        with _timed() as elapsed:
+            ctx["elapsed"] = elapsed
+            rescan = _rescan_before_query(manager, request, project_id)
+            trace = manager.search(project_id, query, payload.maxTokens)
+        meta = pack_meta(
+            trace.pack,
+            project_id=project_id,
+            channels=trace.channels_used,
+            degraded=trace.degraded,
+            # core 的降级原因会带上 provider 原始报错（TASK-035 §A 的同一纪律：secret 不进响应）。
+            reason=redact_text(trace.degraded_reason) if trace.degraded_reason else None,
+            candidate_count=trace.candidate_count,
+            checkpoint_id=payload.checkpointId,
+            include_pack=payload.includePack,
+        )
+        meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
+        ctx["pack"] = trace.pack
+        ctx["degraded"] = trace.degraded
+        return {"markdown": render_markdown(trace.pack), "meta": meta}
 
 
 @router.post("/api/query/ask")
 def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
     """Deep 模式：Phase 2 固定返回**降级包**（200 + ``status="degraded"``），绝不 500。"""
     manager = get_engine_manager(request)
-    project_id = require_project_id(request, payload.projectId)
-    question = _require_query(payload.question, field="question", code="invalid_question")
-    _require_index(manager, project_id)
+    with _audited(request, mode=audit.MODE_ASK, query=payload.question) as ctx:
+        project_id = require_project_id(request, payload.projectId)
+        ctx["projectId"] = project_id
+        question = _require_query(payload.question, field="question", code="invalid_question")
+        _require_index(manager, project_id)
 
-    rescan = _rescan_before_query(manager, request, project_id)
-    trace = manager.search(project_id, question, DEFAULT_MAX_TOKENS)
-    pack = trace.pack
-    meta = pack_meta(
-        pack,
-        project_id=project_id,
-        channels=trace.channels_used,
-        degraded=True,
-        reason=DEGRADED_NOTICE,
-        candidate_count=trace.candidate_count,
-        checkpoint_id=payload.checkpointId,
+        with _timed() as elapsed:
+            ctx["elapsed"] = elapsed
+            rescan = _rescan_before_query(manager, request, project_id)
+            trace = manager.search(project_id, question, DEFAULT_MAX_TOKENS)
+        pack = trace.pack
+        meta = pack_meta(
+            pack,
+            project_id=project_id,
+            channels=trace.channels_used,
+            degraded=True,
+            reason=DEGRADED_NOTICE,
+            candidate_count=trace.candidate_count,
+            checkpoint_id=payload.checkpointId,
+        )
+        meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
+        ctx["pack"] = pack
+        # ``ask`` 恒为降级包（D-26）：审计如实记 degraded=true。
+        ctx["degraded"] = True
+        return {
+            "status": "degraded",
+            "answer": f"{DEGRADED_NOTICE}\n\n{render_markdown(pack)}",
+            "evidenceSummary": evidence_summary(pack),
+            "meta": meta,
+        }
+
+
+# --------------------------------------------------------------------------- 查询审计（TASK-084）
+
+
+class _AuditContext(dict[str, Any]):
+    """一次请求的审计暂存（handler 把真实值写进来，退出时由 :func:`_audited` 落库）。"""
+
+
+@contextmanager
+def _audited(request: Request, *, mode: str, query: str) -> Iterator[_AuditContext]:
+    """包住整个 handler：**成功与失败都落一条审计**（旁路，绝不抛异常）。
+
+    为什么用 contextmanager 而不是在 ``return`` 前写一行：
+
+    - **异常路径也必须记**（TASK-084 §B）。FastAPI 的异常处理器在路由函数之外运行，
+      在那里拿不到本次请求的 query/latency 上下文；在 handler 内部捕获才能记全。
+    - ``_require_index`` 的 503/409/500 与参数校验的 400 都是**业务失败**，同样计入
+      ``usage.failed``——与 TASK-062 对索引统计的口径一致（成功与失败都落）。
+
+    落库失败（``db`` 为 ``None``，或 ``db.record_query`` 抛异常）由 ``audit`` 模块内部吞掉，
+    只有 **未预期的异常**（代码缺陷）会重新抛出——那本来就会变成 500，行为不变。
+    """
+    ctx = _AuditContext()
+    ctx["started"] = time.perf_counter()
+    try:
+        yield ctx
+    except ApiError as exc:
+        _record_failure(
+            request, ctx, mode=mode, query=query, reason=f"{exc.code}: {exc.message}"
+        )
+        raise
+    except Exception as exc:  # noqa: BLE001 - 记完账再抛，最终仍是 500 internal_error
+        _record_failure(
+            request, ctx, mode=mode, query=query, reason=f"{type(exc).__name__}: {exc}"
+        )
+        raise
+    else:
+        pack = ctx.get("pack")
+        if pack is None:  # pragma: no cover - 只有 handler 忘了写 ctx 才会走到
+            return
+        audit.record_query(
+            _meta_db(request),
+            project_id=_project_of(ctx),
+            mode=mode,
+            query=query,
+            pack=pack,
+            **_elapsed_kwargs(ctx),
+            degraded=bool(ctx.get("degraded", False)),
+            user_id=_user_id(request),
+        )
+
+
+@contextmanager
+def _timed() -> Iterator[dict[str, float]]:
+    """测"懒重扫 + ``manager.search``"的毫秒耗时（写进返回的 dict 的 ``ms`` 键）。
+
+    口径（TASK-064 §C-3，**取代** TASK-084 §B 较宽的说法）：只包检索/组装那一段，
+    **不含**服务端渲染与响应装配；失败时同样会写入 ``ms``（在 ``finally`` 里），
+    所以失败记录的 ``latencyMs`` 是真实的"跑到哪算哪"而不是写死的 0。
+
+    注：``_rescan_before_query`` 在本地模式会先做一次增量懒重扫（TASK-034 §C），
+    它属于"拿到结果之前"的必要工作，故计入（口径写在这里与执行记录，保证跨次可比）。
+    """
+    started = time.perf_counter()
+    elapsed: dict[str, float] = {}
+    try:
+        yield elapsed
+    finally:
+        elapsed["ms"] = (time.perf_counter() - started) * 1000.0
+
+
+def _elapsed_kwargs(ctx: _AuditContext) -> dict[str, Any]:
+    """审计用的 ``latency_ms``（**成功与失败两个窗口彼此不同，都在执行记录里写明**）：
+
+    - 成功：``ctx["elapsed"]``——只含"懒重扫 + 检索/组装"（TASK-064 §C-3 的口径）；
+    - 失败（校验/索引/检索抛错的路径）：从 handler 进入算起的整段，因为"检索那一段"
+      根本没跑完，用 0 会让失败记录的耗时恒为 0（"写死"正是本卡要杜绝的）。
+    """
+    elapsed = ctx.get("elapsed")
+    if isinstance(elapsed, dict) and "ms" in elapsed:
+        return {"latency_ms": float(elapsed["ms"])}
+    started = float(ctx.get("started", 0.0))
+    return {"latency_ms": max(0.0, (time.perf_counter() - started) * 1000.0)}
+
+
+def _record_failure(
+    request: Request,
+    ctx: _AuditContext,
+    *,
+    mode: str,
+    query: str,
+    reason: str,
+) -> None:
+    """失败路径落库（``ctx`` 里可能已有 projectId/耗时，没有就用兜底值）。"""
+    audit.record_query_error(
+        _meta_db(request),
+        project_id=_project_of(ctx),
+        mode=mode,
+        query=query,
+        **_elapsed_kwargs(ctx),
+        reason=reason,
+        user_id=_user_id(request),
     )
-    meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
-    return {
-        "status": "degraded",
-        "answer": f"{DEGRADED_NOTICE}\n\n{render_markdown(pack)}",
-        "evidenceSummary": evidence_summary(pack),
-        "meta": meta,
-    }
+
+
+def _meta_db(request: Request) -> MetaDB | None:
+    """元数据库（本地模式未建库 → ``None``，审计静默跳过，检索照常）。"""
+    db = getattr(request.app.state, "meta_db", None)
+    return db if isinstance(db, MetaDB) else None
+
+
+def _user_id(request: Request) -> str | None:
+    """当前用户 id（本地模式为 ``None``——无账户体系，R34）。"""
+    return getattr(getattr(request.state, "zace_user", None), "id", None)
+
+
+def _project_of(ctx: _AuditContext) -> str:
+    """审计归属的 projectId：解析出来就用它，否则用 ``""``（表示"没走到解析"）。
+
+    不猜项目：审计宁可留空 projectId，也不把一次请求挂到别的项目上（会污染该项目的用量）。
+    """
+    value = ctx.get("projectId")
+    return str(value) if value else ""
 
 
 # --------------------------------------------------------------------------- 懒重扫（TASK-034 §C）

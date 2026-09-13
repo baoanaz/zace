@@ -135,3 +135,40 @@ CREATE INDEX IF NOT EXISTS idx_audit_project ON query_audit(project_id, created_
 ## 执行记录
 
 （实施 AI 在此填写。）
+
+### 2026-09-23 ｜ 补做记录（TASK-084）；本卡状态改为 **review**
+
+编排者实测（2026-09-13）发现本卡的两个交付物**没落地**：
+
+- `service/zace_service/audit.py` **不存在**；
+- `MetaDB.record_query()` 写好了但**全仓零调用**。
+
+结果是 `/api/usage/**` 恒为空、WebUI「使用记录」永远没数据。已开 **TASK-084（查询审计接线）**
+做补做，**本卡的其余部分（`query_audit` 建表、`usage_summary` 聚合、`/api/usage/**` 读取口）已合并且可用**：
+
+- `metadb.py` 的 `query_audit` DDL、`record_query`、`usage_summary` 全部保留未改；
+- `routers/ops.py` 的 `/api/usage/{summary,projects/{id}}`、`/api/account/overview` 已替换 501 占位；
+- `test_usage_api.py` 由 TASK-084 新建（20 项）。
+
+TASK-084 已完成的 DoD 项（端到端 `total` 0→3、每条覆盖见 TASK-084 卡」执行记录」）：
+
+- [x] `uv run pytest service/tests/test_usage_api.py -q` 全绿（20 passed）；
+- [x] 检索一次 → `total=1`、`recent` 有该条；
+- [x] `ask` 的条目 `citationCoverage` 为 **null**；
+- [x] `insufficient` 与 `failed` 分开计数；
+- [x] **不存源码**（`evidence_json` 字段集为 `{id,path,lines,tier,score}`）；
+- [x] **审计故障不影响检索**（metadb 注入异常 → `search` 仍 200）；
+- [x] 超过 1000 条自动裁剪；
+- [x] `days` 过滤生效；
+- [x] 基线三条命令全绿（`ruff` / 依赖方向 / `pytest`：766 passed, 2 skipped）。
+
+两项 DoD **仍未完成**（不属本补做范围，留在下方"未决问题"）：
+
+- [ ] 「跨用户不可见（与 TASK-061 联动）」——`claim_project` 零调用，归属表零行；
+  **连带影响**：云端模式 `/api/usage/summary` 仍恒为 0（TASK-084 实测，证据在其执行记录）；
+- [ ] 「对真实仓库连跑 5 次不同查询 + 平均耗时与索引统计耗时的差异解释」——
+  TASK-084 做的是 3 次查询的端到端对比，未做 5 次分布的解读。
+
+**本卡未完成项不作为 TASK-084 的阻塞**：TASK-084 的目标（"让写入侧真的接上"）已达成且
+有端到端凭证；剩下两项属租户与评测口径，分别由 TASK-061 / 评审时补。
+
