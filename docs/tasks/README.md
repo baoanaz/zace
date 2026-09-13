@@ -77,8 +77,8 @@
 | [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | done |
 | [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | done |
 | [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **in_progress（W6-lane A）** |
-| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **review（W6-lane B）** |
-| [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **in_progress（W6-lane C）** |
+| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
+| [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **done（W6-lane C，已合并）** |
 | [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
 | TASK-050 | 质量调优（R21/R24/rerank/装填参数，**必须基于 TASK-023 真实数据**） | TASK-023 | — | 未开卡 |

@@ -131,3 +131,53 @@ uv run zace-core eval --golden benches/golden/linux-mtk-mw-cameraservice \
 6. **索引可复用，但必须记录索引状态**：`--data` 指向已有 data root 可省去 7-20 分钟重建；
    报告里必须写清“索引来自哪个 commit / 哪个工作区”（`identity_key` 只由 git remote + 相对路径决定，
    **同一 remote 的不同 worktree 共用同一个 project 目录**，lane 之间会互相覆盖，不能凭目录名判断内容）。
+
+## 靶场变更（2026-09-13）
+
+### 为什么换靶场
+
+用户 2026-09-13 更换开发环境（家用 WSL2）。**旧靶场在本机全部不可得**，`benches/results/*` 的历史数字
+无法在本机复现（数字来自旧机器的工作区，路径与 commit 都已不在）：
+
+| 旧靶场 | 原路径（旧机器） | 本机状态 |
+|---|---|---|
+| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | **不存在** |
+| `linux-mtk-mw-cameraservice` | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | **不存在** |
+| `linux-mtk-hmi` | 同上系列 | **不存在** |
+
+**旧 golden 文件原样保留**（`benches/golden/{aibox-super-sdk,linux-mtk-mw-cameraservice}/`，历史可追溯），
+但**不可复用于新靶场**：`expected[].path` 是**仓库相对路径**，语义绑定到各自的仓库；
+对另一个仓库跑只会得到必然失败。旧报告同理——它们是历史记录，不是当前基线。
+
+### 新主靶场
+
+```text
+/home/xuwenzheng/github/hello-agents        # datawhalechina/hello-agents（Python Agent 教程）
+commit: 4f7682ceafe573d07cd8a7d0b89908500e83227d
+remote: https://github.com/datawhalechina/hello-agents.git
+```
+
+> 该仓库是**只读外部靶场**：不在其中建文件、不修改它、不把它的任何文件纳入 zace 仓库；
+> 索引数据根放 `/tmp` 或 `~/.cache`。
+
+选它的理由（编排者实测，见 `docs/plan/phase2-m2b-w6.md` §3.1）：**文档与代码一一对应**
+（`docs/chapterN/` 中英双份 ↔ `code/chapterN/` 实现），天然覆盖 spec 检索、中英对照（D-20）
+与 code/docs 平衡（R21）；`Co-creation-projects/` 提供多语言小项目；同时它含大量大文件与二进制
+（272 个 >128KB、345 个 `.png`），是索引范围策略（TASK-037）的活标本。
+
+**用例目录**：`benches/golden/hello-agents/helloagents.jsonl`（31 条，含 2 条负例）。
+`repo_hint` 统一为 `hello-agents`，`commit` 为上面索引时的 `HEAD`。
+
+### 出题纪律（沿用 TASK-014，不放松）
+
+- 每条 `expected[].path` 都用 `grep` 核验过**存在**，且**在被索引的文件集内**（`DirectorySource` 的
+  口径，不是 git 工作区——见上文"出题规则"第 3 条）；
+- 负例用该仓库**确实不存在**的概念核验 `0` 命中；核验必须覆盖**被索引的文件集**而非 git 工作区；
+- 不为了指标好看而挑用例子集或放宽负例口径（R29/R30：本报告的指标是**回归护栏**，不是优化目标）。
+
+### 相关报告
+
+| 报告 | 内容 |
+|---|---|
+| `results/phase2-helloagents-baseline.md` | 新靶场基线（recall/MRR，分 category 与语言；含索引范围实测） |
+| `results/phase1-baseline.md` 等旧报告 | 旧机器/旧靶场的历史记录，**与本靶场不可比** |
