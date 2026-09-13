@@ -40,8 +40,8 @@ router = APIRouter(tags=["auth"])
 
 logger = get_logger("zace_service.routers.auth")
 
-#: 密码最短长度（卡内冻结；上限防 DoS：argon2 对超长输入要算很久）。
-MIN_PASSWORD_CHARS = 8
+#: 密码最短长度（TASK-081：用户要求放宽到 3 位；上限防 DoS：argon2 对超长输入要算很久）。
+MIN_PASSWORD_CHARS = 3
 MAX_PASSWORD_CHARS = 200
 #: 账户名长度上限。
 MAX_NAME_CHARS = 64

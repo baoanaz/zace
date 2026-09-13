@@ -98,7 +98,7 @@ export function errorHint(error: unknown): string | null {
     case "name_taken":
       return "账户名已被占用：换一个名字。";
     case "invalid_password":
-      return "密码不符合要求：至少 8 个字符（上限 200）。";
+      return "密码不符合要求：至少 3 个字符（上限 200）。";
     case "invalid_name":
       return "账户名不能为空，且不超过 64 个字符。";
     case "local_mode":

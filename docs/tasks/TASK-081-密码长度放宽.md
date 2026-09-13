@@ -1,6 +1,6 @@
 # TASK-081：密码长度下限放宽到 3 位
 
-> 状态：pending ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：无
 > 建议分支：`feature/task-081-password-min_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/routers/auth.py`（**仅** `MIN_PASSWORD_CHARS` 一处常量及其文案）
@@ -73,4 +73,27 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+日期：2026-09-23 ｜ 分支：`feature/task-081-password_xwz0923` ｜ worktree：`zace-lane-b`（从 `main` @ `d1a87ba` 开）
+
+### TASK-081 完成报告
+
+- 改动（仅交付物清单内 3 个文件）：
+  - `service/zace_service/routers/auth.py:44`：`MIN_PASSWORD_CHARS = 8` → `3`（注释注明 TASK-081 来源）；`MAX_PASSWORD_CHARS = 200` 未动。
+  - `service/zace_service/routers/auth.py:244` 的文案 `f"密码至少 {MIN_PASSWORD_CHARS} 个字符"` 是插值，随常量自动变为“密码至少 3 个字符”，无需单独改（真服务输出已确认）。
+  - `web/src/api/client.ts:101`：`"至少 8 个字符"` → `"至少 3 个字符"`。
+  - `service/tests/test_auth.py`：“本卡最大的坑”两处 `"short"`（5 字符）改为 `"ab"`（2 字符），保留原断言意图；新增正向边界用例 `test_password_at_lower_bound_is_accepted`（3 字符 bootstrap 201 + 登出后能用该密码登回 200）。
+
+- 验收命令与结果：
+  - `uv run pytest service/tests/test_auth.py -o addopts="" -q` → `26 passed, 1 warning in 1.59s`。
+  - 断言有效性反证：把常量临时改回 8 后跑 `-k "weak_password or lower_bound"` → `test_password_at_lower_bound_is_accepted` FAILED（证明新用例真的卡住阈值，不是假绿），随后已还原为 3。
+  - 行为验收（真实服务，非 TestClient）：
+    - `ZACE_LOCAL_MODE=false ZACE_DATA_ROOT=/tmp/zace-pw uv run zace-service serve --port 8894` + `POST /api/auth/bootstrap {"name":"owner","password":"abc"}` → `HTTP 201`，返回 `{"userId":"05394506…","name":"owner","createdAt":…}`；随后 `POST /api/auth/login` 同密码 → `HTTP 200`。
+    - 2 字符对照（另起 18897 端口、空 data root）：`{"password":"ab"}` → `HTTP 400`，`{"error":{"code":"invalid_password","message":"密码至少 3 个字符"}}`，文案已是 3。
+  - 基线三条：`uv run ruff check .` → `All checks passed!`；`uv run python scripts/check_dependency_direction.py` → `依赖方向检查通过`；`uv run pytest -o addopts="" -q` → `747 passed, 2 skipped, 1 warning in 18.02s`。
+
+- 契约影响：无（L1 实现细节，未触碰 `docs/contracts/**` 与 `zace_core/{types,interfaces}`）。
+- 与设计偏差：无。任务卡“现状”表里 `auth.py:241` 的行号因插入注释行而位移到 241 行之前/之后不影响语义；实际校验分支位置未变。
+- 未决问题：无。`web/src/pages/LoginPage.tsx` 已核对，只校验“非空”，未硬编码 8（与任务卡判断一致）。
+- 环境提示（非本卡问题）：端口 8895 上存在一个**旧的** `zace-service` 进程（pid 120100，非本会话启动），它会遮蔽新起的同端口服务并返回旧文案 8；本卡行为验收已改用独占端口 8894/18897 完成，未去 kill 该他人进程。
+- 建议复核点：`test_weak_password_rejected` 与无鉴权白名单用例的密码是否确为 2 字符、新增边界用例是否断言 201 而非仅“非 400”。
+

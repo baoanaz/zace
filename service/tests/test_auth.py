@@ -178,12 +178,28 @@ def test_register_conflict_is_409(tmp_path: Path) -> None:
 
 
 def test_weak_password_rejected(cloud) -> None:
-    """密码长度下限（卡内冻结）：太短 → 400 invalid_password。"""
+    """密码长度下限（TASK-081：下限为 3）：低于下限 → 400 invalid_password。"""
     response = cloud.client.post(
-        "/api/auth/bootstrap", json={"name": "owner", "password": "short"}
+        "/api/auth/bootstrap", json={"name": "owner", "password": "ab"}
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_password"
+
+
+def test_password_at_lower_bound_is_accepted(cloud) -> None:
+    """边界：长度正好等于下限（3）的密码必须被接受（TASK-081 的正向证明）。"""
+    response = cloud.client.post(
+        "/api/auth/bootstrap", json={"name": "owner", "password": "abc"}
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["name"] == "owner"
+    assert SESSION_COOKIE in cloud.client.cookies
+    # 这个 3 位密码确实生效：能登出再登回来。
+    assert cloud.client.post("/api/auth/logout").status_code == 204
+    login = cloud.client.post(
+        "/api/auth/login", json={"name": "owner", "password": "abc"}
+    )
+    assert login.status_code == 200, login.text
 
 
 def test_login_wrong_password_and_unknown_user_share_one_message(cloud) -> None:
@@ -299,7 +315,7 @@ def test_public_paths_do_not_require_credentials(cloud) -> None:
     assert register.json()["error"]["code"] == "register_disabled"
 
     bootstrap = cloud.client.post(
-        "/api/auth/bootstrap", json={"name": "x", "password": "short"}
+        "/api/auth/bootstrap", json={"name": "x", "password": "ab"}
     )
     assert bootstrap.status_code == 400
     assert bootstrap.json()["error"]["code"] == "invalid_password"
