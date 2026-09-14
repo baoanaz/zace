@@ -132,10 +132,11 @@ describe("§需求2 合并表格（TASK-100）", () => {
     renderPage(<HistoryPage />);
 
     const table = await screen.findByRole("table");
-    // 两种类型都在同一张表里（这是用户要求的核心：不用切页签）。
+    // 两种记录都在同一张表里（这是用户要求的核心：不用切页签）。
+    // TASK-100（用户 2026-09-14）：「类型」列改为显示**实际工具名**。
     expect(within(table).getByText("仓库初始化")).toBeInTheDocument();
-    expect(within(table).getByText("检索")).toBeInTheDocument();
-    // TASK-100（用户 2026-09-14）：项目与查询**分列**。
+    expect(within(table).getByText("search_context")).toBeInTheDocument();
+    // 项目与查询分列。
     expect(within(table).getByText("项目")).toBeInTheDocument();
     expect(within(table).getByText("查询")).toBeInTheDocument();
     // 两行都属于 demo 项目，因此项目名出现两次（这正是分列后的正确表现）。
@@ -169,7 +170,7 @@ describe("§需求2 合并表格（TASK-100）", () => {
     const rows = within(table).getAllByRole("row").slice(1); // 去掉表头
     expect(rows.length).toBe(2);
     // 第一行必须是较新的那条（检索，1789305566 > 1789305000）。
-    expect(within(rows[0]!).getByText("检索")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("search_context")).toBeInTheDocument();
     expect(within(rows[1]!).getByText("仓库初始化")).toBeInTheDocument();
   });
 
@@ -185,21 +186,21 @@ describe("§需求2 合并表格（TASK-100）", () => {
     await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
 
     const dialog = await screen.findByRole("dialog");
-    // 用户 2026-09-14：三个代码块——Tool 输入 / LLM 答案 / Tool 输出。
+    // 用户 2026-09-14 定稿：**上下两个块**——Tool 输入 / Tool 输出（不再单列 LLM 答案）。
     expect(within(dialog).getByText("Tool 输入")).toBeInTheDocument();
-    expect(within(dialog).getByText("LLM 答案")).toBeInTheDocument();
     expect(within(dialog).getByText("Tool 输出")).toBeInTheDocument();
+    expect(within(dialog).queryByText("LLM 答案")).not.toBeInTheDocument();
     // 代码块是 <pre>（可滚动容器）。
     const pres = dialog.querySelectorAll("pre");
-    expect(pres.length).toBe(3);
+    expect(pres.length).toBe(2);
     expect(pres[0]?.textContent).toContain("令牌在哪里刷新");
     expect(pres[0]?.className).toContain("overflow-auto");
     // 底层元信息（用户："其他底层有证据数量啊，文档条数这种信息"）。
     expect(within(dialog).getByText("证据条数")).toBeInTheDocument();
     expect(within(dialog).getByText("文档条数")).toBeInTheDocument();
-    // 诚实边界（TASK-099 §A）：测试夹具的 answerText 为 null，弹窗要如实说明
-    // "这条没有答案正文"，而不是拿证据清单冒充 LLM 输出。
-    expect(within(dialog).getByText(/本条没有答案正文|未调用 LLM|调用了 LLM 但失败/)).toBeInTheDocument();
+    // 诚实边界：测试夹具的 answerText 为 null，弹窗要如实说明这条是 search（不调 LLM），
+    // 而不是拿证据清单冒充 LLM 输出。
+    expect(within(dialog).getByText(/search_context 不调用 LLM|未调用 LLM|调用了 LLM 但失败/)).toBeInTheDocument();
   });
 
   it("弹窗标题不重复输入内容（用户：太长了）", async () => {
@@ -214,8 +215,8 @@ describe("§需求2 合并表格（TASK-100）", () => {
 
     const dialog = await screen.findByRole("dialog");
     const heading = within(dialog).getByRole("heading");
-    // 标题只写类型 + 项目名，**不含**查询全文。
-    expect(heading.textContent).toContain("检索");
+    // 标题只写工具名 + 项目名，**不含**查询全文。
+    expect(heading.textContent).toContain("search_context");
     expect(heading.textContent).toContain("demo");
     expect(heading.textContent).not.toContain("令牌在哪里刷新");
   });

@@ -130,6 +130,25 @@ export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
 }
 
 /**
+ * 页面宽度容器（TASK-100）。
+ *
+ * 壳层（`Layout`）不再限定宽度，由页面自己选：
+ * - `Page`（**默认**）：`max-w-5xl`（64rem）——控制台/项目/接入指南/API Key/设置；
+ *   表单与信息卡在过宽的屏幕上会拉得很长、阅读困难。
+ * - `WidePage`：`max-w-[120rem]`——**只有历史记录**这种列多的宽表需要。
+ *
+ * 为什么不用“按页面类型自动判断”：用户明确说“只有历史记录调宽即可”，
+ * 自动判断会在新页面出现时默默给出错误宽度；显式声明让每个页面自己负责。
+ */
+export function Page({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-5xl space-y-5">{children}</div>;
+}
+
+export function WidePage({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-[120rem] space-y-5">{children}</div>;
+}
+
+/**
  * 滑动开关（TASK-099 前端收尾）：用户 2026-09-14 要求自动刷新用「滑动开关」而不是勾选框。
  *
  * 为什么自建而不是用原生 checkbox：用户明确要滑块观感；且原生 checkbox 无法在保持

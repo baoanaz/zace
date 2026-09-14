@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { type AccountOverview, getAccountOverview } from "../api/client";
-import { ErrorBlock, LoadingBlock } from "../components/ui";
+import { ErrorBlock, LoadingBlock, Page } from "../components/ui";
 import { ServiceModels } from "../components/ServiceModels";
 
 const WINDOW_DAYS = 30;
@@ -88,7 +88,7 @@ export function DashboardPage() {
   const { account: profile, index, usage } = data;
 
   return (
-    <div className="space-y-5">
+    <Page>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="text-lg font-semibold">控制台</h1>
         <RangePicker days={days} onChange={setDays} />
@@ -156,7 +156,7 @@ export function DashboardPage() {
           </p>
         )}
       </Panel>
-    </div>
+    </Page>
   );
 }
 

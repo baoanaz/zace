@@ -27,7 +27,7 @@ import {
   deleteProject,
   getAccountOverview,
 } from "../api/client";
-import { ConfirmDialog, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { ConfirmDialog, EmptyState, ErrorBlock, LoadingBlock, Page } from "../components/ui";
 
 const WINDOW_DAYS = 30;
 
@@ -78,7 +78,7 @@ export function ProjectsPage() {
   const { storage, projects } = data;
 
   return (
-    <div className="space-y-5">
+    <Page>
       <div>
         <h1 className="text-lg font-semibold">项目</h1>
         <p className="mt-1 text-sm text-ink-muted">
@@ -188,7 +188,7 @@ export function ProjectsPage() {
           projectId：<code className="font-mono">{pending?.projectId ?? ""}</code>
         </p>
       </ConfirmDialog>
-    </div>
+    </Page>
   );
 }
 

@@ -23,7 +23,7 @@
 import { useEffect, useState } from "react";
 
 import { type DeploymentMeta, getMeta } from "../api/client";
-import { Card, ErrorBlock, LoadingBlock } from "../components/ui";
+import { Card, ErrorBlock, LoadingBlock, Page } from "../components/ui";
 
 /** 后端是否已支持保存用户级 LLM 配置（TASK-099 实施后置 true）。 */
 const CAN_SAVE_USER_LLM = false;
@@ -64,7 +64,7 @@ export function SettingsPage() {
   const { llm } = meta.config;
 
   return (
-    <div className="space-y-5">
+    <Page>
       <div>
         <h1 className="text-lg font-semibold">设置</h1>
         <p className="mt-1 text-sm text-ink-muted">
@@ -161,7 +161,7 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
-    </div>
+    </Page>
   );
 }
 

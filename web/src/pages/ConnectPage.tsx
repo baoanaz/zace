@@ -23,7 +23,7 @@ import {
   snippetFor,
   TOKEN_PLACEHOLDER,
 } from "../app/connect-info";
-import { Card, CopyButton } from "../components/ui";
+import { Card, CopyButton, Page } from "../components/ui";
 
 export function ConnectPage() {
   const [target, setTarget] = useState<AgentId>("codex");
@@ -35,7 +35,7 @@ export function ConnectPage() {
   const active = AGENT_TARGETS.find((item) => item.id === target) ?? AGENT_TARGETS[0]!;
 
   return (
-    <div className="space-y-5">
+    <Page>
       <div>
         <h1 className="text-lg font-semibold">接入指南</h1>
         <p className="mt-1 text-sm text-ink-muted">两步：装客户端，然后把配置粘进你的 Agent。</p>
@@ -100,6 +100,6 @@ export function ConnectPage() {
           {snippet}
         </pre>
       </Card>
-    </div>
+    </Page>
   );
 }

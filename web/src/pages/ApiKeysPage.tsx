@@ -15,7 +15,7 @@ import {
   listApiKeys,
   revokeApiKey,
 } from "../api/client";
-import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { CopyButton, EmptyState, ErrorBlock, LoadingBlock, Page } from "../components/ui";
 import { formatTime } from "./DashboardPage";
 
 export function ApiKeysPage() {
@@ -68,7 +68,7 @@ export function ApiKeysPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <Page>
       <div>
         <h1 className="text-lg font-semibold">API Key</h1>
         <p className="mt-1 text-sm text-ink-muted">
@@ -170,6 +170,6 @@ export function ApiKeysPage() {
           </table>
         )}
       </section>
-    </div>
+    </Page>
   );
 }

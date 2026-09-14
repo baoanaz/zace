@@ -42,7 +42,7 @@ import {
   getUsageSummary,
   listProjects,
 } from "../api/client";
-import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { CopyButton, EmptyState, ErrorBlock, LoadingBlock, WidePage } from "../components/ui";
 import { formatDuration, formatTime } from "./DashboardPage";
 
 const ROW_LIMIT = 200;
@@ -68,10 +68,17 @@ type RunReadFailure = { projectId: string; error: unknown };
 /**
  * 统一后的表格行（初始化与检索共用一个形状）。
  *
- * 弹窗内容分三层（TASK-100 用户 2026-09-14 定稿）：
- * 1. `input` → 「Tool 输入」代码块；
- * 2. `answer` → 「LLM 答案」代码块（仅检索有；未调 LLM 时为 `null`）；
- * 3. `metrics` → 底层元信息行（证据条数 / 文档条数 / 模式 / 体量）。
+ * 弹窗内容（TASK-100 用户 2026-09-14 定稿：**上下两个块**）：
+ * 1. `input` → 「Tool 输入」；
+ * 2. `output` → 「Tool 输出」——**真实返回内容**：
+ *    - search：证据清单（路径、行号、分数）+ 计数；
+ *    - ask：LLM 答案正文 + 证据清单；
+ *    - 仓库初始化：解析结果（文件数、chunks）。
+ *
+ * `metrics` 是底部一行小字（证据条数 / 模式 / 体量 等汇总），不重复块内长文本。
+ *
+ * **为何 search 没有"LLM 答案"**：`search_context` 不调 LLM（它就是检索返回），
+ * 所以答案块只对 `ask` 有意义。因此不再单列一块——ask 的答案直接进「Tool 输出」。
  */
 type ActivityRow = {
   kind: "init" | "search";
@@ -81,17 +88,17 @@ type ActivityRow = {
   project: string;
   /** 查询文本；仓库初始化没有它（`null` → 表格里显示 `—`）。 */
   query: string | null;
+  /** 调用的工具名（`search_context` / `ask_project` / 仓库初始化）。 */
+  tool: string;
   state: "ok" | "insufficient" | "failed" | "degraded";
   durationMs: number;
   volume: { label: string; value: string };
   traceId: string | null;
   /** Tool 输入（代码块内容）。 */
   input: { label: string; value: string }[];
-  /** LLM 答案正文；`null` = 未调 LLM（证据不足短路）或调用失败。 */
-  answer: string | null;
-  /** 非答案的输出信息（初始化看文件数/chunks，检索看证据/模式）。 */
-  output: { label: string; value: string }[];
-  /** 底层元信息（与 `output` 同源，展示位置不同：这里是页脚小字行）。 */
+  /** Tool 输出（代码块内容）——真实返回。 */
+  output: string;
+  /** 底部元信息（汇总数字，不重复块内长文本）。 */
   metrics: { label: string; value: string }[];
   note?: string;
 };
@@ -210,16 +217,17 @@ export function HistoryPage() {
         durationMs: run.durationMs,
         volume: { label: "chunks", value: String(run.chunks) },
         traceId: null,
+        tool: "仓库初始化",
         input: [
           { label: "项目", value: nameOf(projectId) },
           { label: "projectId", value: projectId },
         ],
-        answer: null,
+        // 真实返回：这次索引实际处理了什么。
         output: [
-          { label: "解析文件", value: `${run.filesProcessed} / ${run.filesTotal}` },
-          { label: "chunks", value: String(run.chunks) },
-          { label: "解析问题", value: run.errors > 0 ? `${run.errors} 个` : "无" },
-        ],
+          `解析文件：${run.filesProcessed} / ${run.filesTotal}`,
+          `chunks：${run.chunks}`,
+          `解析问题：${run.errors > 0 ? `${run.errors} 个` : "无"}`,
+        ].join("\n"),
         metrics: [
           { label: "解析文件", value: `${run.filesProcessed} / ${run.filesTotal}` },
           { label: "chunks", value: String(run.chunks) },
@@ -239,16 +247,28 @@ export function HistoryPage() {
         durationMs: record.latencyMs,
         volume: { label: "token", value: String(record.usedTokens) },
         traceId: record.requestId,
+        // 工具名：ask 有答案正文，search 没有（它不调 LLM）。这是用户要的「分两栏」里的
+        // “Tool 输出到底是什么”的关键区别。
+        tool: record.answerText || record.answerStatus ? "ask_project" : "search_context",
         input: [{ label: "查询", value: record.query }],
-        // TASK-099 §A：answer 正文已落库；为 null 时用 answerStatus 说清是
-        // “没调 LLM”（证据不足短路）还是“调了但失败”。
-        answer: record.answerText,
-        output: [
-          { label: "证据条数", value: String(record.evidenceCount) },
-          { label: "文档条数", value: String(record.docsCount) },
-          { label: "模式", value: record.mode },
-          ...(record.confidence ? [{ label: "confidence", value: record.confidence }] : []),
-        ],
+        /**
+         * Tool 输出 = **真实返回内容**（用户 2026-09-14：“就是 search 的返回，或者 ask 的
+         * 返回，就是真实的返回结果”）。
+         *
+         * - `ask`：LLM 答案正文（TASK-099 §A 已落库）+ 证据概览；
+         * - `search`：没有 LLM 答案（它不调 LLM），输出就是检索到的**结构化证据清单**；
+         *   `evidence` 目前后端未输出（`evidence_json` 已写库但 `to_json` 未解析），
+         *   因此这里先给计数与模式，并在下方 `note` 如实说明。
+         */
+        output: record.answerText
+          ? `${record.answerText}\n\n── 证据──\n证据条数：${record.evidenceCount}\n文档条数：${record.docsCount}`
+          : [
+              "（本条没有 LLM 答案正文）",
+              `证据条数：${record.evidenceCount}`,
+              `文档条数：${record.docsCount}`,
+              `模式：${record.mode}`,
+              ...(record.confidence ? [`confidence：${record.confidence}`] : []),
+            ].join("\n"),
         metrics: [
           { label: "证据条数", value: String(record.evidenceCount) },
           { label: "文档条数", value: String(record.docsCount) },
@@ -262,7 +282,7 @@ export function HistoryPage() {
             ? "证据不足（answerable=false）：按 D-24 短路，未调用 LLM。"
             : record.answerStatus === "degraded"
               ? "调用了 LLM 但失败（超时/不可达/形状不对）：本条没有答案正文。"
-              : undefined,
+              : "search_context 不调用 LLM，输出为检索到的证据概览。",
       }));
 
     return [...initRows, ...searchRows].sort((left, right) => right.at - left.at);
@@ -272,7 +292,7 @@ export function HistoryPage() {
   rowsRef.current = rows;
 
   return (
-    <div className="space-y-5">
+    <WidePage>
       {/**
        * 页头排版（用户 2026-09-14）：`历史记录  刷新  数据更新于：HH:MM:SS`
        * ——刷新按钮**紧跟标题**（左侧），时间戳与时间范围靠右。
@@ -355,7 +375,7 @@ export function HistoryPage() {
             <thead>
               <tr className="text-left text-xs text-ink-muted">
                 <th className="whitespace-nowrap px-3 py-2 font-normal">时间</th>
-                <th className="whitespace-nowrap px-3 py-2 font-normal">类型</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">工具</th>
                 <th className="whitespace-nowrap px-3 py-2 font-normal">项目</th>
                 <th className="px-3 py-2 font-normal">查询</th>
                 <th className="whitespace-nowrap px-3 py-2 font-normal">trace id</th>
@@ -373,7 +393,7 @@ export function HistoryPage() {
                     {formatShortDate(row.at)}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs">
-                    <KindBadge kind={row.kind} />
+                    <KindBadge kind={row.kind} tool={row.tool} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">{row.project}</td>
                   {/* 查询列：完整宽度（占据剩余空间），单行截断。 */}
@@ -428,7 +448,7 @@ export function HistoryPage() {
       )}
 
       <DetailDialog row={detail} onClose={() => setDetail(null)} />
-    </div>
+    </WidePage>
   );
 }
 
@@ -449,15 +469,24 @@ function formatShortDate(unixSeconds: number): string {
   return `${month}/${day} ${hh}:${mm}`;
 }
 
-/** 类型徽标：仓库初始化 / 检索。 */
-function KindBadge({ kind }: { kind: ActivityRow["kind"] }) {
+/**
+ * 工具徽标：显示**实际调用的工具名**（用户 2026-09-14：“模式改成 Tool，”写用户调用的工具是什么”）。
+ *
+ * - `search_context` / `ask_project`：Agent 真正调的两个 MCP 工具；
+ * - `仓库初始化`：不是 Tool（它是上传链路），但用户需要看到它在时间线里的位置。
+ *
+ * 为什么不用“检索”这个笼统说法：用户说“用户端不关心这么多细节”，
+ * 他只关心“我调的是哪个工具”。
+ */
+function KindBadge({ kind, tool }: { kind: ActivityRow["kind"]; tool: string }) {
   return (
     <span
-      className={`rounded px-1.5 py-0.5 ${
+      className={`rounded px-1.5 py-0.5 whitespace-nowrap ${
         kind === "init" ? "bg-paper-base text-ink-primary" : "bg-blue-50 text-blue-800"
       }`}
+      title={kind === "init" ? "上传链路触发的仓库索引" : "Agent 调用的 MCP 工具"}
     >
-      {kind === "init" ? "仓库初始化" : "检索"}
+      {tool}
     </span>
   );
 }
@@ -518,7 +547,7 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
           {/* 标题：只写"是什么·什么时候·多久"，不重复输入内容。 */}
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="flex items-baseline gap-2 text-sm font-semibold text-ink-primary">
-              <KindBadge kind={row.kind} />
+              <KindBadge kind={row.kind} tool={row.tool} />
               <span>{row.project}</span>
             </h2>
             <span className="text-xs text-ink-muted">
@@ -528,8 +557,10 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
 
           <div className="mt-3 space-y-3">
             <CodeBlock label="Tool 输入" text={inputText(row)} />
-            {/* LLM 答案：有正文就展示（可滚动）；没有就说清是哪种没有。 */}
-            <CodeBlock label="LLM 答案" text={answerText(row)} />
+            {/*
+             * Tool 输出 = 真实返回（用户 2026-09-14："就是 search 的返回，或者 ask 的返回"）。
+             * 不再单列「LLM 答案」块：ask 的答案本来就在返回里，search 根本没有。
+             */}
             <CodeBlock label="Tool 输出" text={outputText(row)} />
           </div>
 
@@ -576,22 +607,9 @@ function inputText(row: ActivityRow): string {
   return row.input.map((item) => `${item.label}：${item.value}`).join("\n");
 }
 
-/** Tool 输出的纯文本形态（供代码块展示）。 */
+/** Tool 输出的纯文本（现在直接就是字符串——真实返回内容）。 */
 function outputText(row: ActivityRow): string {
-  return row.output.map((item) => `${item.label}：${item.value}`).join("\n");
-}
-
-/**
- * LLM 答案的纯文本形态。
- *
- * `answer` 为 `null` 时**不编造**：按 `note` 的同一判断回一句说明，
- * 让用户一眼看出"这次没答案是因为证据不足"还是"调了但失败"。
- */
-function answerText(row: ActivityRow): string {
-  if (row.answer) return row.answer;
-  if (row.kind === "init") return "（仓库初始化不调用 LLM）";
-  if (row.note) return `（${row.note}）`;
-  return "（本条没有答案正文）";
+  return row.output;
 }
 
 /** 底层元信息行：一行小字，不受代码块滚动影响。 */
