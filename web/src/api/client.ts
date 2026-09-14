@@ -364,6 +364,16 @@ export interface UsageRecord {
    * 用户报错时把它报给管理员，可到 `/api/request-log/{requestId}` 查完整链路（TASK-090）。
    */
   requestId: string | null;
+  /**
+   * LLM 答案正文（TASK-099 §A）。`null` = **没走 LLM**（证据不足短路 / 未配置 / 调用失败），
+   * 不是"调了但答案是空"——两者靠 `answerStatus` 区分。
+   */
+  answerText: string | null;
+  /**
+   * 答案状态（TASK-099 §A）：`answered` / `insufficient_evidence` / `degraded`；
+   * `null` = 非 LLM 路径（如 fast 模式的检索）。
+   */
+  answerStatus: string | null;
   createdAt: number;
 }
 

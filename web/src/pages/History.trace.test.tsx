@@ -185,19 +185,21 @@ describe("§需求2 合并表格（TASK-100）", () => {
     await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
 
     const dialog = await screen.findByRole("dialog");
-    // 用户 2026-09-14：两个代码块，标题写 Tool 输入 / Tool 输出（不是"输入内容"）。
+    // 用户 2026-09-14：三个代码块——Tool 输入 / LLM 答案 / Tool 输出。
     expect(within(dialog).getByText("Tool 输入")).toBeInTheDocument();
+    expect(within(dialog).getByText("LLM 答案")).toBeInTheDocument();
     expect(within(dialog).getByText("Tool 输出")).toBeInTheDocument();
     // 代码块是 <pre>（可滚动容器）。
     const pres = dialog.querySelectorAll("pre");
-    expect(pres.length).toBe(2);
+    expect(pres.length).toBe(3);
     expect(pres[0]?.textContent).toContain("令牌在哪里刷新");
     expect(pres[0]?.className).toContain("overflow-auto");
     // 底层元信息（用户："其他底层有证据数量啊，文档条数这种信息"）。
     expect(within(dialog).getByText("证据条数")).toBeInTheDocument();
     expect(within(dialog).getByText("文档条数")).toBeInTheDocument();
-    // 诚实边界：answer 未落库时如实说明。
-    expect(within(dialog).getByText(/答案正文未落库/)).toBeInTheDocument();
+    // 诚实边界（TASK-099 §A）：测试夹具的 answerText 为 null，弹窗要如实说明
+    // "这条没有答案正文"，而不是拿证据清单冒充 LLM 输出。
+    expect(within(dialog).getByText(/本条没有答案正文|未调用 LLM|调用了 LLM 但失败/)).toBeInTheDocument();
   });
 
   it("弹窗标题不重复输入内容（用户：太长了）", async () => {
@@ -275,5 +277,118 @@ describe("§需求3 时间范围选择（TASK-100）", () => {
     await waitFor(() => {
       expect(calls.some((url) => url.includes("days=7"))).toBe(true);
     });
+  });
+});
+
+describe("§需求4 刷新（TASK-100 用户 2026-09-14 定稿）", () => {
+  it("页头排版：标题 + 刷新按钮 + 数据更新于（同一个左侧分组）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    await screen.findByRole("table");
+    expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+    // 首次加载成功后显示时间戳（用户要求短格式「数据更新于：HH:MM:SS」）。
+    expect(await screen.findByText(/数据更新于：/)).toBeInTheDocument();
+  });
+
+  it("自动刷新常开且**不提供开关**（用户定稿：不让用户管这个概念）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    await screen.findByRole("table");
+    // 页面上不应再有 switch 控件或「自动刷新」字样。
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByText("自动刷新")).not.toBeInTheDocument();
+  });
+
+  it("刷新按钮点击后重新请求（手动刷新仍可用）", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        calls.push(url);
+        if (url.includes("/index-runs")) {
+          return new Response(JSON.stringify([RUN]), { status: 200 });
+        }
+        if (url.includes("/api/projects")) {
+          return new Response(JSON.stringify([PROJECT]), { status: 200 });
+        }
+        return new Response(JSON.stringify(usage([record])), { status: 200 });
+      }),
+    );
+
+    renderPage(<HistoryPage />);
+    await screen.findByRole("table");
+    const before = calls.filter((url) => url.includes("usage/summary")).length;
+
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      const after = calls.filter((url) => url.includes("usage/summary")).length;
+      expect(after).toBeGreaterThan(before);
+    });
+  });
+
+  /**
+   * **用户报的\"低概率全白\"的回归用例**（2026-09-14）：
+   * 切时间档位时旧表格必须留在屏幕上，不能被 LoadingBlock 换掉。
+   *
+   * 根因是首屏 effect 一律走非静默路径 → `runs`/`usage` 被置空 → `rows` 为 null →
+   * 渲染 LoadingBlock。修复后 `load` 按\"屏幕上是否已有数据\"决定静默与否。
+   */
+  it("切时间档位时不白屏：表格在整个切换过程中都留在 DOM 里", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    expect(table).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "近 7 天" }));
+
+    // 切换过程中**任何时刻**都不应出现加载态（表格必须一直在）。
+    // 用 waitFor 循环观察：若中途被 LoadingBlock 替换，这里会抓到。
+    let sawLoading = false;
+    const observer = setInterval(() => {
+      if (screen.queryByText("加载中…") !== null) sawLoading = true;
+    }, 1);
+    await waitFor(() => {
+      expect(screen.getByRole("table")).toBeInTheDocument();
+    });
+    clearInterval(observer);
+    expect(sawLoading).toBe(false);
+    expect(screen.queryByText("加载中…")).not.toBeInTheDocument();
+  });
+
+  it("刷新失败时不清空已有数据（只显示错误横幅）", async () => {
+    let failNext = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("usage/summary") && failNext) {
+          throw new TypeError("Failed to fetch");
+        }
+        if (url.includes("/index-runs")) {
+          return new Response(JSON.stringify([RUN]), { status: 200 });
+        }
+        if (url.includes("/api/projects")) {
+          return new Response(JSON.stringify([PROJECT]), { status: 200 });
+        }
+        return new Response(JSON.stringify(usage([record])), { status: 200 });
+      }),
+    );
+
+    renderPage(<HistoryPage />);
+    await screen.findByRole("table");
+
+    failNext = true;
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/连不上 zace-service/)).toBeInTheDocument();
+    });
+    // 表格仍在（清空会让"网络抖一下"看起来像"记录全没了"）。
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });

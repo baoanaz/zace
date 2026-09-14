@@ -130,6 +130,53 @@ export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
 }
 
 /**
+ * 滑动开关（TASK-099 前端收尾）：用户 2026-09-14 要求自动刷新用「滑动开关」而不是勾选框。
+ *
+ * 为什么自建而不是用原生 checkbox：用户明确要滑块观感；且原生 checkbox 无法在保持
+ * 无障碍语义（role="switch"）的同时做出这个形态。这里用 `<button role="switch">`：
+ * 键盘可聚焦、空格/回车可切换、`aria-checked` 让读屏器报出状态（比自造 div 正确）。
+ *
+ * 点击处理：`<button>` 自身可点；调用方用 `<label>` 包住它时，点 label 文字也会触发
+ * 内部控件的 click（浏览器原生行为），因此**点文字与点滑块是同一条路径**，
+ * 不需要额外的 `htmlFor`/`id` 配对。
+ */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+  testId,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      data-testid={testId}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-4 w-8 shrink-0 items-center rounded-full border transition-colors disabled:opacity-40 ${
+        checked ? "border-accent-seal bg-accent-seal" : "border-ink-line bg-paper-base"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`absolute h-3 w-3 rounded-full bg-paper-card shadow-sm transition-transform ${
+          checked ? "translate-x-4" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
+/**
  * 二次确认弹窗（TASK-094 §D）：破坏性操作前必须让用户明确看过后果。
  *
  * 为什么用原生 `<dialog>` 而不是自造遮罩层：浏览器已经给了焦点陷阱、`Esc` 关闭与

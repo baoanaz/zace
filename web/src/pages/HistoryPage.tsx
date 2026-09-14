@@ -46,6 +46,8 @@ import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/
 import { formatDuration, formatTime } from "./DashboardPage";
 
 const ROW_LIMIT = 200;
+/** 自动刷新间隔（毫秒）：用户 2026-09-14 要求"全局自动 10 秒刷新一次"。 */
+const AUTO_REFRESH_MS = 10_000;
 
 /** 时间范围档位（天）。索引记录走前端过滤，检索走后端 `days` 参数。 */
 const RANGE_OPTIONS: [number, string][] = [
@@ -63,37 +65,36 @@ type RunReadFailure = { projectId: string; error: unknown };
  *
  * `kind` 是用户要求的「类型」列；`input`/`output` 是弹窗要展示的原始数据。
  */
-type ActivityRow =
-  | {
-      kind: "init";
-      key: string;
-      at: number;
-      /** 项目名（两种类型都有——检索也属于某个项目）。 */
-      project: string;
-      /** 查询文本；仓库初始化没有它（`null` → 表格里显示 `—`）。 */
-      query: string | null;
-      state: "ok" | "failed";
-      durationMs: number;
-      volume: { label: string; value: string };
-      traceId: string | null;
-      input: { label: string; value: string }[];
-      output: { label: string; value: string }[];
-      note?: string;
-    }
-  | {
-      kind: "search";
-      key: string;
-      at: number;
-      project: string;
-      query: string | null;
-      state: "ok" | "insufficient" | "failed" | "degraded";
-      durationMs: number;
-      volume: { label: string; value: string };
-      traceId: string | null;
-      input: { label: string; value: string }[];
-      output: { label: string; value: string }[];
-      note?: string;
-    };
+/**
+ * 统一后的表格行（初始化与检索共用一个形状）。
+ *
+ * 弹窗内容分三层（TASK-100 用户 2026-09-14 定稿）：
+ * 1. `input` → 「Tool 输入」代码块；
+ * 2. `answer` → 「LLM 答案」代码块（仅检索有；未调 LLM 时为 `null`）；
+ * 3. `metrics` → 底层元信息行（证据条数 / 文档条数 / 模式 / 体量）。
+ */
+type ActivityRow = {
+  kind: "init" | "search";
+  key: string;
+  at: number;
+  /** 项目名（两种类型都有——检索也属于某个项目）。 */
+  project: string;
+  /** 查询文本；仓库初始化没有它（`null` → 表格里显示 `—`）。 */
+  query: string | null;
+  state: "ok" | "insufficient" | "failed" | "degraded";
+  durationMs: number;
+  volume: { label: string; value: string };
+  traceId: string | null;
+  /** Tool 输入（代码块内容）。 */
+  input: { label: string; value: string }[];
+  /** LLM 答案正文；`null` = 未调 LLM（证据不足短路）或调用失败。 */
+  answer: string | null;
+  /** 非答案的输出信息（初始化看文件数/chunks，检索看证据/模式）。 */
+  output: { label: string; value: string }[];
+  /** 底层元信息（与 `output` 同源，展示位置不同：这里是页脚小字行）。 */
+  metrics: { label: string; value: string }[];
+  note?: string;
+};
 
 export function HistoryPage() {
   const [days, setDays] = useState(30);
@@ -103,11 +104,39 @@ export function HistoryPage() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [detail, setDetail] = useState<ActivityRow | null>(null);
+  //: 最近一次成功刷新的时间（页头显示「数据更新于 HH:MM:SS」——用户 2026-09-14 要求简短）。
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setError(null);
-    setRunFailures([]);
-    try {
+  /**
+   * `rows` 的镜像 ref（TASK-099 前端收尾）：`load` 里需要知道"屏幕上此刻是否已有数据"，
+   * 但 `rows` 是 `useMemo` 的产物、在 `load` 定义之后才算出。用 ref 把最近一次的值带过去，
+   * 避免把 `rows` 加进 `load` 的依赖（那会让每次数据变化都重建 `load` → 重挂定时器）。
+   */
+  const rowsRef = useRef<ActivityRow[] | null>(null);
+
+  /**
+   * 拉取数据。
+   *
+   * `silent`（TASK-099 前端收尾，用户 2026-09-14 要求"不要白屏、要无感刷新"）：
+   * - `silent=false`：`rows===null` 时显示 `LoadingBlock`，这是**首次进入**的正常首屏；
+   * - `silent=true`（刷新按钮 / 自动刷新 / 切时间档位）：**不动任何正在展示的数据**，
+   *   也不把 `rows` 置空，因此表格原样待着，新数据到了直接替换（React 只重渲染变化的行，不闪）。
+   *
+   * 为什么不用"先置空再填"：那正是白屏的来源——`rows` 一为 `null` 就渲染 `LoadingBlock`，
+   * 整块表格消失。刷新是**更新**已有视图，不是重新进入页面。
+   */
+  const load = useCallback(
+    async (options: { silent?: boolean } = {}) => {
+      // **智能默认**（用户 2026-09-14 报的"低概率全白"的根因）：
+      // 已经渲染过表格（`rows !== null`）时，任何刷新都不应再白屏。
+      // 调用方不传 `silent` 时按"屏幕上是否已有数据"决定，而不是一律非静默——
+      // 后者会让"切时间档位"这样的小动作把整张表拆掉重建。
+      const silent = options.silent ?? rowsRef.current !== null;
+      setError(null);
+      if (!silent) setRunFailures([]);
+      setLoading(true);
+      try {
       const listed = await listProjects();
       setProjects(listed);
       // 逐项目取历史再合并：跨项目端点只回聚合，而"什么时候索引了哪个项目"需要明细。
@@ -130,16 +159,32 @@ export function HistoryPage() {
           .slice(0, ROW_LIMIT),
       );
       setUsage(await getUsageSummary(days, ROW_LIMIT));
+      setRefreshedAt(Date.now());
     } catch (err) {
+      // 刷新失败**不清空已有数据**：把上一次成功的结果留在屏幕上（清空会让"网络抖一下"
+      // 看起来像"记录全没了"），只显示错误横幅。
       setError(err);
-      setRuns(null);
-      setRunFailures([]);
-      setUsage(null);
+    } finally {
+      setLoading(false);
     }
-  }, [days]);
+    },
+    [days],
+  );
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  //: 自动刷新常开（用户 2026-09-14 定稿：不要开关，"后台存在新的请求就默认刷新一次"）。
+  //:
+  //: 两条纪律：① `load` 随 `days` 变化，因此切时间档位后定时器自动用新的窗口；
+  //: ② 清理函数必须 clearInterval，否则每次挂载都叠一个定时器（请求数会指数增长）。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      // 自动刷新一律静默：用户可能正在看表格或读弹窗，不能让他眼前的东西消失。
+      void load({ silent: true });
+    }, AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [load]);
 
   const nameOf = useCallback(
@@ -169,10 +214,15 @@ export function HistoryPage() {
           { label: "项目", value: nameOf(projectId) },
           { label: "projectId", value: projectId },
         ],
+        answer: null,
         output: [
           { label: "解析文件", value: `${run.filesProcessed} / ${run.filesTotal}` },
           { label: "chunks", value: String(run.chunks) },
           { label: "解析问题", value: run.errors > 0 ? `${run.errors} 个` : "无" },
+        ],
+        metrics: [
+          { label: "解析文件", value: `${run.filesProcessed} / ${run.filesTotal}` },
+          { label: "chunks", value: String(run.chunks) },
         ],
         ...(run.error ? { note: run.error } : {}),
       }));
@@ -190,23 +240,66 @@ export function HistoryPage() {
         volume: { label: "token", value: String(record.usedTokens) },
         traceId: record.requestId,
         input: [{ label: "查询", value: record.query }],
+        // TASK-099 §A：answer 正文已落库；为 null 时用 answerStatus 说清是
+        // “没调 LLM”（证据不足短路）还是“调了但失败”。
+        answer: record.answerText,
         output: [
           { label: "证据条数", value: String(record.evidenceCount) },
           { label: "文档条数", value: String(record.docsCount) },
           { label: "模式", value: record.mode },
           ...(record.confidence ? [{ label: "confidence", value: record.confidence }] : []),
         ],
-        // 诚实边界：answer 正文没有落库（TASK-099 补），不拿证据清单冒充它。
-        note: "答案正文未落库：这里展示的是输入与检索到的证据概览。",
+        metrics: [
+          { label: "证据条数", value: String(record.evidenceCount) },
+          { label: "文档条数", value: String(record.docsCount) },
+          { label: "模式", value: record.mode },
+          ...(record.confidence ? [{ label: "confidence", value: record.confidence }] : []),
+          ...(record.answerStatus ? [{ label: "答案状态", value: record.answerStatus }] : []),
+        ],
+        note: record.answerText
+          ? undefined
+          : record.answerStatus === "insufficient_evidence"
+            ? "证据不足（answerable=false）：按 D-24 短路，未调用 LLM。"
+            : record.answerStatus === "degraded"
+              ? "调用了 LLM 但失败（超时/不可达/形状不对）：本条没有答案正文。"
+              : undefined,
       }));
 
     return [...initRows, ...searchRows].sort((left, right) => right.at - left.at);
   }, [runs, usage, days, nameOf]);
 
+  // 把最新的 rows 写进 ref（供 load 判断"是否已有数据"）。
+  rowsRef.current = rows;
+
   return (
     <div className="space-y-5">
+      {/**
+       * 页头排版（用户 2026-09-14）：`历史记录  刷新  数据更新于：HH:MM:SS`
+       * ——刷新按钮**紧跟标题**（左侧），时间戳与时间范围靠右。
+       *
+       * 自动刷新**常开且不提供开关**（用户定稿）：它本来就是"后台有新请求就自动刷一次"，
+       * 让用户管一个开关只会多一个要理解的概念；需要立即看最新的就点「刷新」。
+       * 仍保留手动刷新：它有明确反馈价值（点下去能看到数据真的变了）。
+       */}
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-lg font-semibold">历史记录</h1>
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h1 className="text-lg font-semibold">历史记录</h1>
+          <button
+            type="button"
+            onClick={() => void load({ silent: true })}
+            disabled={loading}
+            className="rounded border border-ink-line px-2.5 py-1 text-xs text-ink-primary hover:bg-paper-base disabled:opacity-50"
+          >
+            {loading ? "刷新中…" : "刷新"}
+          </button>
+          {/* 数据更新时间（用户：显示「数据更新于 HH:MM:SS」）。 */}
+          {refreshedAt !== null && (
+            <span className="text-xs text-ink-muted">
+              数据更新于：{new Date(refreshedAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+
         <div className="flex overflow-hidden rounded border border-ink-line text-xs">
           {RANGE_OPTIONS.map(([value, label]) => (
             <button
@@ -261,35 +354,30 @@ export function HistoryPage() {
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-ink-muted">
-                <th className="px-4 py-2 font-normal">时间</th>
-                <th className="px-4 py-2 font-normal">类型</th>
-                <th className="px-4 py-2 font-normal">项目</th>
-                <th className="px-4 py-2 font-normal">查询</th>
-                <th className="px-4 py-2 font-normal">trace id</th>
-                <th className="px-4 py-2 font-normal">结果</th>
-                <th className="px-4 py-2 font-normal">耗时</th>
-                <th className="px-4 py-2 font-normal">体量</th>
-                <th className="px-4 py-2 font-normal">详情</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">时间</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">类型</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">项目</th>
+                <th className="px-3 py-2 font-normal">查询</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">trace id</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">结果</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">耗时</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">体量</th>
+                <th className="whitespace-nowrap px-3 py-2 font-normal">详情</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.key} className="border-t border-ink-line/60">
-                  <td className="px-4 py-2 text-xs text-ink-muted">{formatTime(row.at)}</td>
-                  <td className="px-4 py-2 text-xs">
+                  {/* 时间：**两行紧凑显示**（日期 + 时间）而不是一长串 — 用户反馈列太挤。 */}
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-muted">
+                    {formatShortDate(row.at)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
                     <KindBadge kind={row.kind} />
                   </td>
-                  {/* 项目列：两种类型都显示项目名（初始化必有，检索也有 projectId）。 */}
-                  <td className="whitespace-nowrap px-4 py-2">{row.project}</td>
-                  {/**
-                   * 查询列（TASK-100，用户 2026-09-14）：
-                   * - 检索 → 输入文本的前几个字，帮用户认出"刚才问的是哪一次"；
-                   * - 仓库初始化 → `—`（它不是提问，没有输入文本）。
-                   *
-                   * 为什么截断：完整的 query 可能上千字，写成多行会把整张表拉爆；
-                   * 完整内容在「查看」弹窗里（用户明确要求）。
-                   */}
-                  <td className="max-w-[28rem] px-4 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">{row.project}</td>
+                  {/* 查询列：完整宽度（占据剩余空间），单行截断。 */}
+                  <td className="w-full max-w-0 px-3 py-2">
                     {row.query ? (
                       <span className="block truncate" title={row.query}>
                         {row.query}
@@ -298,7 +386,7 @@ export function HistoryPage() {
                       <span className="text-ink-muted">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-xs">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
                     {row.traceId ? (
                       <span className="inline-flex items-center gap-1">
                         <code className="font-mono text-ink-muted">{row.traceId}</code>
@@ -310,14 +398,16 @@ export function HistoryPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-xs">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
                     <StateBadge state={row.state} />
                   </td>
-                  <td className="px-4 py-2 text-xs">{formatDuration(row.durationMs)}</td>
-                  <td className="px-4 py-2 text-xs text-ink-muted">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
+                    {formatDuration(row.durationMs)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-ink-muted">
                     {row.volume.value} {row.volume.label}
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     <button
                       type="button"
                       onClick={() => setDetail(row)}
@@ -340,6 +430,23 @@ export function HistoryPage() {
       <DetailDialog row={detail} onClose={() => setDetail(null)} />
     </div>
   );
+}
+
+/**
+ * 时间列的紧凑格式：`9/14 19:38`（而不是 `9/14/2026, 7:38:03 PM`）。
+ *
+ * 为什么换格式（用户 2026-09-14 反馈"列太挤"）：完整 `toLocaleString()` 会输出
+ * 二十多个字符，把时间列撑到最宽、又自动折成两行。历史记录看的是"最近发生了什么"，
+ * 年份通常不必要；完整时间在「查看」弹窗里（那里用 `formatTime` 给全）。
+ */
+function formatShortDate(unixSeconds: number): string {
+  if (!unixSeconds) return "—";
+  const date = new Date(unixSeconds * 1000);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hh}:${mm}`;
 }
 
 /** 类型徽标：仓库初始化 / 检索。 */
@@ -421,15 +528,15 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
 
           <div className="mt-3 space-y-3">
             <CodeBlock label="Tool 输入" text={inputText(row)} />
+            {/* LLM 答案：有正文就展示（可滚动）；没有就说清是哪种没有。 */}
+            <CodeBlock label="LLM 答案" text={answerText(row)} />
             <CodeBlock label="Tool 输出" text={outputText(row)} />
           </div>
 
-          {/** 底层元信息：证据条数 / 文档条数 / 模式 / confidence。 */}
+          {/** 底层元信息：证据条数 / 文档条数 / 模式 / confidence / 体量。 */}
           <MetaRow row={row} />
 
-          {row.note && (
-            <p className="mt-2 text-xs text-ink-muted">{row.note}</p>
-          )}
+          {row.note && <p className="mt-2 text-xs text-ink-muted">{row.note}</p>}
 
           <div className="mt-4 flex justify-end gap-2">
             {row.traceId && <CopyButton text={row.traceId} label="复制 trace id" />}
@@ -474,12 +581,25 @@ function outputText(row: ActivityRow): string {
   return row.output.map((item) => `${item.label}：${item.value}`).join("\n");
 }
 
+/**
+ * LLM 答案的纯文本形态。
+ *
+ * `answer` 为 `null` 时**不编造**：按 `note` 的同一判断回一句说明，
+ * 让用户一眼看出"这次没答案是因为证据不足"还是"调了但失败"。
+ */
+function answerText(row: ActivityRow): string {
+  if (row.answer) return row.answer;
+  if (row.kind === "init") return "（仓库初始化不调用 LLM）";
+  if (row.note) return `（${row.note}）`;
+  return "（本条没有答案正文）";
+}
+
 /** 底层元信息行：一行小字，不受代码块滚动影响。 */
 function MetaRow({ row }: { row: ActivityRow }) {
   return (
     <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-ink-line/60 pt-2">
-      {row.output.map((item) => (
-        <div key={item.label} className="flex items-baseline gap-1.5">
+      {row.metrics.map((item, index) => (
+        <div key={`${item.label}-${index}`} className="flex items-baseline gap-1.5">
           <dt className="text-xs text-ink-muted">{item.label}</dt>
           <dd className="text-xs text-ink-primary">{item.value}</dd>
         </div>

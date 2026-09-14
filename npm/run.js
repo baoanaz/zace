@@ -28,8 +28,13 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1_000;
 
 // 本地回退：仓库内已构建的二进制（开发者用 `cargo build` 后即可跑 `node npm/run.js`）。
+// **另加 `ZACE_CLIENT_BINARY`**（TASK-099 实测需要）：GitHub Release 还没发资产时，
+// 用户可以显式指一个现成二进制（例如从源码 `cargo build --release` 得到的），
+// 而不必把文件拷进缓存目录。
 function localFallbacks() {
+  const explicit = process.env.ZACE_CLIENT_BINARY;
   return [
+    ...(explicit ? [explicit] : []),
     path.resolve(__dirname, "..", "client", "target", "release", BINARY_NAME),
     path.resolve(__dirname, "..", "client", "target", "debug", BINARY_NAME),
   ];
@@ -71,10 +76,43 @@ function fromPath(name) {
     if (!directory) continue;
     const candidate = path.join(directory, name);
     try {
-      if (fs.statSync(candidate).isFile()) return candidate;
-    } catch {}
+      if (!fs.statSync(candidate).isFile()) continue;
+    } catch {
+      continue;
+    }
+    // **不能把本包装器自己当成二进制**（TASK-099 实测踩到的真实缺陷）：
+    // 用 npm/npx 安装时，PATH 里的 `zace-client` 正是本包装器生成的 shim
+    // （`node_modules/.bin/zace-client` → 本 `run.js`）。不排除它就会“回退到自己”，
+    // 子进程再次走同一段逻辑、再次找不到二进制、再次回退……无限循环刷屏。
+    if (isSelfWrapper(candidate)) continue;
+    return candidate;
   }
   return null;
+}
+
+/** 该可执行文件是不是本包装器（或其 shim）。
+ *
+ * 两种形态都要认：
+ * 1. 直接指向本文件（`node run.js` 或某些包的硬链接）；
+ * 2. npm 生成的 shell/bat shim——内容里包含本包的包名与 `run.js`（或 `.bin` 下的同名转发）。
+ *
+ * 用内容嗅探而不是只比路径：npx 的缓存目录、全局安装、`npm link` 三种形态路径都不同，
+ * 而“里面是 node 脚本 + 提到 zace-client/run.js”这个特征在三种形态下都成立。
+ */
+function isSelfWrapper(candidate) {
+  try {
+    if (path.resolve(candidate) === path.resolve(__filename)) return true;
+    const stat = fs.statSync(candidate);
+    // 真二进制通常是上百 KB 且不带头部脚本；这里只嗅探小文件，避免白读大文件。
+    if (stat.size > 64 * 1024) return false;
+    const head = fs.readFileSync(candidate, "utf8");
+    if (head.includes("zace-client") && head.includes("run.js")) return true;
+    // Windows 的 .cmd shim / bash shim：指向 node_modules/zace-client/run.js。
+    return /node_modules[\\/]+zace-client[\\/]+run\.js/.test(head);
+  } catch {
+    // 二进制读不成 utf8（乱码不会包含 ASCII 关键词）/无权限 → 无法自证是自己
+    return false;
+  }
 }
 
 function log(message) {
@@ -294,7 +332,8 @@ async function resolveBinary() {
       log(`  1) 下载对应平台的 release 资产并放到：${target}`);
       log("  2) 从源码构建：git clone 后执行  cd client && cargo build --release");
       log("     （在仓库内运行时，包装器会自动发现 client/target/release/zace-client）");
-      log(`  3) 从 release 页下载：https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`);
+      log("  3) 用环境变量指定一个现成二进制：ZACE_CLIENT_BINARY=/abs/path/zace-client");
+      log(`  4) 从 release 页下载：https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`);
       process.exit(1);
     }
   }
