@@ -8,15 +8,16 @@
  *   用户可能从本机打开管理面、却要让别的机器上的 Agent 连过去；
  * - 不自动带入真实 Key（避免截图/录屏泄露）；用户填了就实时替换占位符；
  * - 事实来源：`npm/README.md` / `npm/package.json` / `client/src/main.rs` 的 clap 定义。
+ *
+ * TASK-100 §需求6（用户 2026-09-14）：删掉页面上的解释性文案——用户是工程师，
+ * 页面只留"做什么"与可粘贴的片段。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { getMeta } from "../api/client";
 import {
   AGENT_TARGETS,
   BASE_URL_PLACEHOLDER,
-  DEFAULT_CACHE_ROOT,
   INSTALL_COMMAND,
   type AgentId,
   snippetFor,
@@ -28,18 +29,6 @@ export function ConnectPage() {
   const [target, setTarget] = useState<AgentId>("codex");
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
-  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        setAuthRequired((await getMeta()).authRequired);
-      } catch {
-        setAuthRequired(null);
-      }
-    })();
-  }, []);
-
   // 空串交给 `connect-info` 回落成占位符（页面不做第二套判断）。
   const ctx = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
   const snippet = useMemo(() => snippetFor(target, ctx), [target, ctx]);
@@ -56,11 +45,6 @@ export function ConnectPage() {
         <pre className="overflow-x-auto rounded bg-ink-primary p-3 font-mono text-xs text-paper-base">
           {INSTALL_COMMAND}
         </pre>
-        <p className="mt-2 text-xs text-ink-muted">
-          也可以不安装：下面的片段用 <code className="rounded bg-paper-base px-1 text-ink-primary">npx</code>{" "}
-          拉起，<code className="rounded bg-paper-base px-1 text-ink-primary">npx</code> 会按需下载，
-          <code className="mx-1 rounded bg-paper-base px-1 text-ink-primary">{INSTALL_COMMAND}</code> 只是让首次启动快一些。
-        </p>
       </Card>
 
       <Card title="2. 配置 Agent 接入">
@@ -115,19 +99,6 @@ export function ConnectPage() {
         <pre className="overflow-x-auto rounded bg-ink-primary p-3 font-mono text-xs text-paper-base">
           {snippet}
         </pre>
-        {active.note && <p className="mt-2 text-xs text-ink-muted">{active.note}</p>}
-        <p className="mt-2 text-xs text-ink-muted">
-          <code className="rounded bg-paper-base px-1 text-ink-primary">--token</code> 的取值是你在本页「API Key」
-          里创建的 Key（<code className="rounded bg-paper-base px-1 text-ink-primary">zace_</code> 开头，明文只显示一次）。
-          {authRequired === false
-            ? "当前服务是本地单用户模式（无鉴权），本地连过去时可忽略该参数。"
-            : "服务端启用鉴权后必填。"}
-        </p>
-        <p className="mt-2 text-xs text-ink-muted">
-          {active.label} 通过 <code className="rounded bg-paper-base px-1 text-ink-primary">npx zace-client</code>{" "}
-          拉起本地客户端：它在本地扫描并上传代码，检索与渲染在服务端完成。
-          本地索引缓存默认在 <code className="rounded bg-paper-base px-1 text-ink-primary">{DEFAULT_CACHE_ROOT}</code>。
-        </p>
       </Card>
     </div>
   );

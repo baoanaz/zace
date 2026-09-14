@@ -1,9 +1,10 @@
 /**
- * 应用外壳导航（TASK-086 §1；TASK-088 §F 追加“设置”）。
+ * 应用外壳导航（TASK-086 §1；TASK-088 §F 追加“设置”；TASK-100 §需求4 追加“项目”）。
  *
  * 守两件事（本卡真正会退化、且用户直接看得见的地方）：
- * 1. **导航顺序 = 控制台 → 接入指南 → API Key → 历史记录 → 设置**（设置由 TASK-088 §F
- *    加在最后一位；前四项的顺序与文案由 TASK-086 定下，不得因新增而变动）；
+ * 1. **导航顺序 = 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 设置**
+ *    （TASK-100 把「项目」插在控制台之后——它与控制台同级，都是“看数据”的页；
+ *    其余项的顺序由 TASK-086/088 定下，不得因新增而变动）；
  * 2. **`to` 是路由契约**——顺序变了，路径一个都不能变（外部链接与文档都指向它们）。
  *
  * 另外顺手钉住 §4 的一个易破点：侧边栏必须**不透明**，
@@ -57,12 +58,13 @@ function navLinkClass(label: string): string {
   return link.className;
 }
 
-describe("主导航（TASK-086 §1 / TASK-088 §F）", () => {
-  it("顺序为 控制台 → 接入指南 → API Key → 历史记录 → 设置", () => {
+describe("主导航（TASK-086 §1 / TASK-088 §F / TASK-100 §需求4）", () => {
+  it("顺序为 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 设置", () => {
     renderLayout();
 
     expect([...navLinks()].map((link) => link.textContent)).toEqual([
       "控制台",
+      "项目",
       "接入指南",
       "API Key",
       "历史记录",
@@ -70,11 +72,12 @@ describe("主导航（TASK-086 §1 / TASK-088 §F）", () => {
     ]);
   });
 
-  it("新增设置项后排在最末位，且既有四项的路径一个都没变", () => {
+  it("插入项目项后，其余各项的路径一个都没变", () => {
     renderLayout();
 
     expect([...navLinks()].map((link) => link.getAttribute("href"))).toEqual([
       "/",
+      "/projects",
       "/connect",
       "/keys",
       "/history",
@@ -86,7 +89,7 @@ describe("主导航（TASK-086 §1 / TASK-088 §F）", () => {
     renderLayout("/connect");
 
     // 若 "/" 丢了 `end`，它会在每个子路径上都保持高亮。
-    // TASK-098：active 底色由 `bg-slate-900` 换成 `accent.seal`（朱砂）。
+    // TASK-098：active 底色由 `bg-slate-900` 换成 `accent.seal`（TASK-100 后为深赭褐）。
     expect(navLinkClass("控制台")).not.toContain("bg-accent-seal");
     expect(navLinkClass("接入指南")).toContain("bg-accent-seal");
   });

@@ -145,6 +145,15 @@
 |---|---|---|---|---|
 | [TASK-098](TASK-098-WebUI复古风格改版.md) | **WebUI 复古博物院风格**（老纸底 `#f3e4c7` + 侧边栏布局 + 登录页双栏） | 无（soft: TASK-094，同改两页） | `web/src/{index.css,tailwind.config.js}`、`web/src/app/Layout.tsx`、`web/src/pages/LoginPage.tsx`、`web/src/components/ui.tsx` | review |
 
+### Phase 4 补充（2026-09-14：调用链埋点 + 用户级 LLM）
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-099](TASK-099-调用链埋点与用户级LLM配置.md) | **调用链埋点（callId 关联 N 次初始化 + 1 次检索）+ LLM 答案落库 + 用户级 LLM 配置** | 无（soft: TASK-100 前端已就绪） | `client/src/{remote,tools}.rs`、`service/zace_service/{metadb,runtime,mcp,config,llmconfig}.py`、`service/zace_service/routers/{sync,query,ops,auth}.py`、`service/tests/` | pending |
+
+> **补充说明**：TASK-100 为 WebUI 精简与调用链展示（含合并历史表、项目页、时间范围、服务模型卡）；
+> 本表未单独列卡（它由多轮用户反馈驱动，代码已落地，待总体验收后回填状态）。
+
 > **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
 > 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。
 > 若并行，则 095 不再碰 `assembly.py` 的 token 计量部分、096 不碰 `render.py`。

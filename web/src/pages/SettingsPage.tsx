@@ -1,46 +1,55 @@
 /**
- * 设置（TASK-088 §F）：展示**当前实际生效**的配置，只读。
+ * 设置（TASK-088 §F；TASK-100 §需求9/10 精简为**只留 LLM**）。
  *
- * 三条口径：
- * 1. **不显示明文，也不显示 key 的任何部分**（含前缀/长度）——服务端连长度都不返回，
- *    页面因此没有任何可泄露的隐藏状态；只显示"已配置 / 未配置"；
- * 2. **未配置时给可操作的文案**（缺哪几个环境变量 + 未配置时 `ask` 返回什么），不留空白；
- * 3. **数据来自 `GET /api/meta` 的 `config`**（扩展现有免鉴权端点，不新增路径）：
- *    未登录的云端只拿得到"配了没"，因此页面如实说明"登录后可看模型名"，
- *    而不是假装读到空值。
+ * 用户 2026-09-14 原话："设置页面，其中 LLM 修改成自定义的配置方式，模型名、URL、Key。
+ * 目的是给用户自定义 LLM 的选择。设置页面只保留 LLM 的配置，存储、部署形态等其他功能删除，精简。"
  *
- * TASK-094 §B1：追加「存储配额（只读）」卡片（单项目/单用户上限 + 告警阈值），
- * 与后端的 `Settings` 同源（设置页显示的上限与实际告警阈值不会漂移）。
+ * 因此本页只做一件事：**让用户配自己的总结模型**。
+ * - 存储配额 → 移到 `/projects`（那里有进度条与删除入口，是它的使用场景）；
+ * - 部署形态（版本/本地模式/需要登录/开放注册）→ 删除（用户不需要知道这些）；
+ * - 向量模型信息 → 移到控制台的「服务模型」卡（与 LLM 并排展示当前生效值）。
  *
- * 为什么扩展现有 `/api/meta` 而不是新增只读端点：配置展示是**首屏信息**的一部分
- * （与部署形态同源，都由 `Settings` 计算），复用它可以零新增路径、零契约文件改动，
- * 且服务端能按"本地模式或已登录"精细门禁；新增端点还要动 CF-05 的路径白名单。
+ * **保存能力尚未实现**（TASK-099 后端卡）：现在没有任何配置写入端点，
+ * LLM 配置只读环境变量。因此本页：
+ * - 表单**结构按最终形态呈现**（模型名 / 接口地址 / API Key 三个字段 + 保存/清除），
+ *   便于评审设计；但 `disabled` 并明确标注"保存待后端支持"——**不做假按钮**；
+ * - 顶部如实显示当前生效值（只读），让用户知道"现在实际在用什么"。
+ *
+ * 安全口径（承 TASK-088，不放松）：
+ * - **不显示 key 的任何部分**（含前缀/长度）——服务端连长度都不返回；
+ * - 页面不把 Key 写进 localStorage/sessionStorage，提交后即从组件状态清除。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { type DeploymentMeta, getMeta } from "../api/client";
-import { Card, ErrorBlock, KeyValue, LoadingBlock } from "../components/ui";
-import { formatBytes } from "./DashboardPage";
+import { Card, ErrorBlock, LoadingBlock } from "../components/ui";
+
+/** 后端是否已支持保存用户级 LLM 配置（TASK-099 实施后置 true）。 */
+const CAN_SAVE_USER_LLM = false;
 
 export function SettingsPage() {
   const [meta, setMeta] = useState<DeploymentMeta | null>(null);
   const [error, setError] = useState<unknown>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setMeta(await getMeta());
-      setError(null);
-    } catch (err) {
-      setMeta(null);
-      setError(err);
-    }
-  }, []);
+  //: 表单状态。**不持久化**——Key 只活在内存里，提交后清除。
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void (async () => {
+      try {
+        const resolved = await getMeta();
+        setMeta(resolved);
+        // 用当前生效值预填"非敏感"字段（Key 永不预填——服务端不返回它）。
+        setModel(resolved.config.llm.model ?? "");
+        setBaseUrl(resolved.config.llm.baseUrl ?? "");
+      } catch (err) {
+        setError(err);
+      }
+    })();
+  }, []);
 
   if (error !== null) {
     return (
@@ -50,150 +59,128 @@ export function SettingsPage() {
       </div>
     );
   }
-  if (meta === null) {
-    return <LoadingBlock text="正在读取服务配置…" />;
-  }
+  if (meta === null) return <LoadingBlock text="正在读取配置…" />;
 
-  const { embedding, llm, storage } = meta.config;
+  const { llm } = meta.config;
 
   return (
     <div className="space-y-5">
       <div>
         <h1 className="text-lg font-semibold">设置</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          当前实际生效的配置（只读）。改配置请设环境变量后重启服务——本页只做展示，
-          不落任何密钥。
+          为你的账户指定总结模型。留空则使用服务端的默认配置。
         </p>
       </div>
 
-      <Card title="总结模型（LLM）">
-        {!llm.configured && (
+      <Card
+        title="总结模型（LLM）"
+        actions={
+          llm.configured ? (
+            <span className="text-xs text-ink-muted">当前：{llm.model ?? "已配置"}</span>
+          ) : (
+            <span className="text-xs text-amber-700">未配置</span>
+          )
+        }
+      >
+        {!CAN_SAVE_USER_LLM && (
           <p
-            data-testid="llm-notice"
-            className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+            data-testid="llm-save-notice"
+            className="mb-3 rounded border border-ink-line bg-paper-base px-3 py-2 text-xs text-ink-muted"
           >
-            未配置（
-            <code className="rounded bg-amber-100 px-1">ask_project</code> 返回检索结果）：需要设置
-            {llm.missingEnv.map((name) => (
-              <code key={name} className="mr-1 rounded bg-amber-100 px-1">
-                {name}
-              </code>
-            ))}
-            后重启服务。未配置时 ask_project 不报错，会返回检索到的上下文包（D-26）。
+            自定义保存尚未开放（后端能力实施中）。下面展示的是<strong>当前生效值</strong>，
+            修改请设服务端环境变量后重启。
           </p>
         )}
-        {llm.configured && (
-          <p className="mb-3 rounded border border-ink-line bg-paper-base px-3 py-2 text-xs text-ink-muted">
-            启用外部 LLM 时，<strong>证据片段会发往该提供商</strong>（Module/06 §3）。
-            key 不在此页展示，服务端也不返回它的任何片段。
-          </p>
-        )}
-        <KeyValue
-          items={[
-            ["模型", llm.model ? <code>{llm.model}</code> : <span>—</span>],
-            ["服务地址", llm.baseUrl ? <code>{llm.baseUrl}</code> : <span>—</span>],
-            [
-              "API Key",
-              llm.apiKeyConfigured ? <span>已配置</span> : <span className="text-ink-muted">未配置</span>,
-            ],
-            ["超时（秒）", llm.timeoutS != null ? <span>{llm.timeoutS}</span> : <span>—</span>],
-            ["maxTokens", llm.maxTokens != null ? <span>{llm.maxTokens}</span> : <span>—</span>],
-            ["temperature", llm.temperature != null ? <span>{llm.temperature}</span> : <span>—</span>],
-          ]}
-        />
-        {llm.model == null && llm.configured && (
-          <p className="mt-2 text-xs text-ink-muted">
-            已配置，但模型名与地址只对已登录用户展示（本端点是免鉴权端点）。
-          </p>
-        )}
-      </Card>
 
-      <Card title="检索向量模型（Embedding）">
-        {embedding.error ? (
-          <p className="text-sm text-rose-700">读不到 embedding 配置：{embedding.error}</p>
-        ) : (
-          <KeyValue
-            items={[
-              ["模式", embedding.mode ? <code>{embedding.mode}</code> : <span>—</span>],
-              ["模型", embedding.model ? <code>{embedding.model}</code> : <span>—</span>],
-              ["厂商", embedding.provider ? <code>{embedding.provider}</code> : <span>—</span>],
-              ["地址", embedding.baseUrl ? <code>{embedding.baseUrl}</code> : <span>—</span>],
-              ["维度", embedding.dim != null ? <span>{embedding.dim}</span> : <span>—</span>],
-              [
-                "单条截断",
-                embedding.maxInputTokens != null ? <span>{embedding.maxInputTokens} token</span> : <span>—</span>,
-              ],
-            ]}
-          />
-        )}
-        {embedding.mode === "api" && (
-          <p className="mt-2 text-xs text-ink-muted">
-            api 模式：索引文本会发往 embedding 服务商（EMBED_BASE_URL）。
-          </p>
-        )}
-        {(embedding.missingEnv?.length ?? 0) > 0 && (
-          <p className="mt-2 text-xs text-amber-700">
-            缺少环境变量：
-            {(embedding.missingEnv ?? []).map((name) => (
-              <code key={name} className="mr-1 rounded bg-amber-100 px-1">
-                {name}
-              </code>
-            ))}
-          </p>
-        )}
-      </Card>
-
-      <Card title="存储配额（只读）">
-        {storage === undefined ? (
-          <p className="text-sm text-ink-muted">
-            后端未提供配额配置（旧版本服务）——升级后此处会显示单项目/单用户上限。
-          </p>
-        ) : (
-          <>
-            <KeyValue
-              items={[
-                [
-                  "单项目上限",
-                  storage.perProjectBytes === 0 ? (
-                    <span className="text-ink-muted">不限</span>
-                  ) : (
-                    <span>{formatBytes(storage.perProjectBytes)}</span>
-                  ),
-                ],
-                [
-                  "单用户上限",
-                  storage.perUserBytes === 0 ? (
-                    <span className="text-ink-muted">不限</span>
-                  ) : (
-                    <span>{formatBytes(storage.perUserBytes)}</span>
-                  ),
-                ],
-                ["告警阈值", <span>{Math.round(storage.warnRatio * 100)}%</span>],
-              ]}
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            // 保存能力未实现：不做假提交（不弹"已保存"、不发请求）。
+          }}
+        >
+          <Field label="模型名" hint="例如 deepseek-chat / gpt-4o-mini">
+            <input
+              name="llmModel"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={!CAN_SAVE_USER_LLM}
+              placeholder="deepseek/deepseek-v4.1-flash"
+              className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
             />
-            <p className="mt-2 text-xs text-ink-muted">
-              达到阈值的 {Math.round(storage.warnRatio * 100)}% 时，检索工具会在<strong>返回内容里</strong>提醒
-              Agent 转告用户去控制台删项目；<strong>超限不阻断</strong>（新索引与检索照常）。
-              改这三项请设环境变量后重启：
-              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES</code>
-              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_USER_BYTES</code>
-              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_WARN_RATIO</code>
-              （置 0 = 不限）。
-            </p>
-          </>
-        )}
-      </Card>
+          </Field>
 
-      <Card title="部署形态">
-        <KeyValue
-          items={[
-            ["版本", <code>{meta.version}</code>],
-            ["本地模式", <span>{meta.localMode ? "是" : "否"}</span>],
-            ["需要登录", <span>{meta.authRequired ? "是" : "否"}</span>],
-            ["开放注册", <span>{meta.registerOpen ? "是" : "否"}</span>],
-          ]}
-        />
+          <Field label="接口地址" hint="OpenAI 兼容的 /chat/completions 端点">
+            <input
+              name="llmBaseUrl"
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              disabled={!CAN_SAVE_USER_LLM}
+              placeholder="https://api.example.com/v1"
+              className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
+            />
+          </Field>
+
+          <Field label="API Key" hint="只保存在服务端，不会回显">
+            <input
+              name="llmApiKey"
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              disabled={!CAN_SAVE_USER_LLM}
+              autoComplete="off"
+              placeholder={llm.apiKeyConfigured ? "已配置（留空则不改）" : "sk-..."}
+              className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
+            />
+          </Field>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="submit"
+              disabled={!CAN_SAVE_USER_LLM}
+              className="rounded bg-accent-seal px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40"
+            >
+              保存
+            </button>
+            <button
+              type="button"
+              disabled={!CAN_SAVE_USER_LLM}
+              onClick={() => {
+                setApiKey("");
+              }}
+              className="rounded border border-ink-line px-4 py-1.5 text-sm text-ink-primary hover:bg-paper-base disabled:opacity-40"
+            >
+              清除
+            </button>
+          </div>
+        </form>
+
+        {!llm.configured && llm.missingEnv.length > 0 && (
+          <p className="mt-3 text-xs text-amber-700">
+            服务端缺少环境变量：{llm.missingEnv.join("、")}。未配置时 ask_project 返回检索结果而非总结。
+          </p>
+        )}
       </Card>
     </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-sm text-ink-primary">{label}</span>
+        <span className="text-xs text-ink-muted">{hint}</span>
+      </span>
+      {children}
+    </label>
   );
 }

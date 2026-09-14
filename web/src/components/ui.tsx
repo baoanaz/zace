@@ -135,6 +135,9 @@ export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
  * 为什么用原生 `<dialog>` 而不是自造遮罩层：浏览器已经给了焦点陷阱、`Esc` 关闭与
  * `aria-modal` 语义，自造一套的常见后果是“键盘用户被卡在遮罩里”与“Esc 不生效”。
  *
+ * 确认按钮用 `danger` token（TASK-100）：删除是破坏性操作，保留红色系；
+ * 但用收敛的砖红（#9c3d2e）而不是高饱和正红——老纸主题下后者刺眼。
+ *
  * 调用方负责挂载/卸载本组件（`open` 控制）；**取消按钮不发任何请求**——那是调用方必须
  * 自己保证的（本组件只回调 `onCancel`/`onConfirm`，不做业务判断）。
  */
@@ -192,7 +195,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy}
-            className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            className="rounded bg-danger-base px-3 py-1.5 text-sm font-medium text-white hover:bg-danger-hover disabled:opacity-50"
           >
             {busy ? "处理中…" : confirmLabel}
           </button>

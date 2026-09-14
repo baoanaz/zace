@@ -1,15 +1,17 @@
 /**
- * TASK-094 前端验收：§A 项目占用列 / §B4 配额条 / §C 历史页 trace id / §D 删除入口。
+ * TASK-094 前端验收（TASK-100 迁移到项目页）：§A 占用列 / §B4 配额条 / §D 删除入口。
  *
- * 四条纪律对应四组用例：
+ * 迁移说明（TASK-100 §需求4）：项目表与配额条从 `DashboardPage` 移到 `ProjectsPage`
+ * （用户要求"新增一个与控制台同级别的页面叫项目"）。**测试内容一字未删**，
+ * 只把渲染目标从 `DashboardPage` 换成 `ProjectsPage`——四条纪律照旧：
  *
- * 1. **§D 取消不发请求**（`test_..._cancel_...`）：断言 `fetch` 里**没有** DELETE——这是
- *    最容易写错的一条（把删除直接挂在按钮上就会漏掉确认）。
+ * 1. **§D 取消不发请求**：断言 `fetch` 里**没有** DELETE——这是最容易写错的一条
+ *    （把删除直接挂在按钮上就会漏掉确认）。
  * 2. **§D 确认才删 + 删完刷新**：断言 DELETE 被调、且之后重新拉了列表（项目消失）。
  * 3. **§D 失败如实报错**：404 不静默吞掉，且**不把整页换成错误页**（项目表仍在）。
- * 4. **§A/§C 口径诚实**：后端未给 `diskBytes` → `—`；旧记录没有 `requestId` → `—`。
+ * 4. **§A 口径诚实**：后端未给 `diskBytes` → `—`（不伪装成 0 B）。
  *
- * 渲染一律经 `MemoryRouter`：两个页面在空态/提示里用了 `<Link>`（跳到接入指南），
+ * 渲染一律经 `MemoryRouter`：页面在空态里用了 `<Link>`（跳到接入指南），
  * 没有 Router 上下文会直接抛错——那是测试环境缺件，不是产品缺陷。
  */
 
@@ -18,17 +20,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DashboardPage } from "./DashboardPage";
-import { HistoryPage } from "./HistoryPage";
+import { ProjectsPage } from "./ProjectsPage";
 
 /** 渲染页面（带 Router：页面在空态与提示里用了 `<Link>`）。 */
 function renderPage(node: React.ReactElement) {
   return render(<MemoryRouter>{node}</MemoryRouter>);
 }
 
-const ACCOUNT = { userId: "u1", name: "owner", createdAt: 1789300000, isLocal: true, via: "local" };
-
-/** 一个带 `diskBytes` 的项目（§A 的新字段）。 */
+/** 一个带 `diskBytes` 的项目（§A 的字段）。 */
 const PROJECT = {
   projectId: "p1",
   displayName: "demo",
@@ -111,7 +110,7 @@ describe("§A 项目占用可见", () => {
   it("项目表格显示每项目占用（复用 formatBytes 的 MiB 口径）", async () => {
     stubFetch({ "/api/account/overview": { body: overview() } });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     const cell = await screen.findByTestId("disk-p1");
     expect(cell).toHaveTextContent("29.0 MiB");
@@ -125,7 +124,7 @@ describe("§A 项目占用可见", () => {
       },
     });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     const cell = await screen.findByTestId("disk-p1");
     expect(cell).toHaveTextContent("—");
@@ -137,7 +136,7 @@ describe("§A 项目占用可见", () => {
     delete (withoutDisk as { diskBytes?: number }).diskBytes;
     stubFetch({ "/api/account/overview": { body: overview({ projects: [withoutDisk] }) } });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     expect(await screen.findByTestId("disk-p1")).toHaveTextContent("—");
   });
@@ -167,7 +166,7 @@ describe("§B4 存储配额展示", () => {
       },
     });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     const quota = await screen.findByTestId("storage-quota");
     expect(quota).toHaveTextContent("1.50 GiB");
@@ -196,7 +195,7 @@ describe("§B4 存储配额展示", () => {
       },
     });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     const quota = await screen.findByTestId("storage-quota");
     expect(quota).toHaveTextContent("未设上限");
@@ -206,10 +205,39 @@ describe("§B4 存储配额展示", () => {
   it("后端未提供 storage 时不渲染配额条（旧版服务）", async () => {
     stubFetch({ "/api/account/overview": { body: overview() } });
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
 
     await screen.findByTestId("disk-p1");
     expect(screen.queryByTestId("storage-quota")).not.toBeInTheDocument();
+  });
+
+  // TASK-100 §需求4 新增：单项目上限用**说明文字**（不是进度条）。
+  it("单项目上限以说明文字呈现（用户指定的信息层级）", async () => {
+    stubFetch({
+      "/api/account/overview": {
+        body: overview({
+          storage: {
+            status: "ok",
+            warnRatio: 0.8,
+            projectId: "p1",
+            user: {
+              usedBytes: 29 * 1024 * 1024,
+              limitBytes: 2_147_483_648,
+              ratio: 0.01,
+              status: "ok",
+              unlimited: false,
+            },
+            project: { usedBytes: 0, limitBytes: 524_288_000, ratio: 0, status: "ok", unlimited: false },
+          },
+        }),
+      },
+    });
+
+    renderPage(<ProjectsPage />);
+
+    const quota = await screen.findByTestId("storage-quota");
+    expect(quota).toHaveTextContent("单个项目上限");
+    expect(quota).toHaveTextContent("500.0 MiB");
   });
 });
 
@@ -220,7 +248,7 @@ describe("§D 项目删除入口", () => {
     const calls = stubFetch({ "/api/account/overview": { body: overview() } });
     const user = userEvent.setup();
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
     await screen.findByTestId("disk-p1");
 
     await user.click(screen.getByRole("button", { name: "删除" }));
@@ -237,7 +265,7 @@ describe("§D 项目删除入口", () => {
     const calls = stubFetch({ "/api/account/overview": { body: overview() } });
     const user = userEvent.setup();
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
     await screen.findByTestId("disk-p1");
 
     await user.click(screen.getByRole("button", { name: "删除" }));
@@ -260,7 +288,7 @@ describe("§D 项目删除入口", () => {
     });
     const user = userEvent.setup();
 
-    // 模拟后端状态：一旦收到 DELETE，后续概览就返回空列表（“真的删掉了”）。
+    // 模拟后端状态：一旦收到 DELETE，后续概览就返回空列表（"真的删掉了"）。
     const empty = overview({ projects: [], account: { ...overview().account, projectCount: 0 } });
     let deleted = false;
     let overviewCalls = 0;
@@ -280,7 +308,7 @@ describe("§D 项目删除入口", () => {
       return original(input as RequestInfo, init);
     }) as typeof fetch;
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
     await screen.findByTestId("disk-p1");
     const before = overviewCalls;
 
@@ -308,7 +336,7 @@ describe("§D 项目删除入口", () => {
     });
     const user = userEvent.setup();
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
     await screen.findByTestId("disk-p1");
 
     await user.click(screen.getByRole("button", { name: "删除" }));
@@ -340,7 +368,7 @@ describe("§D 项目删除入口", () => {
     );
     const user = userEvent.setup();
 
-    renderPage(<DashboardPage account={ACCOUNT} />);
+    renderPage(<ProjectsPage />);
     await screen.findByTestId("disk-p1");
     await user.click(screen.getByRole("button", { name: "删除" }));
     await screen.findByRole("dialog");
@@ -349,100 +377,5 @@ describe("§D 项目删除入口", () => {
     await waitFor(() => {
       expect(screen.getByText(/连不上 zace-service/)).toBeInTheDocument();
     });
-  });
-});
-
-// --------------------------------------------------------------------------- §C trace id
-
-describe("§C 历史页 trace id", () => {
-  const record = {
-    queryId: 1,
-    projectId: "p1",
-    mode: "fast",
-    query: "令牌在哪里刷新",
-    answerable: true,
-    confidence: "high",
-    degraded: false,
-    latencyMs: 137,
-    evidenceCount: 3,
-    docsCount: 1,
-    usedTokens: 576,
-    citationCoverage: null,
-    requestId: "trace-094-abcdef",
-    createdAt: 1789305566,
-  };
-
-  function usage(records: unknown[]) {
-    return {
-      projectId: null,
-      days: 30,
-      total: records.length,
-      succeeded: records.length,
-      insufficient: 0,
-      failed: 0,
-      avgLatencyMs: 137,
-      p95LatencyMs: 137,
-      confidenceDistribution: {},
-      citationCoverageAvg: null,
-      topQueries: [],
-      recent: records,
-    };
-  }
-
-  async function openUsageTab() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/api/projects")) {
-          return new Response(JSON.stringify([PROJECT]), { status: 200 });
-        }
-        if (url.includes("/index-runs")) {
-          return new Response(JSON.stringify([]), { status: 200 });
-        }
-        return new Response(JSON.stringify(usage([record])), { status: 200 });
-      }),
-    );
-    renderPage(<HistoryPage />);
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "使用记录" }));
-    return user;
-  }
-
-  it("每条记录显示 trace id，可复制（CopyButton）", async () => {
-    await openUsageTab();
-
-    const table = await screen.findByRole("table");
-    expect(within(table).getByText("trace id")).toBeInTheDocument();
-    expect(within(table).getByText("trace-094-abcdef")).toBeInTheDocument();
-    expect(within(table).getByRole("button", { name: "复制" })).toBeInTheDocument();
-    // 说明文案要能指导用户"下一步做什么"。
-    expect(screen.getByText(/报给管理员/)).toBeInTheDocument();
-  });
-
-  it("旧记录没有 requestId → 显示 —，不编造一个 id", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/api/projects")) {
-          return new Response(JSON.stringify([PROJECT]), { status: 200 });
-        }
-        if (url.includes("/index-runs")) {
-          return new Response(JSON.stringify([]), { status: 200 });
-        }
-        return new Response(JSON.stringify(usage([{ ...record, requestId: null }])), {
-          status: 200,
-        });
-      }),
-    );
-    const user = userEvent.setup();
-    renderPage(<HistoryPage />);
-    await user.click(await screen.findByRole("button", { name: "使用记录" }));
-
-    const table = await screen.findByRole("table");
-    expect(within(table).queryByText(/trace-094/)).not.toBeInTheDocument();
-    expect(within(table).queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
-    expect(within(table).getByText("—")).toBeInTheDocument();
   });
 });

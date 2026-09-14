@@ -24,6 +24,7 @@ import { ConnectPage } from "../pages/ConnectPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { LoginPage } from "../pages/LoginPage";
+import { ProjectsPage } from "../pages/ProjectsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { Layout } from "./Layout";
 
@@ -124,7 +125,9 @@ function buildRouter(options: {
       path: "/",
       element: <Layout account={account} onSignedOut={onSignedOut} />,
       children: [
-        { index: true, element: <Guard><DashboardPage account={account} /></Guard> },
+        { index: true, element: <Guard><DashboardPage /></Guard> },
+        // TASK-100：项目页与控制台同级（用户 2026-09-14 要求）。
+        { path: "projects", element: <Guard><ProjectsPage /></Guard> },
         { path: "keys", element: <Guard><ApiKeysPage /></Guard> },
         { path: "history", element: <Guard><HistoryPage /></Guard> },
         { path: "connect", element: <Guard><ConnectPage /></Guard> },

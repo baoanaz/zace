@@ -5,13 +5,15 @@
  * 配色换成老纸主题（paper / ink / accent token，见 `tailwind.config.js`）。
  *
  * 三条**不许变**的东西（本卡是纯视觉改版，不是功能重构）：
- * 1. `NAV` 的顺序、label 与 `to` 路径——`to` 是路由契约，外部链接与文档都指向它；
+ * 1. `NAV` 的 `to` 路径——`to` 是路由契约，外部链接与文档都指向它；
  * 2. 账户名与登出按钮的行为（登出失败也要清本地状态）；
- * 3. 页脚说明文案。
+ * 3. 侧边栏与窄屏顶栏的**不透明**（内容滚动时不能透过导航文字）。
+ *
+ * TASK-100：新增「项目」页（用户 2026-09-14 要求放在控制台下面，与控制台同级）；
+ * 删掉页脚版本说明文案（用户："用户不需要知道这些"）。
  *
  * 窄屏（<768px）：侧边栏变成**抽屉**，由顶栏的汉堡按钮开关，点导航后自动关闭
- * （用户 2026-09-14 拍板；不引任何库）。侧边栏与窄屏顶栏都保持**不透明**
- * ——内容滚动时不能透过导航文字（TASK-086 §4 的真实教训，本卡的 Layout.test 继续守护）。
+ * （用户 2026-09-14 拍板；不引任何库）。
  */
 
 import { useState } from "react";
@@ -22,12 +24,13 @@ import { type Account, logout } from "../api/client";
 /**
  * 大页面导航（用户 2026-09-13 指定的信息架构，2026-09-14 TASK-086 §1 定序）。
  *
- * 顺序即用户要求的展示顺序：控制台 → 接入指南 → API Key → 历史记录 → 设置
- * （TASK-088 §F 把设置页加在**最后一位**）。
- * **`to` 是路由契约**（外部链接与文档都指向它），本卡只改顺序与 label。
+ * 顺序即用户要求的展示顺序：控制台 → 项目 → 接入指南 → API Key → 历史记录 → 设置
+ * （TASK-100 把「项目」插在控制台之后——它与控制台同级，都是"看数据"的页）。
+ * **`to` 是路由契约**（外部链接与文档都指向它）。
  */
 const NAV = [
   { to: "/", label: "控制台", end: true },
+  { to: "/projects", label: "项目", end: false },
   { to: "/connect", label: "接入指南", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
@@ -154,9 +157,6 @@ export function Layout({
         <main className="mx-auto max-w-5xl px-4 py-6 md:px-8">
           <Outlet />
         </main>
-        <footer className="mx-auto max-w-5xl px-4 pb-8 text-xs text-ink-muted md:px-8">
-          zace-web（Module 07 / D-40）：检索结果由服务端渲染，本页不重新拼装。
-        </footer>
       </div>
     </div>
   );

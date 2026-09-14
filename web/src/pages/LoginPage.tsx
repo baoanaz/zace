@@ -122,7 +122,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
         </div>
 
         <p className="relative z-10 text-xs tracking-wider text-ink-muted">
-          本地优先 · 证据可溯 · 服务端渲染
+          Workspace Context Engine
         </p>
 
         {/* 细线几何图案：三层同心圆角矩形，颜色取自墨线 token。 */}
@@ -133,7 +133,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
         </div>
       </section>
 
-      {/* 右表单区：纯白浮卡片（用户明确"右边是白色的登入卡片"）。 */}
+      {/* 右表单区：米白浮卡片（TASK-100：不再是纯白，避免在浅底上突兀）。 */}
       <section className="flex flex-1 items-center justify-center px-4 py-10 md:px-10">
         <div className="w-full max-w-md">
           {/* 窄屏下装饰区收起，品牌字改在卡片上方显示。 */}
@@ -231,10 +231,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
             </div>
           </form>
 
-          <p className="mt-4 text-center text-xs text-ink-muted">
-            zace v{meta.version}
-            {meta.authRequired ? " · 云端形态（需鉴权）" : " · 本地形态"}
-          </p>
+          <p className="mt-4 text-center text-xs text-ink-muted">zace v{meta.version}</p>
         </div>
       </section>
     </div>

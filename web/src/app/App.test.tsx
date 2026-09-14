@@ -179,6 +179,18 @@ describe("仪表盘统计口径", () => {
           registerOpen: false,
           needsBootstrap: false,
           userCount: null,
+          // TASK-100 §需求9：控制台的「服务模型」卡读 config。
+          config: {
+            embedding: {
+              mode: "api",
+              configured: true,
+              missingEnv: [],
+              model: "voyage-4-lite",
+              provider: "voyage",
+              dim: 1024,
+            },
+            llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "deepseek-v4-flash" },
+          },
         },
       },
       "/api/auth/me": { body: { ...ACCOUNT, isLocal: true, via: "local" } },
@@ -188,41 +200,54 @@ describe("仪表盘统计口径", () => {
     await screen.findByRole("heading", { name: "控制台" });
   }
 
-  it("展示控制台的面板：账户资料 + 索引统计 + 使用次数 + 项目", async () => {
+  it("展示控制台的面板：账户资料 + 服务模型 + 工具调用（TASK-100 精简后）", async () => {
     await renderDashboard();
     // 页面标题是「控制台」，而面板名「账户资料」不受改名影响（TASK-086 §2）。
     expect(screen.getByRole("heading", { name: "账户资料" })).toBeInTheDocument();
-    expect(screen.getByText("成功次数")).toBeInTheDocument();
-    expect(screen.getByText("失败次数")).toBeInTheDocument();
-    // "平均耗时"在索引与用量两个面板都出现，因此按数量与数值断言（索引 avg = 61.0 s）
-    expect(screen.getAllByText("平均耗时")).toHaveLength(2);
-    expect(screen.getByText("占用内存")).toBeInTheDocument();
-    expect(screen.getByText("9")).toBeInTheDocument(); // succeeded
-    expect(screen.getByText("1m 1s")).toBeInTheDocument(); // avg = 61000ms
-    expect(screen.getByText("12.0 MiB")).toBeInTheDocument(); // disk
-    expect(screen.getByText(/仅统计成功/)).toBeInTheDocument();
+    // TASK-100 §需求9：服务模型卡从设置页移来（LLM + embedding 的最小必要信息）。
+    expect(screen.getByRole("heading", { name: "服务模型" })).toBeInTheDocument();
+
+    // TASK-100 §需求3：用户定稿的 7 个数据（三行，虚线分隔）。
+    expect(screen.getByRole("heading", { name: /工具调用/ })).toBeInTheDocument();
+    // 行标签（左侧分类）。
+    expect(screen.getByText("仓库初始化")).toBeInTheDocument();
+    expect(screen.getByText("检索")).toBeInTheDocument();
+    expect(screen.getByText("Tool 调用")).toBeInTheDocument();
+    // 指标名（每行的右侧）。"次数"与"平均耗时"在初始化/检索两行都出现，故用 getAllByText。
+    expect(screen.getAllByText("次数").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("平均耗时").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("最快 / 最慢")).toBeInTheDocument();
+    expect(screen.getByText("成功")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+
+    // 用户要求：不要解释性文字（"首次调用时索引仓库"、"仅统计成功"等）。
+    expect(screen.queryByText("首次调用时索引仓库")).not.toBeInTheDocument();
+    expect(screen.queryByText("仅统计成功")).not.toBeInTheDocument();
+    expect(screen.queryByText("每次提问算一次")).not.toBeInTheDocument();
   });
 
-  it("未测量的引用覆盖率显示“尚未测量”而不是 0", async () => {
+  it("TASK-100 §需求3：控制台不再出现内部概念（索引/检索）的统计面板", async () => {
     await renderDashboard();
-    expect(screen.getByText(/尚未测量/)).toBeInTheDocument();
+
+    // 用户不知道"索引"与"使用"的区别，只关心 Tool 调用的成功/失败/耗时。
+    expect(screen.queryByRole("heading", { name: /^索引（近/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^使用次数/ })).not.toBeInTheDocument();
+    // "占用内存"、"索引总次数"、"P95 耗时" 等细节数字也不该在控制台上。
+    expect(screen.queryByText("占用内存")).not.toBeInTheDocument();
+    expect(screen.queryByText("索引总次数")).not.toBeInTheDocument();
+    expect(screen.queryByText("P95 耗时")).not.toBeInTheDocument();
   });
 
-  it("不再有索引记录面板，但项目面板保留（TASK-086 §3）", async () => {
+  it("TASK-100 §需求4：项目表已移到独立项目页，控制台不再有项目面板", async () => {
     await renderDashboard();
 
-    // 删掉的那块：它的标题、「查看全部历史」链接与那条运行记录都不该再现。
-    // （历史页的「索引记录」页签是**另一个**文案，不受影响，由 HistoryPage 的测试覆盖。）
+    // TASK-086 §3 删掉的「最近索引」面板仍然不存在（那条约束继续有效）。
     expect(screen.queryByRole("heading", { name: /最近索引/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "查看全部历史" })).not.toBeInTheDocument();
     expect(screen.queryByText("336/338 文件 · ", { exact: false })).not.toBeInTheDocument();
 
-    // 用户明确要求保留「项目」面板（那条记录在此表里仍然可见）。
-    expect(screen.getByRole("heading", { name: "项目" })).toBeInTheDocument();
-    expect(screen.getByText("demo")).toBeInTheDocument();
-
-    // 未接 LLM 的引用覆盖率仍如实显示"尚未测量"。
-    expect(screen.getByText(/尚未测量/)).toBeInTheDocument();
+    // TASK-100：项目面板**移出**控制台（→ `/projects`），不再是本页的一节。
+    expect(screen.queryByRole("heading", { name: "项目" })).not.toBeInTheDocument();
   });
 });
 

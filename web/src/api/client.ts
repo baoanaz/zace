@@ -216,6 +216,14 @@ export interface EmbeddingConfigView {
   maxInputTokens?: number | null;
   offline?: boolean;
   error?: string;
+  /**
+   * 速率与吞吐限额（TASK-100 §需求9 要求展示）。
+   *
+   * **后端尚未提供**（`GET /api/meta` 目前不返回这两个字段）——声明为可选，
+   * 页面在缺失时显示 `—`；TASK-099 补齐后无需再改前端。
+   */
+  tpm?: number | null;
+  rpm?: number | null;
 }
 
 export interface LlmConfigView {
@@ -227,6 +235,9 @@ export interface LlmConfigView {
   timeoutS?: number;
   maxTokens?: number;
   temperature?: number;
+  /** 厂商与上下文窗口（TASK-100 §需求9）。同样**后端尚未提供**，缺失时显示 `—`。 */
+  provider?: string | null;
+  maxContextTokens?: number | null;
 }
 
 /** 当前身份（`GET /api/auth/me`）。 */

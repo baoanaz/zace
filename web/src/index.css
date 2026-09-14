@@ -3,14 +3,14 @@
 @tailwind utilities;
 
 /*
- * 全局主题与背景纹理（TASK-098 §A-1 / §A-3）。
+ * 全局主题与背景纹理（TASK-098 §A-1 / §A-3；TASK-100 调整色阶与纹理强度）。
  *
- * 主题从 TASK-086 的「浅蓝灰 + 网格」换成用户指定的**复古博物画 / 老纸**：
- * 米黄牛皮纸底 + 深墨文字 + 朱砂强调，纹理用**斑驳旧纸感**（用户拍板）。
- * 所有色值走 tailwind.config.js 的 token（paper / ink / accent），这里不写裸色值。
+ * 主题：复古博物画 / 老纸——浅米底 + 深墨文字 + 深赭褐强调，纹理用斑驳旧纸感。
+ * 所有色值走 tailwind.config.js 的 token（paper / ink / accent / danger），这里不写裸色值。
  *
- * 旧的 `grid` token（base / line）已被 `paper` 取代：网格是"工程感"，与老纸气质冲突，
- * 故随本卡移除（旧 `colors.grid` 在仓库内无其他引用，迁移不影响别处）。
+ * TASK-100 调色（用户 2026-09-14 反馈）：底色变浅（#f3e4c7 → #f7ecd8）后，
+ * 原纹理的 alpha 在浅底上反而更明显（浅色的相对差异更小），故同步减半，
+ * 保持"旧纸感"而不变成"脏"。卡片也从纯白改成米白（#fdfdf7）。
  */
 
 /*
@@ -21,15 +21,16 @@
  *
  * - 斑点 14 处，圆半径 300-820px，坐标（%）互相错开 → 无规律感；
  * - 斑点色：`--zace-stain`（暗棕，模拟纸张氧化/褪色）与 `--zace-bleach`（提亮，
- *   模拟受光面泛白），单层 alpha 0.012-0.030，与卡片透明度同一量级（§A-3 要求）；
- * - 叠加后最大偏移量远小于正文与底色的对比度余量（正文 12.2:1，见报告）；
- * - `background-attachment: fixed`：滚动时纹理不跟着跑，整页像"一张纸";
- * - 另叠一层**极淡大间距斜线**（120px 间距、alpha 0.012）做纸张纤维感，
+ *   模拟受光面泛白），单层 alpha 0.006-0.016（TASK-100 从 0.012-0.030 减半）；
+ * - 叠加后最大偏移量远小于正文与底色的对比度余量（正文 13.2:1，见报告）；
+ * - `background-attachment: fixed`：滚动时纹理不跟着跑，整页像"一张纸"；
+ * - 另叠一层**极淡大间距斜线**（120px 间距、alpha 0.006）做纸张纤维感，
  *   间距刻意取大以避开高 DPI 屏的摩尔纹/色带（§A-3 的 banding 提醒）。
  *
  * 层次约定（不要互相覆盖）：
  * - `body` 铺底色与纹理（**全局**：登录页、加载态也在同一张纸上）；
- * - 卡片保持 `bg-white` 实心浮在纸面之上——有对比才有层次（TASK-086 §4 的结论不变）。
+ * - 卡片用 `bg-paper-card`（米白 #fdfdf7）+ `border-ink-line` 细线框浮在纸面上
+ *   ——TASK-100 后两者亮度差很小，层次靠**边框**而非色差（用户反馈纯白卡片"突兀"）。
  */
 @layer base {
   :root {
@@ -44,31 +45,31 @@
       ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
       "PingFang SC", "Microsoft YaHei", sans-serif;
 
-    /* 底色：米黄牛皮纸（token: paper.base = #f3e4c7）。 */
+    /* 底色：浅米（token: paper.base = #f7ecd8，用户 2026-09-14 指定）。 */
     background-color: theme("colors.paper.base");
 
     background-image:
-      /* --- 斑驳褪色痕（暗）：14 处，圆半径 300-820px --- */
-      radial-gradient(circle 680px at 12% 18%, rgb(var(--zace-stain) / 0.022), transparent 100%),
-      radial-gradient(circle 520px at 78% 8%, rgb(var(--zace-stain) / 0.014), transparent 100%),
-      radial-gradient(circle 820px at 46% 34%, rgb(var(--zace-stain) / 0.016), transparent 100%),
-      radial-gradient(circle 380px at 88% 46%, rgb(var(--zace-stain) / 0.024), transparent 100%),
-      radial-gradient(circle 620px at 22% 62%, rgb(var(--zace-stain) / 0.018), transparent 100%),
-      radial-gradient(circle 460px at 64% 74%, rgb(var(--zace-stain) / 0.020), transparent 100%),
-      radial-gradient(circle 740px at 6% 88%, rgb(var(--zace-stain) / 0.015), transparent 100%),
-      radial-gradient(circle 300px at 92% 84%, rgb(var(--zace-stain) / 0.026), transparent 100%),
+      /* --- 斑驳褪色痕（暗）：14 处，圆半径 300-820px；alpha 0.006-0.014 --- */
+      radial-gradient(circle 680px at 12% 18%, rgb(var(--zace-stain) / 0.011), transparent 100%),
+      radial-gradient(circle 520px at 78% 8%, rgb(var(--zace-stain) / 0.007), transparent 100%),
+      radial-gradient(circle 820px at 46% 34%, rgb(var(--zace-stain) / 0.008), transparent 100%),
+      radial-gradient(circle 380px at 88% 46%, rgb(var(--zace-stain) / 0.012), transparent 100%),
+      radial-gradient(circle 620px at 22% 62%, rgb(var(--zace-stain) / 0.009), transparent 100%),
+      radial-gradient(circle 460px at 64% 74%, rgb(var(--zace-stain) / 0.010), transparent 100%),
+      radial-gradient(circle 740px at 6% 88%, rgb(var(--zace-stain) / 0.008), transparent 100%),
+      radial-gradient(circle 300px at 92% 84%, rgb(var(--zace-stain) / 0.013), transparent 100%),
       /* --- 泛白受光面（亮）：与暗斑交错 --- */
-      radial-gradient(circle 560px at 34% 6%, rgb(var(--zace-bleach) / 0.030), transparent 100%),
-      radial-gradient(circle 700px at 96% 26%, rgb(var(--zace-bleach) / 0.022), transparent 100%),
-      radial-gradient(circle 420px at 8% 42%, rgb(var(--zace-bleach) / 0.026), transparent 100%),
-      radial-gradient(circle 800px at 52% 58%, rgb(var(--zace-bleach) / 0.018), transparent 100%),
-      radial-gradient(circle 340px at 74% 92%, rgb(var(--zace-bleach) / 0.028), transparent 100%),
-      radial-gradient(circle 600px at 40% 96%, rgb(var(--zace-stain) / 0.013), transparent 100%),
-      /* --- 纸张纤维：大间距斜线（alpha 0.012，间距 120px 避开摩尔纹） --- */
+      radial-gradient(circle 560px at 34% 6%, rgb(var(--zace-bleach) / 0.015), transparent 100%),
+      radial-gradient(circle 700px at 96% 26%, rgb(var(--zace-bleach) / 0.011), transparent 100%),
+      radial-gradient(circle 420px at 8% 42%, rgb(var(--zace-bleach) / 0.013), transparent 100%),
+      radial-gradient(circle 800px at 52% 58%, rgb(var(--zace-bleach) / 0.009), transparent 100%),
+      radial-gradient(circle 340px at 74% 92%, rgb(var(--zace-bleach) / 0.014), transparent 100%),
+      radial-gradient(circle 600px at 40% 96%, rgb(var(--zace-stain) / 0.007), transparent 100%),
+      /* --- 纸张纤维：大间距斜线（alpha 0.006，间距 120px 避开摩尔纹） --- */
       repeating-linear-gradient(
         118deg,
-        rgb(var(--zace-stain) / 0.012) 0px,
-        rgb(var(--zace-stain) / 0.012) 1px,
+        rgb(var(--zace-stain) / 0.006) 0px,
+        rgb(var(--zace-stain) / 0.006) 1px,
         transparent 1px,
         transparent 120px
       );
@@ -89,8 +90,8 @@
     letter-spacing: 0.005em;
   }
 
-  /* 选中态用朱砂色，与 accent token 同源。 */
+  /* 选中态用强调色，与 accent token 同源。 */
   ::selection {
-    background-color: theme("colors.accent.seal / 22%");
+    background-color: theme("colors.accent.soft");
   }
 }

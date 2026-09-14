@@ -37,34 +37,32 @@ export interface AgentTarget {
   label: string;
   /** 配置文件位置（写"哪个文件"，因为三者写法不同）。 */
   where: string;
-  /** 补充说明（安装前置、注意事项）。 */
-  note?: string;
 }
 
 /**
  * 三个按键（用户 2026-09-13 指定：只保留 Codex / Claude / pi）。
  *
  * 三个 agent 用的是**同一套 stdio 配置**，差别只在配置文件位置与包装方式——
- * 因此片段由同一函数生成，只有 `where` 与前置步骤不同。
+ * 因此片段由同一函数生成，只有 `where` 不同。
+ *
+ * TASK-100 §需求6：删掉所有 `note`（用户 2026-09-14 要求删除
+ * “[TOML 写法…]”“[用一条 CLI…]”“[pi 本身不含…]” 这类解释文字）。
  */
 export const AGENT_TARGETS: AgentTarget[] = [
   {
     id: "codex",
     label: "Codex",
     where: "~/.codex/config.toml",
-    note: "TOML 写法；startup_timeout_ms 给足首次拉取二进制的时间。",
   },
   {
     id: "claude",
     label: "Claude",
     where: "claude mcp add-json zace --scope user '<下面的 JSON>'",
-    note: "用一条 CLI 命令写入用户级配置，比手改文件更不容易写坏。",
   },
   {
     id: "pi",
     label: "pi",
     where: ".mcp.json（命令行在 pi 里执行）",
-    note: "pi 本身不含 MCP，需先装适配器：pi install npm:pi-mcp-adapter。",
   },
 ];
 

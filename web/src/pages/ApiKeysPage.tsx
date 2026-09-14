@@ -84,7 +84,7 @@ export function ApiKeysPage() {
             已创建：{created.name || created.prefix}
           </h2>
           <p className="mt-1 text-xs text-emerald-800">
-            这是**唯一一次**能看到完整 Key 的机会，请立即复制到客户端配置里。
+            这是<strong>唯一一次</strong>能看到完整 Key 的机会，请立即复制到客户端配置里。
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <code className="flex-1 break-all rounded border border-ink-line bg-paper-card px-2 py-1 font-mono text-xs text-ink-primary">
