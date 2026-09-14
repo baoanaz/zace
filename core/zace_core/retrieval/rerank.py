@@ -5,6 +5,8 @@
 | 特征 | 分值 | 信号来源 |
 |---|---|---|
 | Explicit symbol/path 命中 | +2.0 | Exact-Explicit（§4.2-a） |
+| **字面量命中**（反引号/含 ``-=/:`` 的长串） | +1.0 | Literal 通道（TASK-101 §A） |
+| **标识符词根命中**（仅符号名） | +0.4 | Literal 通道弱短语 |
 | query 符号名与 chunk 符号名等值 | +1.0 | Exact-Inferred |
 | 3 通道共识 | +0.5 | candidate.channel_ranks |
 | 与 top-1 种子图连通（1 跳） | +0.5 | expand 的 ``graph-expanded from`` 记录 |
@@ -30,6 +32,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
@@ -43,6 +46,7 @@ from zace_core.retrieval.fusion import (
     REASON_EXPLICIT_PATH,
     is_test_path,
 )
+from zace_core.retrieval.literal import REASON_LITERAL, REASON_LITERAL_ROOT
 from zace_core.storage import Store
 from zace_core.types import Candidate
 
@@ -50,6 +54,8 @@ __all__ = [
     "FEATURE_NAMES",
     "HIGH_VALUE_DOCTYPES",
     "RRF_BASE_SCALE",
+    "LITERAL_ROOT_WEIGHT_ENV",
+    "LITERAL_WEIGHT_ENV",
     "RerankSignals",
     "RerankWeights",
     "collect_signals",
@@ -57,16 +63,23 @@ __all__ = [
     "is_generated_path",
     "is_test_intent",
     "rerank",
+    "weights_from_env",
     "with_weights",
 ]
 
 #: 基准分缩放（见模块 docstring"基准分与量级"）。
 RRF_BASE_SCALE = 100.0
 
+#: TASK-101 新增权重的环境变量覆盖名（A/B 用；见 :func:`weights_from_env`）。
+LITERAL_WEIGHT_ENV = "ZACE_W_LITERAL"
+LITERAL_ROOT_WEIGHT_ENV = "ZACE_W_LITERAL_ROOT"
+
 #: rerank 加分的 doctype 白名单（D-42 高信息密度文档）。
 HIGH_VALUE_DOCTYPES = frozenset({"agent-instructions", "design", "adr", "readme", "api"})
 
 FEATURE_EXPLICIT = "explicit symbol/path hit"
+FEATURE_LITERAL = "literal hit"
+FEATURE_LITERAL_ROOT = "literal root name hit"
 FEATURE_SYMBOL_MATCH = "query symbol == chunk symbol"
 FEATURE_CONSENSUS3 = "3-channel consensus"
 FEATURE_GRAPH_1HOP = "graph connected to top-1 seed (1 hop)"
@@ -82,6 +95,8 @@ FEATURE_SYNTHESIZED = "synthesized edge"
 #: 特征名（供测试与 03 的可解释性断言引用）。
 FEATURE_NAMES = (
     FEATURE_EXPLICIT,
+    FEATURE_LITERAL,
+    FEATURE_LITERAL_ROOT,
     FEATURE_SYMBOL_MATCH,
     FEATURE_CONSENSUS3,
     FEATURE_GRAPH_1HOP,
@@ -133,6 +148,13 @@ class RerankWeights:
     """12 条特征的分值（字段与 Module/02 §4.5 特征表一一对应）。"""
 
     explicit_hit: float = 2.0
+    #: 字面量命中（TASK-101 §A）。取 1.0 而非 Explicit 的 2.0，是**实测结果**（两套 golden A/B，
+    #: 见 benches/results 的 TASK-101 报告）：2.0 会把无关的短配置块顶到 top-1
+    #: （zace golden MRR 0.421→0.395），1.0 既保住召回又不再盖过三通道共识（MRR 0.439）。
+    literal_hit: float = 1.0
+    #: 标识符词根命中（弱短语，仅符号名）：强召回信号，但远轻于点名——词根在符号表里
+    #: 可能有十几处，给大分等于让"名字里含这个词"主导排序。
+    literal_root: float = 0.4
     symbol_match: float = 1.0
     consensus3: float = 0.5
     graph_1hop_top1: float = 0.5
@@ -174,6 +196,16 @@ def _explicit_hit(candidate: Candidate) -> bool:
     return REASON_EXPLICIT_PATH in candidate.reasons
 
 
+def _literal_hit(candidate: Candidate) -> bool:
+    """强字面量命中（来自 Literal 通道的 tier 0 短语）。"""
+    return any(reason.startswith(REASON_LITERAL + " ") for reason in candidate.reasons)
+
+
+def _literal_root_hit(candidate: Candidate) -> bool:
+    """标识符词根命中（弱短语；**不是**精确证据，见 ``literal.py``）。"""
+    return any(reason.startswith(REASON_LITERAL_ROOT + " ") for reason in candidate.reasons)
+
+
 def _graph_parent(candidate: Candidate) -> str | None:
     for reason in candidate.reasons:
         if reason.startswith(GRAPH_REASON_PREFIX):
@@ -203,7 +235,8 @@ def features(
             hits.append((name, value))
 
     hit(FEATURE_EXPLICIT, weights.explicit_hit, _explicit_hit(candidate))
-
+    hit(FEATURE_LITERAL, weights.literal_hit, _literal_hit(candidate))
+    hit(FEATURE_LITERAL_ROOT, weights.literal_root, _literal_root_hit(candidate))
     symbol = candidate.symbol_fqn
     if symbol and signals.query_symbols:
         spellings = _symbol_names(symbol)
@@ -260,7 +293,7 @@ def rerank(
     ``candidates`` 为 ``Candidate``（非 frozen）→ 直接更新并返回同一批对象。
     """
     active_signals = signals or RerankSignals()
-    active_weights = weights or RerankWeights()
+    active_weights = weights or weights_from_env()
     for candidate in candidates:
         base = candidate.rrf_score * RRF_BASE_SCALE
         hits = features(candidate, active_signals, active_weights)
@@ -273,6 +306,30 @@ def rerank(
 
 
 # --------------------------------------------------------------------------- 信号收集
+
+
+def weights_from_env(source: Mapping[str, str] | None = None) -> RerankWeights:
+    """按环境变量覆盖权重默认值（TASK-101 的实测调参入口，便于 A/B 而不改代码）。
+
+    只覆盖 TASK-101 **新增**的 2 个权重（``ZACE_W_LITERAL`` / ``ZACE_W_LITERAL_ROOT``
+    ）；R29/R30 冻结的旧权重不在此列——它们要等 TASK-093 的真实数据。
+    缺省/非法值一律回落默认（与 ``IndexScope.from_env`` 同一纪律）。
+    """
+    env = os.environ if source is None else source
+    base = RerankWeights()
+    overrides: dict[str, float] = {}
+    for name, variable in (
+        ("literal_hit", LITERAL_WEIGHT_ENV),
+        ("literal_root", LITERAL_ROOT_WEIGHT_ENV),
+    ):
+        raw = env.get(variable)
+        if not raw:
+            continue
+        try:
+            overrides[name] = float(raw)
+        except ValueError:
+            continue
+    return replace(base, **overrides) if overrides else base
 
 
 def collect_signals(

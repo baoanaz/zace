@@ -126,6 +126,7 @@
 | [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
 | [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
+| [TASK-101](TASK-101-检索修复与跨主机基准.md) | **检索质量修复与跨主机基准复现**（字面量通道 / 查询覆盖率缺口 / `--project-id` 放行 / 离线回放 `--replay` / 工具分工文案 / `.zaceignore` 去回音）；cockpit 靶场 R5 0.733→**0.767**、MRR 0.408→**0.505** | 无 | `core/zace_core/{retrieval,storage,engine,cli}/`、`benches/`、`scripts/bench-bundle.sh`、`service/zace_service/mcp.py`(仅文案)、`.zaceignore` | **review**（2026-09-15，泳道 B） |
 
 ### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）
 

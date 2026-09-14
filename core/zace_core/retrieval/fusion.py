@@ -13,6 +13,7 @@
 | 通道 | 名 | tier | 说明 |
 |---|---|---|---|
 | Exact-Explicit | ``exact`` | 0 | 精确证据（强种子） |
+| Literal | ``literal`` | 0 | 连续子串命中（TASK-101 §A：配置键/CLI 名/常量名不被分词切碎） |
 | Exact-Inferred | ``inferred`` | 1 | 召回种子，非精确证据（D-15） |
 | BM25 | ``bm25`` | 1 | 词法 |
 | Vector | ``vector`` | 2 | 语义 |
@@ -31,6 +32,7 @@ __all__ = [
     "CHANNEL_BM25",
     "CHANNEL_EXACT",
     "CHANNEL_INFERRED",
+    "CHANNEL_LITERAL",
     "CHANNEL_VECTOR",
     "DEFAULT_POOL_LIMIT",
     "KIND_CODE",
@@ -50,6 +52,8 @@ __all__ = [
 CHANNEL_EXACT = "exact"
 CHANNEL_INFERRED = "inferred"
 CHANNEL_BM25 = "bm25"
+#: 字面量通道（TASK-101 §A）；tier 0 —— 子串命中是精确证据，与 Explicit 同级。
+CHANNEL_LITERAL = "literal"
 CHANNEL_VECTOR = "vector"
 
 TIER_EXPLICIT = 0

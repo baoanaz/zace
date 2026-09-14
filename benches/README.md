@@ -67,9 +67,36 @@ git clone https://github.com/psf/requests /tmp/repos/requests && git -C /tmp/rep
 ## 运行
 
 ```bash
+# 全量（目录级，需要该仓库已索引；索引优先级见下文“索引可复用”）
 uv run zace-core eval --golden benches/golden --repo <本地仓库路径> --report benches/results/<name>.md
+
+# 单仓库 + 复用预建索引（推荐：跑一次索引，之后每次改动几秒出分）
+uv run zace-core eval --repo <任意 checkout> --data <共享索引根> --project-id <projectId> \
+  --golden benches/golden/<repo_hint> --report benches/results/<name>.md
+
 uv run python benches/bakeoff/embed_compare.py --help   # TASK-015 交付
 ```
+
+> 单次 32 题 eval 实测约 10–15 秒（287 文件仓库 / 3416 切片）；开销几乎全在检索，
+> 不在索引——所以“复用索引”是跑分提速的关键。
+
+### 当前靶场与快速回归（cockpit-agents-py）
+
+```bash
+# 靶场（只读外部靶场：不在其中建文件、不修改它）
+#   /home/xuwenzheng/4_AIBOX/gitlab/minicpm/cockpit-agents-py @ febac6d
+# 索引根：~/.zace/cloud-demo（projectId 可从 `zace-core status` 读出）
+uv run zace-core eval --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/cockpit-agents-py \
+  --data ~/.zace/cloud-demo --project-id <projectId> \
+  --golden benches/golden/cockpit-agents-py --report benches/results/<name>.md
+```
+
+| 靶场 | golden | 状态 |
+|---|---|---|
+| `cockpit-agents-py` @ `febac6d` | `benches/golden/cockpit-agents-py/cockpit.jsonl`（32 条，含 2 负例） | **主靶场**（车载 Agent Server：Runtime/LangGraph/HMI/SDK/MCP/上下文预算/日志） |
+| `zace`（本仓） | `benches/golden/zace/zace.jsonl`（20 条） | dogfood 回放；`benches/golden/**` 已由 `.zaceignore` 排除（见"出题规则"第 4 条） |
+| `hello-agents` | `benches/golden/hello-agents/helloagents.jsonl`（31 条） | 2026-09-13 靶场，需另行检出 |
+| `aibox-super-sdk` / `linux-mtk-mw-cameraservice` | 对应目录 | **旧机器靶场，本机不可得**，仅历史留存 |
 
 ## 用例编写指南（TASK-014 追加）
 
@@ -122,15 +149,82 @@ uv run zace-core eval --golden benches/golden/linux-mtk-mw-cameraservice \
 3. **负例核验口径 = 被索引的文件集，不是 git 工作区**：`DirectorySource` 不使用 `.gitignore`，
    未跟踪文件（`CLAUDE.md`、`.claude/`、`egg-info/`、构建目录里的文本文件）同样入库。
    因此 `grep -ril <概念> <repo>` 必须覆盖未跟踪文件与构建目录（`.venv` 等除外）。
-4. **zace dogfood 的 R17 免责**：`benches/golden/**` 自身在仓库内且会被索引，任何负例的查询原文都能被
-   自身命中（实测：`Category=negative` 的样例题因 `test_cli_eval.py` 的 fixture + `golden/zace/sample.jsonl`
-   命中 top-2 而 `answerable=true`）。dogfood 负例只能以“该 query 在 core/ 与 docs/ 中无对应实现”为前提，
-   并在报告里注明本次运行的索引是否包含 golden 文件。
+4. **zace dogfood 的回音已消除（TASK-101 §H）**：`benches/golden/**` 存的就是查询原文，此前会被索引，
+   查询命中自己（实测 `zace-0110`/`zace-0117` 的 top-3 出现 `benches/golden/zace/zace.jsonl`）。
+   现在由仓库根的 **`.zaceignore`** 排除 `benches/golden/` 与 `benches/results/` ——
+   排除放在**项目层**而不是 `DEFAULT_SKIP_DIRS`：只有 zace 自己存在这个自引用，不该改 core 对所有仓库的行为。
+   **注意**：老索引里已固化的回音不会被自动清掉，需要重建一次（`ingest --full`）。
 5. **语言/类别配额**（Module/02 §7-1 的 golden set 要求）：中文 ≥15、英文 ≥10、中英混合 ≥15；
    类型须覆盖 `symbol` / `path` / `behavior` / `spec` / `negative`；至少 1 条 `negative` 在外部仓库上。
-6. **索引可复用，但必须记录索引状态**：`--data` 指向已有 data root 可省去 7-20 分钟重建；
-   报告里必须写清“索引来自哪个 commit / 哪个工作区”（`identity_key` 只由 git remote + 相对路径决定，
-   **同一 remote 的不同 worktree 共用同一个 project 目录**，lane 之间会互相覆盖，不能凭目录名判断内容）。
+6. **索引可复用 —— 用 `--project-id` 直接挂预建索引**（TASK-101 §E/§F）：
+
+   ```bash
+   # ① 第一次（只有第一次需要真索引，分钟级 + embedding 花费）
+   uv run zace-core ingest --repo /path/to/repo --data ~/.zace/bench
+   #    输出 ``project: <projectId>`` —— 记下它
+
+   # ② 以后任意次数（换 checkout、换 worktree、换分支都可以）
+   uv run zace-core eval --repo /tmp/any-checkout --data ~/.zace/bench \
+     --project-id <上面的 projectId> \
+     --golden benches/golden/<repo> --report benches/results/<name>.md
+   ```
+
+   **为什么需要 `--project-id`**：数据目录名就是 D-29 身份算出的 `projectId`
+   （`{data}/projects/{projectId}/`），而身份只由 **git remote + 仓库内的相对路径** 决定。因此
+   换 checkout 路径、在无 `.git` 的副本、或又开一个 worktree 时都会解析到**另一个** projectId，
+   进而去找一个不存在的索引。`--project-id` 就是把这个映射显式接管过来（实测：同 commit 的
+   worktree 与裸副本都能直接复用同一份索引，跑分与原地一致）。
+
+   **正确说法是“同一 remote + 同一相对路径的 worktree 共用同一个 project 目录，lane 之间会互相覆盖”；
+   不是“路径变了也能复用”。** 后者是错的——这正是本卡实测修正的一条。
+
+   **纪律**：
+   - `--project-id` 跳过身份计算与 `project.json` 核验，**不**会静默重建索引；索引缺失或向量维度
+     不符时**如实报错**（`DimensionMismatchError`）；
+   - 报告里仍必须写清“索引来自哪个 commit / 哪个工作区”（见上一条）；
+   - `--project-id` 只用于 benchmark/调试；**不要**在生产服务路径上使用它。
+   - 共享索引根建议固定一个目录（如 `~/.zace/bench`）长期复用，不要每个 lane 各建一份。
+
+### 跨主机复现（新 WSL / 另一台机器 / 换机克隆）
+
+目标：**拉下代码就能跑分**，不重新索引、也不需要有 embedding key。这靠两件东西：
+
+| 件 | 解决什么 | 体积（cockpit 实测） |
+|---|---|---|
+| 索引（`index.db` + `vectors/`） | 不重新索引（省分钟级 + embedding 花费） | 17M |
+| 查询向量侧车（`query-vectors.json`） | 目标机**没有 key / 没有本地模型**也能跑向量通道 | 0.7M / 32 条 |
+
+> 只带索引是**不够**的：向量通道在**查询时**才调 `embed_query()`（CF-09），目标机没 key 就会
+> 静默降级成 BM25+Exact，指标与出题机器不是同一口径。侧车把"查询 → 向量"也固化了。
+> `blobs/` 与 `sync-state.json` 不进包——`eval`/`search` 不读它们（只用于增量同步）。
+
+```bash
+# ① 出题机器（有 key）：预热并打包（一次）
+uv run zace-core eval --repo <靶场> --data <索引根> --project-id <id> \
+  --golden benches/golden/<repo_hint> --report /tmp/prep.md \
+  --vector-cache benches/golden/query-vectors.json          # 预热侧车
+bash scripts/bench-bundle.sh pack <projectId> <靶场> /tmp/<repo>-bundle.tar.gz <索引根>
+
+# ② 任意主机：解包 → 跑分（无需 key、可断网）
+bash scripts/bench-bundle.sh unpack /tmp/<repo>-bundle.tar.gz ~/.zace/bench
+uv run zace-core eval --repo <任意 checkout> --project-id <projectId> --data ~/.zace/bench \
+  --golden benches/golden/<repo_hint> --report benches/results/<name>.md \
+  --vector-cache <侧车> --replay                            # --replay = 不碰任何 embedding 后端
+```
+
+**实测口径（TASK-101，cockpit 32 题）**：预热机联网跑 vs 另一主机离线回放，
+`recall@5 0.767 / recall@10 0.867 / MRR 0.505 / 负例 2/2` **完全一致**。
+
+三条纪律（都经过反例验证）：
+
+1. **未命中必须可见**：`--replay` 下查询不在侧车里 → 该用例走"向量通道降级"并计入报告
+   （实测 1 条未命中 → 报告 `向量通道降级用例数：1`）。**不会**静默换成 BM25 冒充命中；
+2. **指纹必须对得上**：侧车、索引、当前配置三者的 `embedding_model`/`dim` 不一致 → **直接拒绝**
+   （实测报 `向量侧车文件与索引的 embedding 不一致`）。拿别的模型的向量算 cosine，指标会莫名变差
+   且无从察觉，比直接失败危险得多；
+3. **指纹以索引为准**：`--replay` 时从索引的 `index_config` 读 `(model, dim)`，**不**读环境变量——
+   目标机的 `EmbeddingConfig.from_env()` 会回落到默认本地模型（实测 dim=384 vs 索引 1024），
+   整轮跑分直接失败。
 
 ## 靶场变更（2026-09-13）
 
@@ -167,6 +261,20 @@ remote: https://github.com/datawhalechina/hello-agents.git
 
 **用例目录**：`benches/golden/hello-agents/helloagents.jsonl`（31 条，含 2 条负例）。
 `repo_hint` 统一为 `hello-agents`，`commit` 为上面索引时的 `HEAD`。
+
+### 只看某一层（召回层 vs 端到端）
+
+两段口径（§“两段口径”）的对比靠 `Engine.search_with_trace` 的候选池序：
+
+```python
+from zace_core.engine import Engine
+trace = Engine.open("~/.zace/bench").search_with_trace("<projectId>", query, 10_000)
+trace.pack      # ② 端到端：agent 实际读到的顺序
+trace.candidates  # ① 索引层：recall → expand → rerank 后的候选池序（不受装填闸门影响）
+```
+
+定位“答案没进包”时先看这两个：候选池里**有**、包里**没有** → 是装填/配额问题（`docs_ratio`、
+`score_ratio`），不是召回问题。
 
 ### 出题纪律（沿用 TASK-014，不放松）
 

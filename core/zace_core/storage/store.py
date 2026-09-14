@@ -224,6 +224,14 @@ def _insert_fts_row(conn: sqlite3.Connection, rowid: int, chunk: ChunkDef) -> No
     )
 
 
+#: 字面量检索的匹配文本（TASK-101 §A）：符号名 + 签名 + 正文，小写由调用方在 SQL 内处理。
+#: 为什么不是只扫 ``content``：``unicode61`` 与 jieba 都不切 camelCase，查询里的
+#: ``capability`` 在 ``CapabilityDefinition`` 里只能靠子串命中——而该串多出现在符号名/签名处。
+_LITERAL_BLOB_SQL = (
+    "lower(coalesce(symbol_fqn, '') || char(10) || coalesce(signature, '')"
+    " || char(10) || content)"
+)
+
 class Store:
     """per-project 索引库门面；打开即校验 schema，所有写路径单事务。"""
 
@@ -659,6 +667,90 @@ class Store:
             sql += " LIMIT ?"
             params.append(limit)
         return [_symbol_from_row(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def chunk_covering(self, file_path: str, line: int) -> ChunkDef | None:
+        """按 ``文件 + 行号`` 取**覆盖该行**的切片（TASK-101 §B：图扩展落到定义块）。
+
+        用途：符号表里有些符号（如 ``(module)``、类骨架之外的声明）没有 ``chunk_id``，
+        但确实有 ``file_path/start_line``。图扩展此前遇到这类符号就放弃（不编造证据），
+        于是一条真实的调用边在包内完全不可见（实测：``capability_definitions`` →
+        ``tools/hmi/definitions.py`` 被整条丢弃）。本方法给出该符号所在的切片。
+
+        选块口径：覆盖该行、行区间**最短**的切片（最贴近该符号），符号名相等者优先。
+        """
+        row = self._conn.execute(
+            "SELECT id, file_path, symbol_fqn, symbol_kind, start_line, end_line, signature,"
+            " docstring, content, content_hash FROM chunks"
+            " WHERE file_path = ? AND start_line <= ? AND end_line >= ?"
+            " ORDER BY (end_line - start_line) ASC, CASE WHEN symbol_fqn = ? THEN 0 ELSE 1 END,"
+            " start_line, id LIMIT 1",
+            (file_path, line, line, f"({line})"),
+        ).fetchone()
+        return None if row is None else _chunk_from_row(row)
+
+    def literal_search(
+        self, phrase: str, *, limit: int = 30, min_length: int = 4
+    ) -> list[tuple[str, int]]:
+        """短语**字面量**检索（TASK-101 §A）：子串命中，返回 ``(chunk_id, 命中次数)``。
+
+        为什么需要它（实测缺陷）：查询里的长字面量（``cvi-agent-aibox``、``confirmation=REQUIRED``、
+        ``AGENT_GRAPH_BACKEND``）经 CJK/分词器切碎后进入 BM25 的 OR 匹配，会被高频词
+        （``agent`` / ``配置``）淹没；而它们恰恰是"配置键、CLI 名、常量名"这类问题的唯一指纹。
+        本方法不做分词、不分词序，直接在切片正文里找连续子串。
+
+        - 大小写不敏感（``lower()`` 双侧）；
+        - 匹配范围 = ``symbol_fqn`` + ``signature`` + ``content``（见 :data:`_LITERAL_BLOB_SQL`）：
+          标识符词根（``capability`` ⊂ ``CapabilityDefinition`` / ``capability_definitions``）
+          只有在符号名与签名里才看得到——``unicode61`` 不切 camelCase，FTS 也找不到它；
+        - ``min_length`` 以下的短语不查（短词必然泛滥，且那是 BM25 的职责）；
+        - 排序：**符号名含该短语者优先**（定义处，实测 ``capability`` ⊂ ``capability_definitions``）
+          → 命中次数降序 → 切片更短者优先 → id 稳定；
+        - 性能：单条 SQL 全表扫描（实测 287 文件 / 3416 切片约 20ms），每查询至多数个短语。
+        """
+        cleaned = phrase.strip()
+        if len(cleaned) < min_length:
+            return []
+        rows = self._conn.execute(
+            "SELECT id, symbol_match,"
+            " MAX(1, (length(blob) - length(replace(blob, lower(?), ''))) / length(?)) AS hits"
+            " FROM (SELECT id, end_line, start_line, symbol_fqn,"
+            f"  {_LITERAL_BLOB_SQL} AS blob,"
+            "  CASE WHEN instr(lower(coalesce(symbol_fqn, '')), lower(?)) > 0 THEN 0 ELSE 1 END"
+            "   AS symbol_match FROM chunks)"
+            " WHERE instr(blob, lower(?)) > 0"
+            " GROUP BY id"
+            " ORDER BY symbol_match ASC, hits DESC, (end_line - start_line) ASC, id LIMIT ?",
+            (cleaned, cleaned, cleaned, cleaned, limit),
+        ).fetchall()
+        return [(str(row["id"]), int(row["hits"])) for row in rows]
+
+    def symbol_literal_search(self, phrase: str, *, limit: int = 20) -> list[str]:
+        """按**符号名**做子串匹配（TASK-101 §A 弱短语）：返回 ``chunk_id`` 列表。
+
+        与 :meth:`literal_search` 的分工：那个扫正文（用户点名的字面量），这个只扫
+        ``symbols.name/fqn``——用于"查询里写了标识符词根（``capability`` ⊂
+        ``capability_definitions``/``CapabilityDefinition``）"的情形，``unicode61`` 不切
+        camelCase/下划线，FTS 找不到它。**只匹配符号名**是为了压制噪声：正文里几乎每个
+        调用点都含该词根，符号名里则集中在定义/Provider 处。
+
+        排序：短名优先（``capability_definitions`` 比 ``NewFriendCapabilityProvider._invoke``
+        更可能是答案）→ 名字典序稳定。
+        """
+        cleaned = phrase.strip()
+        if not cleaned:
+            return []
+        rows = self._conn.execute(
+            "SELECT chunk_id FROM symbols"
+            " WHERE chunk_id IS NOT NULL AND instr(lower(name), lower(?)) > 0"
+            " ORDER BY length(name) ASC, name, file_path, start_line LIMIT ?",
+            (cleaned, limit),
+        ).fetchall()
+        seen: list[str] = []
+        for row in rows:
+            chunk_id = str(row["chunk_id"])
+            if chunk_id not in seen:
+                seen.append(chunk_id)
+        return seen
 
     def chunk_by_id(self, chunk_id: str) -> ChunkDef | None:
         row = self._conn.execute(

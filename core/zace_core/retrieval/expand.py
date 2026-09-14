@@ -148,11 +148,22 @@ def _expansion_candidate(
     seed: Candidate,
     provenance: str,
 ) -> Candidate | None:
-    """把邻居符号落成一个扩展候选（符号无切片则跳过——不编造证据）。"""
+    """把邻居符号落成一个扩展候选（**总是能落到切片**——TASK-101 §B）。
+
+    此前：符号无 ``chunk_id`` 就直接跳过（"不编造证据"）。实测代价过大：符号表里
+    ``(module)`` 这类符号（以及类骨架之外的声明）没有 ``chunk_id``，而它们常是真实的 call 边端点
+    ——实测 ``capability_definitions`` → ``tools/hmi/definitions.py`` 整条边被丢弃，
+    于是"业务 Tool 定义在哪个文件"这类题在图扩展侧完全不可见。
+
+    现在退回 ``Store.chunk_covering(file_path, start_line)``：符号表已经给了行号，
+    取覆盖该行的切片即可。**仍然不编造**：拿不到行号或找不到覆盖切片时才返回 ``None``。
+    """
     row = _symbol_row(store, target_fqn)
-    if row is None or row.chunk_id is None:
+    if row is None:
         return None
-    chunk = store.chunk_by_id(row.chunk_id)
+    chunk = store.chunk_by_id(row.chunk_id) if row.chunk_id is not None else None
+    if chunk is None and row.file_path is not None and row.start_line is not None:
+        chunk = store.chunk_covering(row.file_path, row.start_line)
     if chunk is None:
         return None
     return _candidate_from_chunk(store, chunk, seed=seed, provenance=provenance)

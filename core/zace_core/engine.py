@@ -68,6 +68,7 @@ from zace_core.types import (
     Candidate,
     ChangeSet,
     ContextPack,
+    MissingEvidence,
     ProjectHandle,
     SyncStatus,
 )
@@ -290,12 +291,16 @@ class Engine:
         embedding_config: EmbeddingConfig | None = None,
         limits: RecallLimits | None = None,
         expansion_limits: ExpansionLimits | None = None,
+        query_cache: object | None = None,
     ) -> None:
         self._data_root = Path(data_root).expanduser()
         self._provider = provider
         self._embedding_config = embedding_config
         self._limits = limits or RecallLimits()
         self._expansion_limits = expansion_limits or ExpansionLimits()
+        #: 查询向量缓存（TASK-101 §F）：传入时**复用它**（离线回放/预热），并在进程存活期间共享
+        #: 同一份，使预热与回放走同一条链。取值只需满足 get/put（``retrieval.vector`` 的鸭子类型）。
+        self._query_cache = query_cache
         self._repo_roots: dict[str, Path] = {}
 
     # ------------------------------------------------------------------ 生命周期
@@ -307,6 +312,7 @@ class Engine:
         *,
         provider: EmbeddingProvider | None = None,
         embedding_config: EmbeddingConfig | None = None,
+        query_cache: object | None = None,
     ) -> Engine:
         """打开引擎（``data_root`` 下的 ``projects/`` 按需创建；provider 懒构造）。"""
         return cls(
@@ -315,6 +321,7 @@ class Engine:
             embedding_config=embedding_config
             if embedding_config is not None
             else EmbeddingConfig.from_env(),
+            query_cache=query_cache,
         )
 
     def close(self) -> None:
@@ -374,6 +381,30 @@ class Engine:
         handle = self.resolve_project(identity.identity_key, identity.display_name)
         self._repo_roots[handle.project_id] = Path(root).expanduser().resolve()
         return handle, identity
+
+    def set_query_cache(self, cache: object | None) -> None:
+        """替换查询向量缓存（TASK-101 §F：CLI 在 engine 建好后注入侧车缓存）。"""
+        self._query_cache = cache
+
+    def set_provider(self, provider: EmbeddingProvider) -> None:
+        """替换 embedding provider（TASK-101 §F：``--replay`` 用它切到离线 provider）。
+
+        只影响**查询侧**调用（provider 每次 ``_open_project`` 重取，见其实现）；
+        索引侧语义不变——离线 provider 的 ``embed()`` 会直接抛错（见 ``CachedOnlyProvider``）。
+        """
+        self._provider = provider
+
+    def bind_repo(self, project_id: str, root: str | Path) -> None:
+        """把本地仓库目录绑到**已存在的** project_id（本卡扩展：benchmark 放行口，TASK-101 §E）。
+
+        与 :meth:`resolve_repo` 的区别：不计算 D-29 身份、不创建 ``project.json``，因此可以把
+        一个**预建好的索引目录**（内含 embedding）挂到任意 checkout 路径上复现跑分，避免每次
+        改检索代码都重新索引（真实成本：287 文件仓库一次索引分钟级 + embedding 花费）。
+
+        纪律：绑定不检查索引是否可用——索引缺失/维度不符时，检索链会**如实抛错**
+        （``VectorStore.open`` 的 ``DimensionMismatchError``），不静默重建、不伪装成空结果。
+        """
+        self._repo_roots[project_id] = Path(root).expanduser().resolve()
 
     def ingest(
         self, project_id: str, changes: ChangeSet, *, source: SourceProvider | None = None
@@ -470,6 +501,7 @@ class Engine:
                 provider=provider,
                 vector_store=vectors,
                 limits=self._limits,
+                cache=self._query_cache,
             )
             vector_gap = _vector_index_gap(store, vectors)
             expansion = expand(store, recalled.candidates, limits=self._expansion_limits)
@@ -624,3 +656,85 @@ def plan_scan(root: str | Path, previous: Mapping[str, str]) -> _ScanResult:
 
 #: 编译期自证：``Engine`` 的方法面覆盖 CF-07（``interfaces.ContextEngine``）。
 _ENGINE_PROTOCOL: type[ContextEngine] = Engine
+
+
+# ---------------------------------------------------------------------------
+# 查询覆盖率（TASK-101 §D：答了但答偏，要如实报出来）
+# ---------------------------------------------------------------------------
+
+#: 覆盖率闸门：低于它即认为"包内证据没接住查询的具体关键词"。
+QUERY_COVERAGE_FLOOR = 0.34
+#: 参与统计的最少内容词数（短查询统计噪声大，不报缺口）。
+QUERY_COVERAGE_MIN_TOKENS = 4
+#: message 里列出的缺失词上限。
+QUERY_COVERAGE_LISTED = 6
+#: 缺口 code（CF-03 的 ``MissingEvidence.code`` 是自由字符串，无需改契约）。
+QUERY_COVERAGE_CODE = "query_partially_matched"
+
+#: 问句骨架/虚词（不算"内容词"）。
+_COVERAGE_STOPWORDS = frozenset(
+    {
+        "这个", "那个", "这些", "那些", "什么", "怎么", "如何", "哪里", "哪个", "哪些",
+        "是否", "可以", "需要", "请问", "一下", "以及", "分别", "具体", "多少",
+        "一次", "一共", "几个", "还有", "通过", "用于", "它们", "其中",
+        "the", "and", "for", "what", "which", "where", "how", "does", "are", "is", "was",
+    }
+)
+
+
+def _content_tokens(query: str) -> list[str]:
+    """查询的"内容词"（CJK 分词 + 去停用词/单字/纯标点）。
+
+    只做**诊断信号**（TASK-101 §D），不参与检索与排序，因此可以比检索侧更激进地过滤：
+    问句骨架（"哪个/在哪里/多少"）在证据里必然缺失，算进去只会把覆盖率压成人人偏低。
+    """
+    from zace_core.text import segment
+
+    tokens: list[str] = []
+    for raw in segment(query).split():
+        token = raw.strip()
+        if len(token) < 2 or not any(char.isalnum() for char in token):
+            continue
+        if token.lower() in _COVERAGE_STOPWORDS:
+            continue
+        tokens.append(token.lower())
+    return list(dict.fromkeys(tokens))
+
+
+def _with_query_coverage(query: str, pack: ContextPack) -> ContextPack:
+    """包内证据对查询内容词的覆盖率不足 → 追加 ``query_partially_matched`` 缺口。
+
+    为什么需要（真实客户反馈）：``confidence`` / ``answerable`` 奖励的是**多通道共识**，
+    因此"主题词被召回、但查询里的具体指纹（符号名/字面量/文件名）一个都没进包"时，
+    ZACE 依然报 ``answerable=true / medium``，Agent 无从得知自己拿到的是背景材料。
+    真实代价：一个外部 AI 客户据此写下"这个仓库没有 main() 入口"（实际它在 ``pyproject.toml`` 里）。
+
+    只增 ``missing_evidence``（与已有 ``next_queries`` 并列），不改 ``answerable``/``confidence``：
+    那两个字段的判定参数属 R22 冻结口径，不在本卡职权内。
+    """
+    tokens = _content_tokens(query)
+    if len(tokens) < QUERY_COVERAGE_MIN_TOKENS or not pack.answerable:
+        return pack
+    body = "\n".join(item.content for item in [*pack.evidence, *pack.docs]).lower()
+    missing = [token for token in tokens if token not in body]
+    if not missing or (len(tokens) - len(missing)) / len(tokens) >= QUERY_COVERAGE_FLOOR:
+        return pack
+    listed = ", ".join(missing[:QUERY_COVERAGE_LISTED])
+    more = " 等" if len(missing) > QUERY_COVERAGE_LISTED else ""
+    pack.missing_evidence.append(
+        MissingEvidence(
+            code=QUERY_COVERAGE_CODE,
+            message=(
+                f"查询里有 {len(missing)}/{len(tokens)} 个关键词在返回的上下文里找不到"
+                f"（{listed}{more}）：包内证据只覆盖了查询的主题，"
+                "不代表这些关键词在仓库里不存在——请换更具体的符号名/文件路径/配置键再查一次，"
+                "或先用 grep 核对再下结论。"
+            ),
+            symbol=missing[0],
+        )
+    )
+    if not pack.next_queries:
+        # ``_next_queries`` 只在 answerable=false 时生成；本缺口是"答了但答偏"，
+        # 补一条确定性的自愈查询（不动已有列表）。
+        pack.next_queries = [f"{missing[0]} 的实现位置"]
+    return pack

@@ -29,6 +29,9 @@ from pathlib import Path
 from zace_core.cli.eval import GoldenError, load_cases, render_report, run_golden, write_report
 from zace_core.contextpack import render_markdown, to_json
 from zace_core.engine import Engine, EngineError, resolve_data_root
+from zace_core.retrieval.qcache import CachedOnlyProvider, PersistentQueryVectorCache
+from zace_core.storage import Store
+from zace_core.types import ProjectHandle
 
 __all__ = ["EXIT_ERROR", "EXIT_OK", "EXIT_USAGE", "build_parser", "main"]
 
@@ -83,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     search = subparsers.add_parser("search", help="检索并输出 ContextPack")
     search.add_argument("query", help="自然语言查询（可含反引号包裹的符号/路径）")
-    _add_common(search)
+    _add_common(search, repo_required=False)
     search.add_argument(
         "--max-tokens",
         type=_positive_int,
@@ -91,25 +94,63 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"ContextPack 预算上限（默认 {DEFAULT_MAX_TOKENS}）",
     )
     search.add_argument("--json", action="store_true", help="输出 CF-03 JSON（默认 Markdown）")
+    search.add_argument("--vector-cache", type=Path, default=None, help="查询向量侧车文件（同上）")
     search.set_defaults(handler=_cmd_search)
 
     status = subparsers.add_parser(
         "status", help="输出索引现状（files/chunks/symbols/edges/freshness）"
     )
-    _add_common(status)
+    _add_common(status, repo_required=False)
     status.add_argument("--json", action="store_true", help="输出 JSON（字段同 SyncStatus）")
     status.set_defaults(handler=_cmd_status)
 
     evaluate = subparsers.add_parser("eval", help="跑 golden set 并写指标报告")
-    _add_common(evaluate)
+    _add_common(evaluate, repo_required=False)
     evaluate.add_argument("--golden", type=Path, required=True, help="golden 文件或目录（*.jsonl）")
     evaluate.add_argument("--report", type=Path, required=True, help="Markdown 报告输出路径")
+    evaluate.add_argument(
+        "--vector-cache",
+        type=Path,
+        default=None,
+        help=(
+            "查询向量侧车文件（TASK-101 §F）：存在则**复用**其中的 query 向量，"
+            "跑完后把新增的写回。用于跨主机/离线跑分——有 key 的机器预热一次，"
+            "其他机器带上这个文件即可复现同一口径。"
+        ),
+    )
+    evaluate.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "离线回放：只用 --vector-cache 里的向量，不调用任何 embedding 后端。"
+            "缓存未命中的用例会如实走'向量通道降级'并计入报告，不会静默降级。"
+            "需同时给 --vector-cache。"
+        ),
+    )
     evaluate.set_defaults(handler=_cmd_eval)
     return parser
 
 
-def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--repo", type=Path, required=True, help="本地仓库路径")
+def _add_common(parser: argparse.ArgumentParser, *, repo_required: bool = True) -> None:
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        required=repo_required,
+        help=(
+            "本地仓库路径。**给了 --project-id 时可以省略**（TASK-101 §G）——eval/search 只读"
+            "索引与向量库，不需要靶场源码：没有靶场代码的机器也能跑分。"
+        ),
+    )
+    parser.add_argument(
+        "--project-id",
+        default=None,
+        help=(
+            "直接指定 projectId，跳过 D-29 身份计算与 project.json 核验"
+            "（benchmark 放行口，TASK-101 §E）：把一个**预建好的索引**（含 embedding）"
+            "挂到任意 checkout 路径上复现跑分，不必重新索引。"
+            "索引缺失/维度不符时**如实报错**，不静默重建。"
+        ),
+    )
     parser.add_argument(
         "--data",
         type=Path,
@@ -133,15 +174,119 @@ def _positive_int(raw: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _engine(args: argparse.Namespace, factory: EngineFactory) -> Engine:
-    return factory(resolve_data_root(args.data))
+def _engine(
+    args: argparse.Namespace,
+    factory: EngineFactory,
+    *,
+    query_cache: PersistentQueryVectorCache | None = None,
+) -> Engine:
+    engine = factory(resolve_data_root(args.data))
+    if query_cache is not None:
+        engine.set_query_cache(query_cache)
+    return engine
 
 
-def _resolved_repo(args: argparse.Namespace) -> Path:
-    repo = Path(args.repo).expanduser()
+def _query_cache(args: argparse.Namespace) -> PersistentQueryVectorCache | None:
+    """``--vector-cache`` → 侧车缓存（未指定则 ``None`` = 使用进程内 60s 缓存）。
+
+    这里只负责"能不能读"：模型/维度自证字段在 :meth:`EngineManager` 侧比对，
+    因为 profile 要等 engine 的 provider 就绪后才拿得到。
+    """
+    path = getattr(args, "vector_cache", None)
+    if path is None:
+        return None
+    cache = PersistentQueryVectorCache(path)
+    if cache.load() == 0 and not path.is_file():
+        print(f"{PROG}: 提示：向量侧车文件尚不存在，本次将新建：{path}", file=sys.stderr)
+    return cache
+
+
+def _index_embedding_fingerprint(engine: Engine, project_id: str) -> tuple[str, int]:
+    """从**索引自身**读 embedding 指纹（``index_config``），返回 ``(model_id, dim)``。
+
+    为什么以索引为准而不是环境变量：``--replay`` 要在**没有 key、没有本地模型**的主机上跑，
+    此时 ``EmbeddingConfig.from_env()`` 会回落到默认本地模型（实测 dim=384）并与索引
+    （dim=1024）冲突，整轮跑分直接失败。索引里的指纹才是"这批向量是谁算的"的权威来源
+    （它由 D-07 指纹机制维护，换模型会触发重嵌）。
+    """
+    with Store.open(engine.project_dir(project_id)) as store:
+        model = store.get_config("embedding_model")
+        raw_dim = store.get_config("embedding_dim")
+    if not model or not raw_dim:
+        raise EngineError(
+            f"索引缺少 embedding 指纹（project={project_id}）：该索引不是本版本建立的，"
+            "无法离线回放。请在有 key 的机器上重新 ingest 后分发。"
+        )
+    return model, int(raw_dim)
+
+
+def _sync_cache_identity(
+    engine: Engine, cache: PersistentQueryVectorCache, *, project_id: str, replay: bool = False
+) -> None:
+    """校验侧车文件与当前 embedding 配置，一致则绑定；``--replay`` 时切成离线 provider。
+
+    两种模式的指纹来源不同（这是关键区别）：
+
+    - **预热**（默认）：以 ``engine.provider`` 的真实 profile 为准——它就是本次要调用的模型；
+    - **回放**（``--replay``）：以**索引里的指纹**为准（见 :func:`_index_embedding_fingerprint`），
+      全程不触碰真实 provider，因此不需要 key、不需要本地模型。
+    """
+    model, dim = _index_embedding_fingerprint(engine, project_id)
+    mismatched = cache.identity_mismatch(model=model, dim=dim)
+    if mismatched:
+        raise EngineError(
+            f"向量侧车文件与索引的 embedding 不一致（{mismatched}）："
+            f"索引为 {model} / {dim} 维。请用同一配置预热，不要混用不同模型的向量。"
+        )
+    cache.bind_identity(model=model, dim=dim)
+    if replay:
+        engine.set_provider(CachedOnlyProvider(cache, model=model, dim=dim))
+    elif engine.provider.profile.dim != dim:
+        raise EngineError(
+            f"当前 embedding 配置（{engine.provider.profile.model_id} / "
+            f"{engine.provider.profile.dim} 维）与索引（{model} / {dim} 维）不一致："
+            "请检查 embedding 配置后再跑分。"
+        )
+
+
+def _resolved_repo(args: argparse.Namespace, *, required: bool = True) -> Path | None:
+    """``--repo`` → 绝对路径；``--project-id`` 模式下允许省略（返回 ``None``）。
+
+    为什么可以省略（TASK-101 §G）：``eval`` / ``search`` 只读索引与向量库
+    （``index.db`` + ``vectors/``），**不需要靶场源码**——于是"没有靶场代码的机器"也能跑分，
+    这正是跨主机复现要的形态（靶场代码本身是另一套 147M 的检出）。
+    """
+    raw = getattr(args, "repo", None)
+    if raw is None:
+        if required:
+            raise EngineError("缺少 --repo（本项目未绑定本地仓库）")
+        return None
+    repo = Path(raw).expanduser()
     if not repo.is_dir():
         raise EngineError(f"--repo 不是目录：{repo}")
     return repo.resolve()
+
+
+def _resolve_target(
+    engine: Engine, args: argparse.Namespace, *, repo_required: bool = True
+) -> tuple[ProjectHandle, object]:
+    """``--repo``(+``--project-id``) → 项目句柄（TASK-101 §E/§G）。
+
+    三种组合：
+
+    | 给了 | 行为 |
+    |---|---|
+    | 只有 ``--repo`` | 走 :meth:`Engine.resolve_repo`（D-29 身份），生产语义不变 |
+    | ``--project-id`` + ``--repo`` | 直连该 id 并把仓库绑到它（拿旧 embedding 跑新代码） |
+    | 只有 ``--project-id`` | 直连该 id、**不绑定仓库**（没有靶场代码的机器跑分） |
+    """
+    project_id = getattr(args, "project_id", None)
+    if project_id:
+        repo = _resolved_repo(args, required=False)
+        if repo is not None:
+            engine.bind_repo(str(project_id), repo)
+        return ProjectHandle(project_id=str(project_id), created=False), None
+    return engine.resolve_repo(_resolved_repo(args, required=repo_required))
 
 
 def _cmd_ingest(args: argparse.Namespace, factory: EngineFactory) -> int:
@@ -192,8 +337,7 @@ def _cmd_ingest(args: argparse.Namespace, factory: EngineFactory) -> int:
 
 def _cmd_search(args: argparse.Namespace, factory: EngineFactory) -> int:
     engine = _engine(args, factory)
-    repo = _resolved_repo(args)
-    handle, _identity = engine.resolve_repo(repo)
+    handle, _identity = _resolve_target(engine, args, repo_required=False)
     trace = engine.search_with_trace(handle.project_id, args.query, args.max_tokens)
     if trace.degraded:
         print(f"warning: {trace.degraded_reason}", file=sys.stderr)
@@ -207,13 +351,13 @@ def _cmd_search(args: argparse.Namespace, factory: EngineFactory) -> int:
 def _cmd_status(args: argparse.Namespace, factory: EngineFactory) -> int:
     engine = _engine(args, factory)
     repo = _resolved_repo(args)
-    handle, _identity = engine.resolve_repo(repo)
+    handle, _identity = _resolve_target(engine, args, repo_required=False)
     status = engine.sync_status(handle.project_id)
     if args.json:
         print(json.dumps(dataclasses.asdict(status), ensure_ascii=False, indent=2))
         return EXIT_OK
     print(f"project: {status.project_id}")
-    print(f"repo: {repo}")
+    print(f"repo: {repo if repo is not None else '(未绑定：--project-id 模式)'}")
     print(f"files: {status.files_indexed}")
     print(f"chunks: {status.chunks}")
     print(f"symbols: {status.symbols}")
@@ -224,14 +368,22 @@ def _cmd_status(args: argparse.Namespace, factory: EngineFactory) -> int:
 
 
 def _cmd_eval(args: argparse.Namespace, factory: EngineFactory) -> int:
-    engine = _engine(args, factory)
-    repo = _resolved_repo(args)
-    handle, _identity = engine.resolve_repo(repo)
+    cache = _query_cache(args)
+    engine = _engine(args, factory, query_cache=cache)
+    repo = _resolved_repo(args, required=False)
+    handle, _identity = _resolve_target(engine, args, repo_required=False)
+    if cache is not None:
+        _sync_cache_identity(
+            engine,
+            cache,
+            project_id=handle.project_id,
+            replay=bool(getattr(args, "replay", False)),
+        )
     status = engine.sync_status(handle.project_id)
     if status.files_indexed == 0:
         print(
             f"{PROG}: 项目尚未索引（{handle.project_id}）："
-            f"先运行 `{PROG} ingest --repo {repo}`。",
+            f"先运行 `{PROG} ingest --repo <靶场路径>`（或用 --data 指向已解包的索引）。",
             file=sys.stderr,
         )
         return EXIT_ERROR
@@ -242,10 +394,18 @@ def _cmd_eval(args: argparse.Namespace, factory: EngineFactory) -> int:
         cases,
         lambda query: engine.search_with_trace(handle.project_id, query, DEFAULT_MAX_TOKENS),
         golden=str(args.golden),
-        repo=str(repo),
+        repo=str(repo) if repo is not None else "(未绑定仓库：--project-id 模式)",
         project_id=handle.project_id,
         max_tokens=DEFAULT_MAX_TOKENS,
     )
+    if cache is not None:
+        # 预热：把本次取到的 query 向量写回侧车文件（供其他主机/离线回放复用）。
+        total = cache.put_all()
+        print(
+            f"vector-cache: {cache.path}（共 {total} 条；本次命中 {cache.hits} / "
+            f"未命中 {cache.misses}）",
+            file=sys.stderr,
+        )
     written = write_report(report, args.report)
     print(render_report(report), end="")
     print(f"report: {written}")

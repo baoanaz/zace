@@ -6,6 +6,7 @@ from zace_core.retrieval import (
     CHANNEL_BM25,
     CHANNEL_EXACT,
     CHANNEL_INFERRED,
+    CHANNEL_LITERAL,
     CHANNEL_VECTOR,
     QueryEmbeddingCache,
     RecallLimits,
@@ -59,11 +60,25 @@ def test_recall_merges_three_channels(store, seed_file, sym, provider, vector_cl
     )
 
     assert result.degraded is False
-    assert result.channels_used == (CHANNEL_EXACT, CHANNEL_INFERRED, CHANNEL_BM25, CHANNEL_VECTOR)
+    # TASK-101 §A：字面量通道（查询里的 ``refreshToken``/``TokenService.refresh`` 均触发）
+    assert result.channels_used == (
+        CHANNEL_EXACT,
+        CHANNEL_LITERAL,
+        CHANNEL_INFERRED,
+        CHANNEL_BM25,
+        CHANNEL_VECTOR,
+    )
     by_id = {c.chunk_id: c for c in result.candidates}
 
     service = by_id["src/auth/token_service.py:TokenService.refresh:45"]
-    assert service.channel_ranks == {CHANNEL_EXACT: 1, CHANNEL_BM25: 1, CHANNEL_VECTOR: 1}
+    # 字面量通道同时命中（查询里的 ``TokenService.refresh`` 是连续子串），
+    # 三通道共识（exact+bm25+vector）仍是主导，见下方 rrf_score 断言。
+    assert service.channel_ranks == {
+        CHANNEL_EXACT: 1,
+        CHANNEL_LITERAL: 1,
+        CHANNEL_BM25: 1,
+        CHANNEL_VECTOR: 1,
+    }
     assert service.tier == 0
     assert service.kind == "code"
     assert service.path == "src/auth/token_service.py"

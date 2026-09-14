@@ -41,6 +41,7 @@ from zace_core.retrieval.fusion import (
     CHANNEL_BM25,
     CHANNEL_EXACT,
     CHANNEL_INFERRED,
+    CHANNEL_LITERAL,
     CHANNEL_VECTOR,
     DEFAULT_POOL_LIMIT,
     KIND_CODE,
@@ -55,6 +56,7 @@ from zace_core.retrieval.fusion import (
     make_candidate,
     merge,
 )
+from zace_core.retrieval.literal import extract_literal_phrases, recall_literal
 from zace_core.retrieval.rrf import RRF_K, RrfEntry, fuse_rankings, reciprocal_rank, rrf_score
 from zace_core.retrieval.vector import (
     DEFAULT_QUERY_CACHE_TTL_S,
@@ -73,6 +75,7 @@ __all__ = [
     "CHANNEL_BM25",
     "CHANNEL_EXACT",
     "CHANNEL_INFERRED",
+    "CHANNEL_LITERAL",
     "CHANNEL_VECTOR",
     "DEFAULT_POOL_LIMIT",
     "DEFAULT_QUERY_CACHE_TTL_S",
@@ -99,6 +102,7 @@ __all__ = [
     "classify_kind",
     "embed_query",
     "extract_inferred",
+    "extract_literal_phrases",
     "fuse_rankings",
     "is_test_path",
     "make_candidate",
@@ -108,6 +112,7 @@ __all__ = [
     "recall_bm25",
     "recall_explicit",
     "recall_inferred",
+    "recall_literal",
     "recall_vector",
     "reciprocal_rank",
     "rrf_score",
@@ -119,6 +124,7 @@ class RecallLimits:
     """各通道配额（Module/02 §4.2/§4.3 的默认值；Phase 3 路由只改配额，不新增通道）。"""
 
     explicit: int = 20               # Exact-Explicit 全量进池上限
+    literal: int = 30                # Literal 字面量通道进池上限（TASK-101 §A）
     inferred: int = 20               # Exact-Inferred 普通种子 top 20
     bm25: int = 50                   # BM25 top 50
     vector: int = 50                 # Vector top 50
@@ -158,6 +164,10 @@ def recall(
     active = limits or RecallLimits()
     explicit = parse_explicit(query)
     inferred_tokens = extract_inferred(query)
+    # 弱字面量短语不与符号通道重复（符号能表达的交给符号通道，见 ``extract_literal_phrases``）。
+    literal_phrases = extract_literal_phrases(
+        query, covered=(*explicit.symbols, *inferred_tokens)
+    )
     query_cache = cache if cache is not None else QueryEmbeddingCache(
         ttl_s=active.query_cache_ttl_s
     )
@@ -166,6 +176,11 @@ def recall(
     explicit_candidates = recall_explicit(store, explicit.symbols, limit=active.explicit)
     if explicit_candidates:
         channels[CHANNEL_EXACT] = explicit_candidates
+    # 字面量通道（TASK-101 §A）：不切分、不调分词器，直接子串命中。与 explicit 通道的
+    # 输入集合不同（反引号原文 / 含 ``-=/:`` 的长串），两者不重复计票。
+    literal_candidates = recall_literal(store, literal_phrases, limit=active.literal)
+    if literal_candidates:
+        channels[CHANNEL_LITERAL] = literal_candidates
     inferred_candidates = recall_inferred(store, inferred_tokens, limit=active.inferred)
     if inferred_candidates:
         channels[CHANNEL_INFERRED] = inferred_candidates

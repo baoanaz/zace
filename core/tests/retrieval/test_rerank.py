@@ -171,8 +171,9 @@ def test_feature_synthesized_edge_negative_only() -> None:
 
 
 def test_feature_names_cover_twelve() -> None:
-    assert len(FEATURE_NAMES) == 12
-    assert len(set(FEATURE_NAMES)) == 12
+    """特征表规模（TASK-101 §A 新增 2 条：literal / literal_root；基线 12 条不变）。"""
+    assert len(FEATURE_NAMES) == 14
+    assert len(set(FEATURE_NAMES)) == 14
 
 
 # --------------------------------------------------------------------------- 打分与排序
@@ -226,7 +227,7 @@ def test_weights_override_does_not_change_feature_structure() -> None:
     lightweight = with_weights(RerankWeights(), explicit_hit=0.0)
     assert lightweight.explicit_hit == 0.0
     assert lightweight.symbol_match == 1.0
-    assert len(RerankWeights().__dataclass_fields__) == 12
+    assert len(RerankWeights().__dataclass_fields__) == 14
     with pytest.raises(TypeError):
         with_weights(RerankWeights(), not_a_feature=1.0)
 
