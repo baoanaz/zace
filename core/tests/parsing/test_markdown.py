@@ -143,6 +143,12 @@ def test_preamble_block_and_setext_is_body_text() -> None:
     [
         ("AGENTS.md", "agent-instructions"),
         (".cursorrules", "agent-instructions"),
+        # TASK-097 §C：白名单默认清单里的另外几个名字（只扩名表，不改 rerank 分值）
+        ("CLAUDE.md", "agent-instructions"),
+        (".agent.md", "agent-instructions"),
+        ("HANDOFF.md", "agent-instructions"),
+        ("docs/design/HANDOFF.md", "agent-instructions"),  # 名表先于路径规则（首命中生效）
+        ("skills/learned/SKILL.md", "agent-instructions"),
         ("README.md", "readme"),
         ("docs/design/x.md", "design"),
         ("ARCHITECTURE.md", "design"),

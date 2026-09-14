@@ -230,7 +230,21 @@ def _extract_mentioned(text: str) -> tuple[str, ...]:
 # doctype（Module/01 §2.2-① 的有序规则表，首个命中生效）
 # ---------------------------------------------------------------------------
 
-_AGENT_INSTRUCTION_NAMES = frozenset({"agents.md", "claude.md", ".cursorrules"})
+#: "AI 指令文档"名表（Module/01 §2.2-① 的 doctype 规则表首行，命中即 ``agent-instructions``）。
+#:
+#: TASK-097 §C 扩充（与索引白名单的默认清单对齐）：新增 ``.agent.md``（agent 专用变体）、
+#: ``handoff.md``（项目交接文档，用户 2026-09-14 明确指定）、``skill.md``（技能说明文档）。
+#: 命中后享受**现有**的 ``agent-instructions`` rerank 加分（``+0.8`` 是既有值，R30 冻结不改），
+#: 改的只是名表——**不新增 doctype 取值**，因此 CF-03 的 ``doctype`` 枚举不变。
+#:
+#: 为什么 ``skill.md`` 不单独开一个 doctype：它确实是一类独立文档（技能说明），但新增枚举值
+#: 会同时改 CF-03 契约（``docs/contracts/contextpack.schema.json`` 的 ``doctype`` enum）与
+#: ``retrieval/rerank.py`` 的 ``HIGH_VALUE_DOCTYPES``（R30 冻结）。本卡选择"先归入
+#: ``agent-instructions``、把单独 doctype 的诉求写进执行记录"：语义上二者都是"给 AI 读的指令"、
+#: rerank 档位与装填策略一致，暂没有实际损失。
+_AGENT_INSTRUCTION_NAMES = frozenset(
+    {"agents.md", "claude.md", ".cursorrules", ".agent.md", "handoff.md", "skill.md"}
+)
 
 
 def classify_doctype(path: str) -> str:

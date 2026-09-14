@@ -1,6 +1,6 @@
 # TASK-097：索引白名单（AI 指令文档与 skills 目录放行）
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-037（已合并）｜ soft 依赖：无
+> 状态：review ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-037（已合并）｜ soft 依赖：无
 > 建议分支：`feature/task-097-index-allowlist_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `core/zace_core/pipeline/ignore.py`（白名单层 + 配置项）
@@ -251,3 +251,248 @@ _AGENT_INSTRUCTION_NAMES = frozenset({
 ## 执行记录
 
 （实施 AI 在此填写。）
+
+### 2026-09-14 ｜ 分支 `feature/task-097-index-allowlist_xwz0914` ｜ 状态 review
+
+#### 完成报告
+
+- **分支**：`feature/task-097-index-allowlist_xwz0914`（从 `main` 的 `f154fc8` 起）
+- **验收命令与结果**：
+  - `uv run pytest core/tests/pipeline -o addopts="" -q` → **79 passed**（含新增 `test_allowlist.py` 26 条，其中 2 条是两侧对照）
+  - `cd client && cargo test` → **50 passed**（43 lib + 2 parity + 5 stdio）
+  - `uv run ruff check .` → **All checks passed**
+  - `uv run python scripts/check_dependency_direction.py` → **通过**
+  - `uv run pytest -o addopts="" -q`（须先 `env -u EMBED_MODE …`）→ **909 passed, 2 skipped**
+- **关键产物**：`core/zace_core/pipeline/{ignore,source}.py`、`core/zace_core/parsing/markdown.py`、
+  `core/zace_core/pipeline/__init__.py`、`client/src/{ignore,index}.rs`、
+  `core/tests/pipeline/test_allowlist.py`、`client/tests/allowlist_parity.rs`、
+  `docs/handbook/索引白名单.md`
+
+> **环境注意**：`.env` 里的 `EMBED_MODE=api` 会让 `core/tests/embedding/test_factory.py::test_default_is_local_onnx_provider`
+> 失败（该测试断言默认是本地 provider，被环境变量覆盖）。这是既有环境敏感测试，与本卡无关；
+> 本卡的基线数字用 `env -u EMBED_MODE -u EMBED_MODEL -u EMBED_BASE_URL -u EMBED_API_KEY uv run pytest` 取得。
+
+#### §A-2 配置方式与理由
+
+三种来源**取并集**（不覆盖）：`{repo}/.zaceinclude`（项目自定义）+ 内置默认（代码常量）
++ `ZACE_INDEX_ALLOWLIST`（逗号分隔，服务端/CI）。**为什么取并集而不是覆盖**：内置清单是
+"开箱即用"的底线（用户原话是"让 zace 能够随意添加白名单文件"，是**添加**而不是"自己写全表"）；
+覆盖语义会迫使每个项目复制一遍默认清单，升级时也拿不到新增的默认项。
+
+**优先级**：内置默认 < 环境变量 < `.zaceinclude`（后写覆盖先写）。方向与既有第 1/2 层
+（`.zaceignore` > `.gitignore`，"越靠近项目越优先"）一致，且让 `!skills` 这类取消条目真能生效
+——**默认清单 therefore 是可删的**（手册 §3 明写）。
+
+**语法刻意收窄**（不是完整 gitignore 语法）：`#` 注释、`!` 取消、含 `/` 或不含点的裸名字按
+**目录名**、含点的裸名字按**文件名**（大小写不敏感）。**不支持 `*`/`**`/`?`/`[]`**：白名单是
+"我必须拿到这些文件"的显式清单；引入通配就等于造第二套 `.gitignore`，R42 的两侧对照测试会立刻
+失效（写的通配行被静默忽略，手册已注明）。
+
+#### §A-3 不突破 `node_modules` 的验证证据（**实测输出**）
+
+最小复现仓库（卡内 §A-3 形状 + GitNexus 真实技能文档，共 238 文件）：
+
+```console
+$ cat .gitignore
+.claude/
+.codex/
+node_modules/
+vendor/
+$ find . -name SKILL.md | wc -l
+13
+```
+
+`DirectorySource.list_files()` 实测（并统计 `os.scandir` 触碰过的目录）：
+
+```console
+$ uv run python /tmp/scan_evidence.py /tmp/task097-real
+indexed: 37
+  indexed under 'node_modules': 0 []
+  indexed under '.git/objects': 0 []
+  indexed under 'vendor': 0 []
+  scandir touched 'node_modules': 0 []
+  scandir touched '/.git': 0 []
+  scandir touched 'vendor': 1 ['/tmp/task097-real/vendor']
+```
+
+- **要救的进了**：`.claude/skills/**` 下 30 个文件（`SKILL.md` + 参考文档 + 脚本）被救回
+  （白名单 ON 37 个文件 vs 关闭白名单 7 个，差集 30 个全部来自 `skills/`）；
+- **绝不能救的没进**：`node_modules/pkg/skills/a.py`、`.git/objects/**` 一个都没有，而且
+  `scandir` **从未触碰** `node_modules` 与 `.git`（连枚举都没发生）；
+- **没有无界下钻**：被排除的 `vendor/`（200 个文件）只被 `scandir` 一次（判断"里面有没有白名单
+  命中项"），**不进入**——TASK-037 的性能约束未被推翻。
+
+守护测试（两侧各有独立断言，不只靠上面这次手工验证）：
+`core/tests/pipeline/test_allowlist.py::test_dependency_dir_skills_are_never_rescued` /
+`::test_git_metadata_is_never_rescued` / `::test_lookthrough_does_not_enter_ignored_dirs_without_a_match`
+/ `::test_walk_does_not_enumerate_pruned_dirs`，以及
+`client/src/ignore.rs::dependency_dir_skills_are_never_rescued` / `::git_metadata_is_never_rescued`。
+
+**实现要点（这是本卡最容易写错的地方，写清楚供复核）**：`IgnoreRules.is_ignored` 改为
+**先判内置目录剪枝、命中即 `return True`**（白名单根本没机会看它）；`DirectorySource._walk`
+的下钻判定 `_child_descend` 同样**先判内置目录名/模式**，从不下钻。卡内 §A-4 的"白名单判定放在
+内置剪枝之后"因此是**双重落地**：独立 API 与遍历剪枝各有一条短路。
+
+#### §B 两侧一致性对照（core vs client 文件列表）
+
+同一份夹具仓库（`/tmp/task097-real`，GitNexus 真实技能文档 + 被排除的 `node_modules`/`.git`/`vendor`）：
+
+```console
+$ uv run python /tmp/core_scan.py /tmp/task097-real > /tmp/core_list.json
+$ cd client && cargo run --example task097_scan -- /tmp/task097-real > /tmp/client_list.txt
+
+core: 37 client: 37
+IDENTICAL: True
+```
+
+固化形式：core `test_allowlist.py::test_parity_fixture_matches_expected_list` 与 client
+`tests/allowlist_parity.rs::parity_fixture_matches_expected_list` 持有**同一份** `PARITY_REPO`
+夹具与 `PARITY_EXPECTED` 期望清单（Python/Rust 各一份拷贝，逐字相同），任一侧语义漂移即失败。
+
+**client 侧实现选择与理由**（卡内 §B 要求评估并说明）：
+
+- **不采用 `overrides` API**：`ignore` crate 的 `Override::matched` 在"存在至少一条白名单 glob
+  且 `is_dir == false`"时，会把**未命中任何 glob 的普通文件判为忽略**
+  （`overrides.rs`：`if mat.is_none() && self.num_whitelists() > 0 && !is_dir { return Match::Ignore(..) }`）。
+  那等于把语义变成"**只**索引白名单"，与需求"在原有范围之上**追加**"相反，且会让未被 gitignore 的
+  普通源码全部消失。实测确认后放弃。
+- **采用两次遍历取并集**（`IgnoreRules::walk_union()`）：walker A 走 `ignore` crate 的正常忽略
+  （`.zaceignore` > `.gitignore` > 内置剪枝），walker B **关闭**忽略规则、只保留"内置目录剪枝 +
+  白名单定向下钻"（下钻规则与 core 同口径：直接子项命中才进、深度上限 4、内置目录名从不下钻），
+  再按 `Allowlist::allows` 裁决。`index.rs::scan()` 迭代并集并用 `HashSet` 按路径去重。
+  这与 core 的"两步裁决"同构，是最容易保持两侧一致的形态。
+- **已知差异（如实列出）**：
+  1. `ignore` crate 豁免**被 git 跟踪**的文件（TASK-037 已记录的既有差异，约 1.9%）。
+     被白名单救回的文件**不在** git 索引里，故本卡语义不受影响；两侧在**被跟踪**文件上的既有
+     差异仍然存在（非本卡引入）；
+  2. core 的 `is_ignored` 是"可对任意路径求解"的独立 API（含 `reason_for`），client 侧没有对应
+     的公开查询接口（client 只在遍历时裁决、并把跳过原因写成 `skipped[].reason`）；
+  3. client 的 `.zaceinclude` **只读仓库根**，与 core 相同；两侧都不支持嵌套 `.zaceinclude`。
+
+#### §C doctype 扩充说明
+
+`core/zace_core/parsing/markdown.py`：
+
+```python
+_AGENT_INSTRUCTION_NAMES = frozenset(
+    {"agents.md", "claude.md", ".cursorrules", ".agent.md", "handoff.md", "skill.md"}
+)
+```
+
+- **只扩名表，不改分值**：命中后沿用现有 `agent-instructions` 的 `+0.8` rerank（R30 冻结的值未动）；
+- **不新增 doctype 取值** → CF-03 的 `doctype` 枚举（`docs/contracts/contextpack.schema.json`）
+  不变；
+- **`skill.md` 该不该单独一个 doctype**：我认为**长期应该**（"技能说明"与"项目指令"是两类文档，
+  装填/rerank 权重可以不同）。但本卡按卡内要求**不自行新增取值**——那会同时改 CF-03 契约与
+  `retrieval/rerank.py::HIGH_VALUE_DOCTYPES`（R30 冻结）。故先归入 `agent-instructions`
+  （两者都是"给 AI 读的指令"、rerank 档位一致，暂无实际损失），诉求写入下方"未决问题"。
+- 另注：名表命中**先于**路径规则（首命中生效），所以 `docs/design/HANDOFF.md` 的 doctype 是
+  `agent-instructions` 而非 `design`。已在测试里显式锁定这一既有优先级。
+- 测试：`core/tests/parsing/test_markdown.py` 的 `test_doctype_rule_table` 增加 5 个新名字的参数化
+  用例（含大小写与 `skills/.../SKILL.md` 形态）。
+
+#### §D 契约变更申请（按 `docs/plan/orchestration.md` §4 的 L2 流程）
+
+**改什么**
+
+| 契约 | 现状 | 拟更新为 |
+|---|---|---|
+| **R42**（`docs/plan/contracts.md` §3.9） | "本地模式落 Python 实现：`{repo}/.zaceignore` > `.gitignore`（含否定规则）> 内置默认"——**三层** | **四层**：新增**第 0 层"索引白名单"（强制包含）**，来源 `.zaceinclude` ∪ 内置默认 ∪ `ZACE_INDEX_ALLOWLIST`；语义：命中即越过第 1/2 层；**不得突破**内置目录剪枝；下钻须"名字定向 + 有深度上限"；语法不支持通配 |
+| **Module/05 §3.1**（忽略规则设计） | 三层忽略规则 | 同上四层 + 白名单语义（含"白名单不突破内置剪枝"与"下钻有界"两条硬约束） |
+| CF-03（`doctype` 枚举） | `agent-instructions` 等 7 值 | **不受影响**（只扩 `_AGENT_INSTRUCTION_NAMES` 名表，未新增取值） |
+
+**为什么**
+
+用户在 2026-09-14 提出：项目把 `.claude/` / `.codex/` 等 AI 目录写进 `.gitignore` 后，
+里面的 `SKILL.md`（高信息密度文档）就索引不到；要求"能**随意添加**白名单文件"，
+默认清单为 `AGENTS.md` / `CLAUDE.md` / `.agent.md` / `.cursorrules` / `HANDOFF.md` + 整个 `skills/` 目录。
+三层规则里没有"包含"这一维，必须新增一层才能表达。
+
+**影响哪些卡**
+
+- **TASK-037**（已合并）：其 `ignore.py` 的三层语义被扩展为四层；既有三层的判定结果对
+  "未命中白名单"的路径**逐字不变**（有回归测试 `test_no_allowlist_matches_task_037_behaviour`
+  与 `test_non_allowlisted_paths_behave_unchanged` 守护）。TASK-037 的代码注释/docstring 需要
+  由编排者（或后续卡）同步为四层表述——**本卡已就地更新 `ignore.py`/`source.py`/`client/src/ignore.rs`
+  的模块 docstring 与优先级表**，但 `docs/design/Module/05` 与 `docs/plan/contracts.md` 的正式
+  表述**未改**（越界）。
+- **TASK-040R**（client 骨架与同步代理，已合并）：`client/src/index.rs::scan()` 的迭代源从
+  `rules.walker()` 改为 `rules.walk_union()`（+ 去重）；缓存指纹新增 `.zaceinclude` 内容。
+  协议/缓存 schema 未变（`CACHE_VERSION` 不变），但**配置指纹会变**→ 客户端首次同步会重扫一次
+  （不是 bug，是"白名单可能改变文件集"的正确反应）。
+- **TASK-093**（真实使用数据闭环）等消费 `skipped_files` / `skip_reasons` 的卡：**不受影响**
+  （白名单不改变阈值判定的原因标签）。
+
+**暂停范围（L2 协议要求"停止越界实现，仅提交不依赖该变更的部分"）**
+
+本卡的实现**不依赖**契约文件本身（只依赖语义），且卡内 §D 明确要求"继续实现"，
+故已完整实现 §A/§B/§C 并交付；**未改动** `docs/contracts/**` 与 `docs/design/**` 任何字节。
+待编排者更新 R42 与 Module/05 后，建议再开一张极小卡把 `docs/design/Module/05` §3.1 的
+"三层"表述与 `contracts.md` R42 对齐（本卡不做）。
+
+#### 真实仓库验证
+
+**A. 真实技能文档被救回**（`/tmp/task097-real`：拷贝 GitNexus 的真实 `.claude/skills/**`，
+再把 `.claude/` 写进 `.gitignore`——正是用户报告的场景）：
+
+```console
+TOTAL on: 37  off: 7
+rescued by allowlist: 30
+  + .claude/skills/gitnexus-cli/SKILL.md
+  + .claude/skills/gitnexus-debugging/SKILL.md
+  ...
+  + .claude/skills/gitnexus-review/ci-personas/ci-security-lens.md
+  + .claude/skills/gitnexus-work/scripts/evidence-provenance.mjs
+skills files indexed: 30
+```
+
+**B. `/home/xuwenzheng/2_github/AI/ACE/source/GitNexus` 本体（5357 文件）**：
+
+```console
+TOTAL on: 5357  off: 5357
+rescued by allowlist: 0
+skills files indexed: 109
+  sample: ['.claude/skills/gitnexus-cli/SKILL.md', '.claude/skills/gitnexus-debugging/SKILL.md', ...]
+```
+
+**这条输出需要正确解读**：GitNexus 仓库**自己**没有把 `.claude/` 全目录写进 `.gitignore`
+（它用的是细粒度规则 + 一批 `!.claude/skills/<技能>/` 反向否定），所以 `skills/**` 本来就在
+索引范围里——119 个 `SKILL.md` 中 109 个（其余在 `gitignore` 掉的 `generated/` 等目录）**在白名单
+启用前后都在**，差集为 0 正是"白名单没有改变既有行为"的证明。**用户的场景（AI 目录被整体
+排除）由 A 覆盖**：A 是基于该仓库真实技能内容的复现。
+
+#### 与设计偏差
+
+1. **下钻（lookthrough）是卡内没写的新机制**：卡内 §A-3 要求 `hacks/skills/SKILL.md`（祖先目录
+   被 gitignore）被救回，同时 §A-4 要求内置目录的"整目录剪枝"性能约束保持（§A-3 编排者实测把
+   `_walk` 的剪枝顺序列为"需你验证"）。两者只能靠**有界下钻**共存，故实现为
+   "名字定向 + 连续被排除层数上限 4（`ZACE_ALLOWLIST_DEPTH` 可配）"，并用
+   `test_walk_does_not_enumerate_pruned_dirs` 锁住"无命中项的被排除目录不被进入"。
+   已用 `ZACE_ALLOWLIST_SCOPE` 暴露 `deep`（默认）/ `gitignored` / `shallow` 三档，便于收窄。
+2. **client 侧没有采用 `overrides` API**（卡内把它列为候选之一），理由见 §B（会变成"只索引白名单"）。
+3. **`_AGENT_INSTRUCTION_NAMES` 里的 `skill.md`**：按卡内要求只扩名表、未新增 doctype 取值。
+
+#### 未决问题（交编排者裁决）
+
+1. **`skill.md` 是否单独一个 doctype**（如 `skill`）？我倾向"应该，但不在本卡"：需要同时改
+   CF-03 的 `doctype` 枚举、`HIGH_VALUE_DOCTYPES`（R30 冻结）与装填策略，属 L3 级改动。
+2. **`skills` 默认目录规则的范围**是否过宽？当前它放行**任意层级**同名目录下的**全部文件**
+   （含脚本/测试数据）。实测在 GitNexus 上额外索引 30 个文件（可接受），但用户若有名为
+   `skills/` 的业务目录（如 `packages/api/src/skills/*.ts`），这些文件会被强制纳入。
+   可选收窄方案：内置默认改成 `skills/SKILL.md` + `skills/**/*.md`（只收文档）。
+   **本卡按用户原话"skills/ 文件夹里面的都上传吧"保持宽松实现**，请编排者确认。
+3. **`.zaceinclude` 是否需要支持嵌套/按目录作用域**（当前只读仓库根一份，已写进手册）？
+4. **服务端多租户场景**是否需要"白名单仅影响本地扫描、不经服务端策略"之外的约束
+   （即：租户能否用 `.zaceinclude` 绕过服务端的索引范围策略）？本卡未涉及鉴权层。
+5. 上述 §D 契约更新（R42 → 四层、Module/05 §3.1）待编排者执行。
+
+#### 建议复核点
+
+1. `IgnoreRules.is_ignored` 的**短路顺序**（内置剪枝先于白名单）与 `source.py::_child_descend`
+   的同构判定——这是卡内点名最易写错处；
+2. `client/src/ignore.rs::walk_union` + `index.rs::scan` 的去重是否与 core 清单一致
+   （已用真实仓库对照，37/37 完全相同）；
+3. `Allowlist` 的语法收窄（无通配、`!` 取消、含点/不含点启发式）是否与手册
+   `docs/handbook/索引白名单.md` §4 描述一致；
+4. 缓存指纹新增 `.zaceinclude` 是否会让 TASK-040R 的既有客户端出现一次非预期重扫（预期行为，
+   但值得在发布说明里提一句）。

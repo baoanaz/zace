@@ -140,9 +140,12 @@ impl IndexManager {
         let mut cached_files = 0usize;
         let mut skipped = Vec::new();
 
-        // 忽略语义（D-28）：`.zaceignore` > `.gitignore`（ignore crate）> 内置目录剪枝。
-        // 三层均在 `rules.walker()` 内生效（内置层通过 filter_entry 剪枝）。
-        for entry in self.rules.walker() {
+        // 忽略语义（D-28 / TASK-097）：第 0 层白名单（强制包含）> `.zaceignore` > `.gitignore`
+        // > 内置目录剪枝。前两层的遍历由 `walker()` 完成；第 0 层由 `allowlist_walk()` 追加，
+        // 因此这里迭代两者的**并集**，并用 `seen` 按路径去重（既未被忽略又命中白名单的文件
+        // 会同时出现在两个 walker 里）。
+        let mut seen: HashSet<String> = HashSet::new();
+        for entry in self.rules.walk_union() {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => continue,
@@ -154,6 +157,9 @@ impl IndexManager {
             let Some(relative) = relative_path(&self.root, path) else {
                 continue;
             };
+            if !seen.insert(relative.clone()) {
+                continue;
+            }
             let metadata = match entry.metadata() {
                 Ok(metadata) => metadata,
                 Err(_) => {
