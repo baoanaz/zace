@@ -38,21 +38,53 @@ def _manifest(tmp_path: Path, targets: dict) -> Path:
 
 def test_repo_manifest_lists_the_three_kept_targets() -> None:
     targets = tt.load_targets()
-    assert list(targets) == ["zace", "hello-agents", "cockpit-agents-py"]
+    assert list(targets) == ["hello-agents", "zace", "cockpit-agents-py"]
     for target in targets.values():
         assert target.golden.is_dir(), f"{target.name} 的 golden 目录不存在"
         assert list(target.golden.glob("*.jsonl")), f"{target.name} 的 golden 没有用例"
 
 
+def test_primary_target_is_a_public_local_build() -> None:
+    """主靶场必须是公共仓库 + 本地建索引：默认流程不能依赖任何索引分发。"""
+    targets = tt.load_targets()
+    primaries = [t for t in targets.values() if t.role == "primary"]
+    assert [t.name for t in primaries] == ["hello-agents"]
+    for target in targets.values():
+        if target.role in ("primary", "dogfood"):
+            assert target.index_how == "local-build", f"{target.name} 不该依赖索引分发"
+    assert targets["cockpit-agents-py"].role == "internal"
+
+
+def test_illegal_role_is_rejected(tmp_path: Path) -> None:
+    spec = {"golden": "benches/golden/zace", "repo_hint": "x", "commit": "self", "role": "boss"}
+    path = _manifest(tmp_path, {"x": spec})
+    with pytest.raises(tt.TargetError) as excinfo:
+        tt.load_targets(path)
+    assert "role" in str(excinfo.value)
+
+
 def test_recorded_indexes_carry_a_project_id_and_fingerprint() -> None:
     targets = tt.load_targets()
-    assert targets["cockpit-agents-py"].project_id == "8e69da62f37e5783"
+    assert targets["hello-agents"].project_id == "e9ee9dd1d41a7d2c"
     assert targets["zace"].project_id == "adfdd1a626db62b7"
+    assert targets["cockpit-agents-py"].project_id == "8e69da62f37e5783"
     # 记了 projectId 的靶场必须同时记指纹：否则拿别的模型的向量算 cosine 无从察觉
-    for name in ("cockpit-agents-py", "zace"):
-        assert targets[name].embedding == {"model": "api:voyage-4-lite", "dim": 1024}
-    # 还没建索引的靶场不得凭空的 projectId 绕过身份核验
-    assert targets["hello-agents"].project_id is None
+    for target in targets.values():
+        assert target.embedding == {"model": "api:voyage-4-lite", "dim": 1024}
+
+
+def _unbound_target(tmp_path: Path) -> tt.Target:
+    """合成一个"还没建索引"的靶场：用来测需要 --repo 的那条路径。"""
+    golden = tmp_path / "golden"
+    golden.mkdir()
+    (golden / "x.jsonl").write_text('{"id": "x-0001"}\n', encoding="utf-8")
+    return tt.Target(
+        name="synthetic",
+        golden=golden,
+        repo_hint="synthetic",
+        commit="self",
+        role="primary",
+    )
 
 
 def test_unknown_target_lists_available_names(tmp_path: Path) -> None:
@@ -108,11 +140,10 @@ def test_build_eval_args_binds_project_id_and_data() -> None:
     ]
 
 
-def test_build_eval_args_keeps_extra_flags_passthrough() -> None:
-    target = tt.resolve_target("hello-agents")
+def test_build_eval_args_keeps_extra_flags_passthrough(tmp_path: Path) -> None:
     argv = tt.build_eval_args(
-        target, data="/tmp/bench", report="/tmp/r.md", repo="/path/to/repo",
-        extra=["--max-tokens", "8000"],
+        _unbound_target(tmp_path), data="/tmp/bench", report="/tmp/r.md",
+        repo="/path/to/repo", extra=["--max-tokens", "8000"],
     )
     assert argv[-2:] == ["--max-tokens", "8000"]
     assert "--project-id" not in argv  # 没绑索引 → 由 D-29 身份计算
@@ -126,10 +157,9 @@ def test_recorded_project_id_lets_any_checkout_reuse_the_index() -> None:
     assert argv[argv.index("--project-id") + 1] == "adfdd1a626db62b7"
 
 
-def test_target_without_index_binding_needs_repo() -> None:
-    target = tt.resolve_target("hello-agents")
+def test_target_without_index_binding_needs_repo(tmp_path: Path) -> None:
     with pytest.raises(tt.TargetError) as excinfo:
-        tt.build_eval_args(target, data="/tmp/bench", report="/tmp/r.md")
+        tt.build_eval_args(_unbound_target(tmp_path), data="/tmp/bench", report="/tmp/r.md")
     assert "--repo" in str(excinfo.value)
 
 
@@ -148,8 +178,10 @@ def test_target_arg_is_extracted_in_both_forms() -> None:
         tt.split_target_arg(["--target"])
 
 
-def test_describe_targets_mentions_every_target() -> None:
+def test_describe_targets_mentions_every_target_and_role() -> None:
     text = tt.describe_targets(tt.load_targets())
     for name in ("zace", "hello-agents", "cockpit-agents-py"):
         assert name in text
+    for role in ("primary", "dogfood", "internal"):
+        assert role in text
     assert "8e69da62f37e5783" in text

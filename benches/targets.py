@@ -50,6 +50,9 @@ TARGETS_PATH = Path(__file__).resolve().parent / "targets.json"
 #: 清单里每个靶场必须给的字段。
 _REQUIRED = ("golden", "repo_hint", "commit")
 
+#: 角色：primary=主靶场（公共仓库）/ dogfood=本仓自检 / internal=内部靶场（不进默认流程）。
+_ROLES = ("primary", "dogfood", "internal")
+
 
 class TargetError(RuntimeError):
     """使用者可修正的错误（清单缺失/格式错/靶场名未知/参数组合矛盾）。"""
@@ -63,6 +66,7 @@ class Target:
     golden: Path
     repo_hint: str
     commit: str
+    role: str = "internal"
     project_id: str | None = None
     index_how: str = "unknown"
     index_hint: str = ""
@@ -80,6 +84,9 @@ def _target_from_spec(name: str, spec: Any) -> Target:
     missing = [key for key in _REQUIRED if not spec.get(key)]
     if missing:
         raise TargetError(f"靶场 {name} 缺字段：{missing}")
+    role = str(spec.get("role", "internal"))
+    if role not in _ROLES:
+        raise TargetError(f"靶场 {name} 的 role 非法：{role!r}（可选：{'、'.join(_ROLES)}）")
     index = spec.get("index") or {}
     if not isinstance(index, dict):
         raise TargetError(f"靶场 {name} 的 index 不是对象：{index!r}")
@@ -88,6 +95,7 @@ def _target_from_spec(name: str, spec: Any) -> Target:
         golden=(ROOT / str(spec["golden"])).resolve(),
         repo_hint=str(spec["repo_hint"]),
         commit=str(spec["commit"]),
+        role=role,
         project_id=(str(spec["project_id"]) if spec.get("project_id") else None),
         index_how=str(index.get("how", "unknown")),
         index_hint=str(index.get("hint", "")),
@@ -126,19 +134,21 @@ def describe_targets(targets: Mapping[str, Target]) -> str:
     """``--list-targets`` 的表格输出。"""
     lines = [
         "靶场清单（benches/targets.json）",
+        "  默认流程 = 公共仓库（role=primary）：本地建索引一次，落持久目录，之后只跑 eval",
         "",
-        f"{'名字':<20} {'commit':<14} {'索引':<16} golden",
-        f"{'-' * 20} {'-' * 14} {'-' * 16} {'-' * 40}",
+        f"{'名字':<20} {'角色':<10} {'commit':<14} {'索引':<16} golden",
+        f"{'-' * 20} {'-' * 10} {'-' * 14} {'-' * 16} {'-' * 32}",
     ]
     for target in targets.values():
         commit = target.commit if target.commit == "self" else target.commit[:12]
-        lines.append(f"{target.name:<20} {commit:<14} {target.index_how:<16} {target.golden}")
+        row = f"{target.name:<20} {target.role:<10} {commit:<14} {target.index_how:<16}"
+        lines.append(f"{row} {target.golden}")
         if target.has_project_id:
-            lines.append(f"{'':<20} {'':<14} project_id  : {target.project_id}")
+            lines.append(f"{'':<20} {'':<10} project_id  : {target.project_id}")
         if target.embedding:
-            lines.append(f"{'':<20} {'':<14} embedding   : {target.embedding}")
+            lines.append(f"{'':<20} {'':<10} embedding   : {target.embedding}")
         if target.index_hint:
-            lines.append(f"{'':<20} {'':<14} 获取方式    : {target.index_hint}")
+            lines.append(f"{'':<20} {'':<10} 获取方式    : {target.index_hint}")
     return "\n".join(lines)
 
 
@@ -146,8 +156,8 @@ def provenance(target: Target) -> str:
     """一行出处（跑分报告要能回答"这份索引来自哪个 commit/工作区"）。"""
     index = target.project_id or "（按 D-29 身份计算）"
     return (
-        f"[bench] 靶场={target.name} golden={target.golden} commit={target.commit} "
-        f"index={target.index_how} project={index}"
+        f"[bench] 靶场={target.name}（{target.role}）golden={target.golden} "
+        f"commit={target.commit} index={target.index_how} project={index}"
     )
 
 

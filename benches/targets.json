@@ -1,8 +1,25 @@
 {
   "schema": 1,
-  "note": "靶场清单：把「用例集 + 预建索引」绑成一个靶场名，供 benches/run.py --target 使用。只放元信息，不放索引本体——index.db 存切片正文，属靶场源码副本（见 benches/README.md 合规一节）。",
+  "note": "靶场清单：把「用例集 + 预建索引」绑成一个靶场名，供 benches/run.py --target 使用。只放元信息，不放索引本体——index.db 存切片正文，属靶场源码副本（见 benches/README.md 合规一节）。默认流程只用 role=primary/dogfood 的靶场：公共仓库、本地建索引、索引落持久目录。",
   "targets": {
+    "hello-agents": {
+      "role": "primary",
+      "golden": "benches/golden/hello-agents",
+      "repo_hint": "hello-agents",
+      "commit": "4f7682ceafe573d07cd8a7d0b89908500e83227d",
+      "repo_url": "https://github.com/datawhalechina/hello-agents.git",
+      "project_id": "e9ee9dd1d41a7d2c",
+      "index": {
+        "how": "local-build",
+        "hint": "主靶场（公开仓库）：clone 并 checkout 到上面的 commit，再 `uv run zace-core ingest --repo <checkout> --data ~/.zace/bench`；索引落持久目录，之后每次跑分都不再索引（projectId 与 remote 绑定，换 checkout 不变）"
+      },
+      "embedding": {
+        "model": "api:voyage-4-lite",
+        "dim": 1024
+      }
+    },
     "zace": {
+      "role": "dogfood",
       "golden": "benches/golden/zace",
       "repo_hint": "zace",
       "commit": "self",
@@ -16,18 +33,8 @@
         "hint": "本仓自举：索引建在持久目录（约定 ~/.zace/bench，别放 /tmp——重启即失），之后任意 checkout 都用 --project-id 复用；只有 core 的切片/嵌入指纹变了才需要重建"
       }
     },
-    "hello-agents": {
-      "golden": "benches/golden/hello-agents",
-      "repo_hint": "hello-agents",
-      "commit": "4f7682ceafe573d07cd8a7d0b89908500e83227d",
-      "repo_url": "https://github.com/datawhalechina/hello-agents.git",
-      "project_id": null,
-      "index": {
-        "how": "local-build",
-        "hint": "公开仓库：clone 并 checkout 到上面的 commit，再 ingest（无合规限制）"
-      }
-    },
     "cockpit-agents-py": {
+      "role": "internal",
       "golden": "benches/golden/cockpit-agents-py",
       "repo_hint": "cockpit-agents-py",
       "commit": "febac6d2273bbd8828e34b81bd9c1b50753255ab",
@@ -38,7 +45,7 @@
       },
       "index": {
         "how": "internal-bundle",
-        "hint": "内部仓库：索引由出题机用 scripts/bench-bundle.sh pack 打包后经内网分发；无 key 的机器必须同时带 query-vectors.json 才能 --replay"
+        "hint": "内部靶场，**不在默认流程**：索引含公司内部源码，只能经内网获得（scripts/bench-bundle.sh pack/unpack）；公开服务器一律不参与"
       }
     }
   }
