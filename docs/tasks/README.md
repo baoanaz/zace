@@ -139,6 +139,12 @@
 | [TASK-096](TASK-096-预算计量与next_queries.md) | **预算计量修复（框架开销未计入 + 中文估算偏差）+ next_queries 从缺口出发** | 无（soft: TASK-095，同改 assembly.py） | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/` | pending |
 | [TASK-097](TASK-097-索引白名单.md) | **索引白名单**（第 0 层，强制包含 AI 指令文档 + `skills/` 目录；不影响内置剪枝） | TASK-037 ✅ | `core/zace_core/pipeline/ignore.py`、`parsing/markdown.py`、`client/src/ignore.rs`、`docs/handbook/` | pending |
 
+### Phase 4 补充（2026-09-14：WebUI 视觉改版）
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-098](TASK-098-WebUI复古风格改版.md) | **WebUI 复古博物院风格**（老纸底 `#f3e4c7` + 侧边栏布局 + 登录页双栏） | 无（soft: TASK-094，同改两页） | `web/src/{index.css,tailwind.config.js}`、`web/src/app/Layout.tsx`、`web/src/pages/LoginPage.tsx`、`web/src/components/ui.tsx` | pending |
+
 > **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
 > 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。
 > 若并行，则 095 不再碰 `assembly.py` 的 token 计量部分、096 不碰 `render.py`。
