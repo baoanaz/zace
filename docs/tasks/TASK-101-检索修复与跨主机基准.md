@@ -153,6 +153,26 @@ uv run python scripts/check_dependency_direction.py  → 依赖方向检查通�
 uv run pytest -o addopts="" -q                       → 1020 passed, 2 skipped
 ```
 
+### 追补（2026-09-15，用户实测暴露的真实缺陷）
+
+**用户复核发现两处**（均已修并实测）：
+
+1. **`--replay` 只有 `eval` 有，`search` 没有** → 照文档抄的命令直接报
+   `unrecognized arguments: --replay`。已抽出 `_add_vector_cache_args()` 让两个命令共用；
+2. **无 key 时 `search` 直接抛 `DimensionMismatchError`**（期望 384 / 实际 1024）——
+   因为"以索引指纹为准"只发生在 replay 路径里，于是离线机器连"随便问一句"都做不到。
+   已改为：真实 provider 不可用或维度与索引不符时**自动切离线**并打印提示；
+3. README 补"能力边界"表（谁能跑 `eval` / 谁能跑 `search`）与**合规第 0 条**
+   （bundle ≡ 源码副本，公司内部仓库的 bundle 不得进公开仓库/公网机）。
+
+**复核后的准确边界**：侧车是**缓存不是嵌入后端**——无 key 时 `eval --replay` 只对**预热过的
+query** 有效（32 条 golden 正好是预热的）；要"随便问"必须有 key（或本地模型，但换模型=改指纹）。
+
+**更省的替代方案**（已写入 README）：接收方若能自己 checkout 靶场，只需共享 key、本地索引一次
+（cockpit 约 2 分钟），完全不扩散正文，也不必传 17M。
+
+验收补充：`uv run pytest -o addopts="" -q` → **1021 passed, 2 skipped**（新增 1 条自动切离线的回归测试）。
+
 ### 未决问题（请编排者裁定）
 
 1. **字面量权重与 zace R5 的取舍**：字面量命中权重从 2.0 降到 1.0 是实测最优（保 R10 与 MRR，

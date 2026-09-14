@@ -77,3 +77,44 @@ def test_cached_only_provider_refuses_index_side(tmp_path) -> None:
     provider = CachedOnlyProvider(cache, model="api:x", dim=2)
     with pytest.raises(RuntimeError):
         provider.embed(["some text"])
+
+
+def test_search_without_key_falls_back_to_offline(tmp_path, monkeypatch) -> None:
+    """回归（用户实测暴露的真实缺陷）：无 key 的机器上 `search` **不该**报维度不匹配。
+
+    上一版只让 `--replay` 以索引指纹为准，于是无 key 的 `search` 直接抛
+    ``DimensionMismatchError``（期望 384 / 实际 1024）——离线机器连"随便问一句"都做不到。
+    现在改为：真实 provider 不可用或维度与索引不符时**自动切离线**并打印提示。
+    """
+    from zace_core.cli import app as cli_app
+    from zace_core.engine import Engine
+
+    class _FakeProvider:
+        def __init__(self, dim: int) -> None:
+            from zace_core.interfaces import EmbeddingProfile
+
+            self._profile = EmbeddingProfile(model_id="local:fake", dim=dim, max_input_tokens=512)
+
+        @property
+        def profile(self):
+            return self._profile
+
+        def embed(self, texts):  # pragma: no cover - 本用例不建索引
+            raise AssertionError("不该走到索引侧")
+
+        def embed_query(self, texts):  # pragma: no cover - 离线时不会被调用
+            raise AssertionError("不该走到真实 provider")
+
+    cache = PersistentQueryVectorCache(tmp_path / "qvec.json")
+    cache.put("q", [0.0] * 8)
+    cache.bind_identity(model="api:voyage-4-lite", dim=8)
+    cache.put_all()
+
+    engine = Engine.open(tmp_path / "data", provider=_FakeProvider(dim=384))
+    # 索引指纹 8 维 vs 真实 provider 384 维 → 必须自动切离线，而不是抛错
+    engine.set_query_cache(cache)
+    monkeypatch.setattr(
+        cli_app, "_index_embedding_fingerprint", lambda _engine, _pid: ("api:voyage-4-lite", 8)
+    )
+    cli_app._sync_cache_identity(engine, cache, project_id="p", replay=False)
+    assert isinstance(engine.provider, CachedOnlyProvider)

@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"ContextPack 预算上限（默认 {DEFAULT_MAX_TOKENS}）",
     )
     search.add_argument("--json", action="store_true", help="输出 CF-03 JSON（默认 Markdown）")
-    search.add_argument("--vector-cache", type=Path, default=None, help="查询向量侧车文件（同上）")
+    _add_vector_cache_args(search)
     search.set_defaults(handler=_cmd_search)
 
     status = subparsers.add_parser(
@@ -108,25 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(evaluate, repo_required=False)
     evaluate.add_argument("--golden", type=Path, required=True, help="golden 文件或目录（*.jsonl）")
     evaluate.add_argument("--report", type=Path, required=True, help="Markdown 报告输出路径")
-    evaluate.add_argument(
-        "--vector-cache",
-        type=Path,
-        default=None,
-        help=(
-            "查询向量侧车文件（TASK-101 §F）：存在则**复用**其中的 query 向量，"
-            "跑完后把新增的写回。用于跨主机/离线跑分——有 key 的机器预热一次，"
-            "其他机器带上这个文件即可复现同一口径。"
-        ),
-    )
-    evaluate.add_argument(
-        "--replay",
-        action="store_true",
-        help=(
-            "离线回放：只用 --vector-cache 里的向量，不调用任何 embedding 后端。"
-            "缓存未命中的用例会如实走'向量通道降级'并计入报告，不会静默降级。"
-            "需同时给 --vector-cache。"
-        ),
-    )
+    _add_vector_cache_args(evaluate)
     evaluate.set_defaults(handler=_cmd_eval)
     return parser
 
@@ -156,6 +138,34 @@ def _add_common(parser: argparse.ArgumentParser, *, repo_required: bool = True) 
         type=Path,
         default=None,
         help="数据根（默认 $ZACE_DATA_ROOT，否则 ~/.zace）",
+    )
+
+
+def _add_vector_cache_args(parser: argparse.ArgumentParser) -> None:
+    """``--vector-cache`` / ``--replay``（TASK-101 §F）：eval 与 search **共用**。
+
+    为什么要抽出来共用：上一版只给 ``eval`` 加了 ``--replay``，于是无 key 的机器连
+    "随便问一句"（``search``）都做不到——实测直接抛维度不匹配（期望 384 / 实际 1024），
+    因为"以索引指纹为准"只发生在 replay 路径里。共用后两个命令的离线语义完全一致。
+    """
+    parser.add_argument(
+        "--vector-cache",
+        type=Path,
+        default=None,
+        help=(
+            "查询向量侧车文件：存在则**复用**其中的 query 向量，跑完后把新增的写回。"
+            "用于跨主机/离线——有 key 的机器预热一次，其他机器带上即可复现同一口径。"
+            "**注意**：它是缓存、不是嵌入后端，只覆盖预热过的 query。"
+        ),
+    )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "离线回放：只用 --vector-cache 里的向量，不调用任何 embedding 后端，"
+            "并以**索引里的指纹**为准（因此不需要 key、不需要本地模型）。"
+            "未预热的 query 会如实走'向量通道降级'，不会静默降级。需同时给 --vector-cache。"
+        ),
     )
 
 
@@ -223,13 +233,20 @@ def _index_embedding_fingerprint(engine: Engine, project_id: str) -> tuple[str, 
 def _sync_cache_identity(
     engine: Engine, cache: PersistentQueryVectorCache, *, project_id: str, replay: bool = False
 ) -> None:
-    """校验侧车文件与当前 embedding 配置，一致则绑定；``--replay`` 时切成离线 provider。
+    """校验侧车文件与索引的 embedding 指纹，并决定本次用**真实 provider** 还是**离线 provider**。
 
-    两种模式的指纹来源不同（这是关键区别）：
+    判定顺序（每步都实测验过）：
 
-    - **预热**（默认）：以 ``engine.provider`` 的真实 profile 为准——它就是本次要调用的模型；
-    - **回放**（``--replay``）：以**索引里的指纹**为准（见 :func:`_index_embedding_fingerprint`），
-      全程不触碰真实 provider，因此不需要 key、不需要本地模型。
+    1. 指数以**索引**为准：``(model, dim)`` 从 ``index_config`` 读，不读环境变量
+       （目标机 env 会回落到默认本地模型：实测 384 维 vs 索引 1024 维）；
+    2. 侧车自证字段必须与索引一致，否则**拒绝**（拿别的模型的向量算 cosine，指标会莫名变差）；
+    3. 选 provider：
+       - ``--replay`` → 强制离线（不需要 key、不需要本地模型）；
+       - 否则尝试真实 provider：**配置维度与索引一致**→ 用它（正常路径）；
+       - 若真实 provider 取不到（无 key、模型缺失）或维度与索引不符 → **自动切离线**并打印提示。
+         为什么自动切而不是报错：无 key 的机器上"随便问一句"（``search``）本该可用——
+         上一版只让 ``--replay`` 走指纹路径，结果无 key 的 ``search`` 直接抛
+         ``DimensionMismatchError``（真实缺陷，已由本次修正）。
     """
     model, dim = _index_embedding_fingerprint(engine, project_id)
     mismatched = cache.identity_mismatch(model=model, dim=dim)
@@ -239,14 +256,24 @@ def _sync_cache_identity(
             f"索引为 {model} / {dim} 维。请用同一配置预热，不要混用不同模型的向量。"
         )
     cache.bind_identity(model=model, dim=dim)
-    if replay:
+
+    def _offline(reason: str) -> None:
         engine.set_provider(CachedOnlyProvider(cache, model=model, dim=dim))
-    elif engine.provider.profile.dim != dim:
-        raise EngineError(
-            f"当前 embedding 配置（{engine.provider.profile.model_id} / "
-            f"{engine.provider.profile.dim} 维）与索引（{model} / {dim} 维）不一致："
-            "请检查 embedding 配置后再跑分。"
+        print(
+            f"{PROG}: {reason}；已切到离线回放（只用侧车向量，未预热的查询会降级）",
+            file=sys.stderr,
         )
+
+    if replay:
+        _offline("--replay")
+        return
+    try:
+        real_dim = engine.provider.profile.dim
+    except EngineError as exc:  # 无 key / 本地模型缺失
+        _offline(f"embedding provider 不可用（{exc}）")
+        return
+    if real_dim != dim:
+        _offline(f"当前配置 {real_dim} 维、索引 {dim} 维（{model}）")
 
 
 def _resolved_repo(args: argparse.Namespace, *, required: bool = True) -> Path | None:
@@ -336,8 +363,16 @@ def _cmd_ingest(args: argparse.Namespace, factory: EngineFactory) -> int:
 
 
 def _cmd_search(args: argparse.Namespace, factory: EngineFactory) -> int:
-    engine = _engine(args, factory)
+    cache = _query_cache(args)
+    engine = _engine(args, factory, query_cache=cache)
     handle, _identity = _resolve_target(engine, args, repo_required=False)
+    if cache is not None:
+        _sync_cache_identity(
+            engine,
+            cache,
+            project_id=handle.project_id,
+            replay=bool(getattr(args, "replay", False)),
+        )
     trace = engine.search_with_trace(handle.project_id, args.query, args.max_tokens)
     if trace.degraded:
         print(f"warning: {trace.degraded_reason}", file=sys.stderr)
