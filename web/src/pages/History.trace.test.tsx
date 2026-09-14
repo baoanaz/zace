@@ -135,11 +135,29 @@ describe("§需求2 合并表格（TASK-100）", () => {
     // 两种类型都在同一张表里（这是用户要求的核心：不用切页签）。
     expect(within(table).getByText("仓库初始化")).toBeInTheDocument();
     expect(within(table).getByText("检索")).toBeInTheDocument();
-    // 初始化的行显示项目名与 chunks；检索的行显示 query 与 token。
-    expect(within(table).getByText("demo")).toBeInTheDocument();
+    // TASK-100（用户 2026-09-14）：项目与查询**分列**。
+    expect(within(table).getByText("项目")).toBeInTheDocument();
+    expect(within(table).getByText("查询")).toBeInTheDocument();
+    // 两行都属于 demo 项目，因此项目名出现两次（这正是分列后的正确表现）。
+    expect(within(table).getAllByText("demo").length).toBe(2);
     expect(within(table).getByText("令牌在哪里刷新")).toBeInTheDocument();
+    // 体量：初始化看 chunks，检索看 token。
     expect(within(table).getByText("4210 chunks")).toBeInTheDocument();
     expect(within(table).getByText("576 token")).toBeInTheDocument();
+  });
+
+  it("仓库初始化那行的「查询」列为 —（它不是提问，没有输入文本）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const initRow = within(table)
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("仓库初始化"))!;
+    const cells = within(initRow).getAllByRole("cell");
+    // 列序：时间 0 / 类型 1 / 项目 2 / 查询 3 / trace id 4 / 结果 5 / 耗时 6 / 体量 7 / 查看 8
+    expect(cells[2]).toHaveTextContent("demo");
+    expect(cells[3]).toHaveTextContent("—");
   });
 
   it("按时间倒序：较新的记录排在前面", async () => {
@@ -155,7 +173,7 @@ describe("§需求2 合并表格（TASK-100）", () => {
     expect(within(rows[1]!).getByText("仓库初始化")).toBeInTheDocument();
   });
 
-  it("「查看」按钮弹出输入输出详情（用户要求的可点击弹窗）", async () => {
+  it("「查看」按钮弹出两个可滚动代码块（Tool 输入 / 输出）", async () => {
     stubAll();
     renderPage(<HistoryPage />);
 
@@ -167,13 +185,37 @@ describe("§需求2 合并表格（TASK-100）", () => {
     await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
 
     const dialog = await screen.findByRole("dialog");
-    // 输入：查询全文。弹窗内标题与详情值都含该字符串，故用 getAllByText。
-    expect(within(dialog).getByText("输入")).toBeInTheDocument();
-    expect(within(dialog).getAllByText(/令牌在哪里刷新/).length).toBeGreaterThanOrEqual(1);
-    // 输出：证据概览（**不是** LLM 答案——answer 未落库，弹窗如实说明）。
-    expect(within(dialog).getByText("输出")).toBeInTheDocument();
+    // 用户 2026-09-14：两个代码块，标题写 Tool 输入 / Tool 输出（不是"输入内容"）。
+    expect(within(dialog).getByText("Tool 输入")).toBeInTheDocument();
+    expect(within(dialog).getByText("Tool 输出")).toBeInTheDocument();
+    // 代码块是 <pre>（可滚动容器）。
+    const pres = dialog.querySelectorAll("pre");
+    expect(pres.length).toBe(2);
+    expect(pres[0]?.textContent).toContain("令牌在哪里刷新");
+    expect(pres[0]?.className).toContain("overflow-auto");
+    // 底层元信息（用户："其他底层有证据数量啊，文档条数这种信息"）。
     expect(within(dialog).getByText("证据条数")).toBeInTheDocument();
+    expect(within(dialog).getByText("文档条数")).toBeInTheDocument();
+    // 诚实边界：answer 未落库时如实说明。
     expect(within(dialog).getByText(/答案正文未落库/)).toBeInTheDocument();
+  });
+
+  it("弹窗标题不重复输入内容（用户：太长了）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const searchRow = within(table)
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("令牌在哪里刷新"))!;
+    await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const heading = within(dialog).getByRole("heading");
+    // 标题只写类型 + 项目名，**不含**查询全文。
+    expect(heading.textContent).toContain("检索");
+    expect(heading.textContent).toContain("demo");
+    expect(heading.textContent).not.toContain("令牌在哪里刷新");
   });
 
   it("弹窗可关闭（Esc 与按钮都行）", async () => {

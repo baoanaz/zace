@@ -153,8 +153,11 @@ export function Layout({
       )}
 
       {/* 内容区：桌面为侧边栏让出 15rem（w-60）宽度。 */}
+      {/* TASK-100：内容区改成**流式宽度**（用户 2026-09-14："太窄了，很多东西变成两行"）——
+          表格类页面（历史/项目）天然需要横向空间，固定 64rem 会把列挤成换行。
+          上限定在 120rem 只是防止超宽屏上一行文字拉得过长（可读性）。 */}
       <div className="md:pl-60">
-        <main className="mx-auto max-w-5xl px-4 py-6 md:px-8">
+        <main className="mx-auto max-w-[120rem] px-4 py-6 md:px-8">
           <Outlet />
         </main>
       </div>

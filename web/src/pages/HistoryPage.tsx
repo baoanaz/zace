@@ -68,8 +68,10 @@ type ActivityRow =
       kind: "init";
       key: string;
       at: number;
-      title: string;
-      subtitle: string;
+      /** 项目名（两种类型都有——检索也属于某个项目）。 */
+      project: string;
+      /** 查询文本；仓库初始化没有它（`null` → 表格里显示 `—`）。 */
+      query: string | null;
       state: "ok" | "failed";
       durationMs: number;
       volume: { label: string; value: string };
@@ -82,8 +84,8 @@ type ActivityRow =
       kind: "search";
       key: string;
       at: number;
-      title: string;
-      subtitle: string;
+      project: string;
+      query: string | null;
       state: "ok" | "insufficient" | "failed" | "degraded";
       durationMs: number;
       volume: { label: string; value: string };
@@ -154,12 +156,12 @@ export function HistoryPage() {
     const initRows: ActivityRow[] = runs
       .filter(({ run }) => run.finishedAt >= since)
       .map(({ projectId, run }) => ({
-        kind: "init",
+        kind: "init" as const,
         key: `init-${projectId}-${run.runId}`,
         at: run.finishedAt,
-        title: nameOf(projectId),
-        subtitle: "仓库初始化",
-        state: run.state === "done" ? "ok" : "failed",
+        project: nameOf(projectId),
+        query: null,
+        state: run.state === "done" ? ("ok" as const) : ("failed" as const),
         durationMs: run.durationMs,
         volume: { label: "chunks", value: String(run.chunks) },
         traceId: null,
@@ -178,11 +180,11 @@ export function HistoryPage() {
     const searchRows: ActivityRow[] = usage.recent
       .filter((record) => record.createdAt >= since)
       .map((record) => ({
-        kind: "search",
+        kind: "search" as const,
         key: `search-${record.queryId}`,
         at: record.createdAt,
-        title: record.query,
-        subtitle: "检索",
+        project: nameOf(record.projectId),
+        query: record.query,
         state: searchState(record),
         durationMs: record.latencyMs,
         volume: { label: "token", value: String(record.usedTokens) },
@@ -261,7 +263,8 @@ export function HistoryPage() {
               <tr className="text-left text-xs text-ink-muted">
                 <th className="px-4 py-2 font-normal">时间</th>
                 <th className="px-4 py-2 font-normal">类型</th>
-                <th className="px-4 py-2 font-normal">项目 / 查询</th>
+                <th className="px-4 py-2 font-normal">项目</th>
+                <th className="px-4 py-2 font-normal">查询</th>
                 <th className="px-4 py-2 font-normal">trace id</th>
                 <th className="px-4 py-2 font-normal">结果</th>
                 <th className="px-4 py-2 font-normal">耗时</th>
@@ -276,8 +279,24 @@ export function HistoryPage() {
                   <td className="px-4 py-2 text-xs">
                     <KindBadge kind={row.kind} />
                   </td>
-                  <td className="max-w-xs truncate px-4 py-2" title={row.title}>
-                    {row.title}
+                  {/* 项目列：两种类型都显示项目名（初始化必有，检索也有 projectId）。 */}
+                  <td className="whitespace-nowrap px-4 py-2">{row.project}</td>
+                  {/**
+                   * 查询列（TASK-100，用户 2026-09-14）：
+                   * - 检索 → 输入文本的前几个字，帮用户认出"刚才问的是哪一次"；
+                   * - 仓库初始化 → `—`（它不是提问，没有输入文本）。
+                   *
+                   * 为什么截断：完整的 query 可能上千字，写成多行会把整张表拉爆；
+                   * 完整内容在「查看」弹窗里（用户明确要求）。
+                   */}
+                  <td className="max-w-[28rem] px-4 py-2">
+                    {row.query ? (
+                      <span className="block truncate" title={row.query}>
+                        {row.query}
+                      </span>
+                    ) : (
+                      <span className="text-ink-muted">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs">
                     {row.traceId ? (
@@ -357,11 +376,16 @@ function searchState(record: UsageRecord): "ok" | "insufficient" | "failed" | "d
 }
 
 /**
- * 详情弹窗（用户 2026-09-14："按键的时候点击可以弹个小窗，看到用户的输入，
- * 以及 LLM 的输出"）。
+ * 详情弹窗（用户 2026-09-14 两次反馈后的最终形态）：
+ *
+ * - **两个可滚动代码块**（`<pre>` + `overflow-auto` + `max-h`）分别包住 Tool 输入与输出；
+ *   长 query 不再撑爆弹窗，也不用截断（内部出滚动条）；
+ * - **标题不再写完整输入**（用户：“标题就不要写输入内容了，太长了”）：
+ *   只写类型 + 时间 + 耗时，输入本身在代码块里；
+ * - **元信息放在底层**（证据条数/文档条数/模式等）——用户：“其他底层有证据数量啊，
+ *   文档条数这种信息”。
  *
  * 用原生 `<dialog>`（与 `ConfirmDialog` 同一理由：焦点陷阱、Esc、aria-modal 都是浏览器给的）。
- * 内容分两栏：输入 / 输出——**没有 LLM answer 时如实说明**，不留空白也不编造。
  */
 function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement | null>(null);
@@ -380,28 +404,31 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
         event.preventDefault();
         onClose();
       }}
-      className="w-full max-w-2xl rounded-lg border border-ink-line bg-paper-card p-0 shadow-xl backdrop:bg-ink-primary/40"
+      className="w-[min(90vw,52rem)] rounded-lg border border-ink-line bg-paper-card p-0 shadow-xl backdrop:bg-ink-primary/40"
     >
       {row !== null && (
         <div className="p-4">
+          {/* 标题：只写"是什么·什么时候·多久"，不重复输入内容。 */}
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold text-ink-primary">
-              <KindBadge kind={row.kind} /> {row.title}
+            <h2 className="flex items-baseline gap-2 text-sm font-semibold text-ink-primary">
+              <KindBadge kind={row.kind} />
+              <span>{row.project}</span>
             </h2>
             <span className="text-xs text-ink-muted">
               {formatTime(row.at)} · {formatDuration(row.durationMs)}
             </span>
           </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <DetailSection title="输入" items={row.input} />
-            <DetailSection title="输出" items={row.output} />
+          <div className="mt-3 space-y-3">
+            <CodeBlock label="Tool 输入" text={inputText(row)} />
+            <CodeBlock label="Tool 输出" text={outputText(row)} />
           </div>
 
+          {/** 底层元信息：证据条数 / 文档条数 / 模式 / confidence。 */}
+          <MetaRow row={row} />
+
           {row.note && (
-            <p className="mt-3 rounded border border-ink-line bg-paper-base px-3 py-2 text-xs text-ink-muted">
-              {row.note}
-            </p>
+            <p className="mt-2 text-xs text-ink-muted">{row.note}</p>
           )}
 
           <div className="mt-4 flex justify-end gap-2">
@@ -420,24 +447,47 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
   );
 }
 
-function DetailSection({
-  title,
-  items,
-}: {
-  title: string;
-  items: { label: string; value: string }[];
-}) {
+/**
+ * 可滚动代码块（用户：“两个代码块，可以下拉滑动条的那种”）。
+ *
+ * `max-h-[16rem]`（小屏）/`max-h-[22rem]`（大屏）+ `overflow-auto`：内容短时自然高度，
+ * 长时内部出滚动条（**不出现横向撑破弹窗**：`whitespace-pre-wrap` 让长行自动折行）。
+ */
+function CodeBlock({ label, text }: { label: string; text: string }) {
   return (
-    <section>
-      <h3 className="mb-2 text-xs font-medium text-ink-muted">{title}</h3>
-      <dl className="space-y-1">
-        {items.map((item) => (
-          <div key={item.label} className="border-b border-dashed border-ink-line/60 pb-1">
-            <dt className="text-xs text-ink-muted">{item.label}</dt>
-            <dd className="break-words text-sm text-ink-primary">{item.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+    <div>
+      <div className="mb-1 text-xs text-ink-muted">{label}</div>
+      <pre className="max-h-64 overflow-auto rounded border border-ink-line bg-paper-base p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-primary">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+/** Tool 输入的纯文本形态（供代码块展示）。 */
+function inputText(row: ActivityRow): string {
+  return row.input.map((item) => `${item.label}：${item.value}`).join("\n");
+}
+
+/** Tool 输出的纯文本形态（供代码块展示）。 */
+function outputText(row: ActivityRow): string {
+  return row.output.map((item) => `${item.label}：${item.value}`).join("\n");
+}
+
+/** 底层元信息行：一行小字，不受代码块滚动影响。 */
+function MetaRow({ row }: { row: ActivityRow }) {
+  return (
+    <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-ink-line/60 pt-2">
+      {row.output.map((item) => (
+        <div key={item.label} className="flex items-baseline gap-1.5">
+          <dt className="text-xs text-ink-muted">{item.label}</dt>
+          <dd className="text-xs text-ink-primary">{item.value}</dd>
+        </div>
+      ))}
+      <div className="flex items-baseline gap-1.5">
+        <dt className="text-xs text-ink-muted">{row.volume.label}</dt>
+        <dd className="text-xs text-ink-primary">{row.volume.value}</dd>
+      </div>
+    </dl>
   );
 }
