@@ -125,7 +125,7 @@
 | [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（60-100 条真实用例 + 指标设计；为 TASK-050 建立可信标尺） | 无 | `benches/**` | pending |
 | [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
-| [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | pending（**可开工**） |
+| [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
 
 ### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）
 

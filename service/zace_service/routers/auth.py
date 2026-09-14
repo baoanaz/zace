@@ -103,6 +103,22 @@ def effective_config(settings: Any, *, details: bool) -> dict[str, Any]:
     return {
         "embedding": _embedding_config(details=details),
         "llm": _llm_config(settings, details=details),
+        "storage": _storage_config(settings),
+    }
+
+
+def _storage_config(settings: Any) -> dict[str, Any]:
+    """存储配额生效值（TASK-094 §B1/§B4；只读展示，**没有任何 secret 面**）。
+
+    ``perProjectBytes`` / ``perUserBytes`` 为 ``0`` 表示**不限**（前端据此只显示已用、不画进度条）。
+    这三个数与 :mod:`zace_service.quota` 的判定**同源**（都来自 ``Settings``），因此设置页显示的
+    “上限”与实际告警阈值不会漂移。
+    """
+    return {
+        "perProjectBytes": int(settings.storage_limit_per_project_bytes),
+        "perUserBytes": int(settings.storage_limit_per_user_bytes),
+        "warnRatio": float(settings.storage_warn_ratio),
+        "enabled": bool(settings.storage_quota_enabled),
     }
 
 

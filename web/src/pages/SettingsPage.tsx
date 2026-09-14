@@ -9,6 +9,9 @@
  *    未登录的云端只拿得到"配了没"，因此页面如实说明"登录后可看模型名"，
  *    而不是假装读到空值。
  *
+ * TASK-094 §B1：追加「存储配额（只读）」卡片（单项目/单用户上限 + 告警阈值），
+ * 与后端的 `Settings` 同源（设置页显示的上限与实际告警阈值不会漂移）。
+ *
  * 为什么扩展现有 `/api/meta` 而不是新增只读端点：配置展示是**首屏信息**的一部分
  * （与部署形态同源，都由 `Settings` 计算），复用它可以零新增路径、零契约文件改动，
  * 且服务端能按"本地模式或已登录"精细门禁；新增端点还要动 CF-05 的路径白名单。
@@ -18,6 +21,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { type DeploymentMeta, getMeta } from "../api/client";
 import { Card, ErrorBlock, KeyValue, LoadingBlock } from "../components/ui";
+import { formatBytes } from "./DashboardPage";
 
 export function SettingsPage() {
   const [meta, setMeta] = useState<DeploymentMeta | null>(null);
@@ -50,7 +54,7 @@ export function SettingsPage() {
     return <LoadingBlock text="正在读取服务配置…" />;
   }
 
-  const { embedding, llm } = meta.config;
+  const { embedding, llm, storage } = meta.config;
 
   return (
     <div className="space-y-5">
@@ -136,6 +140,47 @@ export function SettingsPage() {
               </code>
             ))}
           </p>
+        )}
+      </Card>
+
+      <Card title="存储配额（只读）">
+        {storage === undefined ? (
+          <p className="text-sm text-slate-500">
+            后端未提供配额配置（旧版本服务）——升级后此处会显示单项目/单用户上限。
+          </p>
+        ) : (
+          <>
+            <KeyValue
+              items={[
+                [
+                  "单项目上限",
+                  storage.perProjectBytes === 0 ? (
+                    <span className="text-slate-400">不限</span>
+                  ) : (
+                    <span>{formatBytes(storage.perProjectBytes)}</span>
+                  ),
+                ],
+                [
+                  "单用户上限",
+                  storage.perUserBytes === 0 ? (
+                    <span className="text-slate-400">不限</span>
+                  ) : (
+                    <span>{formatBytes(storage.perUserBytes)}</span>
+                  ),
+                ],
+                ["告警阈值", <span>{Math.round(storage.warnRatio * 100)}%</span>],
+              ]}
+            />
+            <p className="mt-2 text-xs text-slate-500">
+              达到阈值的 {Math.round(storage.warnRatio * 100)}% 时，检索工具会在**返回内容里**提醒
+              Agent 转告用户去控制台删项目；**超限不阻断**（新索引与检索照常）。
+              改这三项请设环境变量后重启：
+              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES</code>
+              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_LIMIT_PER_USER_BYTES</code>
+              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_WARN_RATIO</code>
+              （置 0 = 不限）。
+            </p>
+          </>
         )}
       </Card>
 

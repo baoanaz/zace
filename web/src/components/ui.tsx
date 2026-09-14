@@ -1,6 +1,6 @@
 /** 通用展示组件：徽标 / 卡片 / 错误块 / 复制按钮（无请求，纯展示）。 */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { errorHint } from "../api/client";
 import type { ProgressTone } from "./progress";
@@ -127,6 +127,79 @@ export function KeyValue({ items }: { items: [string, ReactNode][] }) {
 
 export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
   return <p className="py-6 text-center text-sm text-slate-500">{text}</p>;
+}
+
+/**
+ * 二次确认弹窗（TASK-094 §D）：破坏性操作前必须让用户明确看过后果。
+ *
+ * 为什么用原生 `<dialog>` 而不是自造遮罩层：浏览器已经给了焦点陷阱、`Esc` 关闭与
+ * `aria-modal` 语义，自造一套的常见后果是“键盘用户被卡在遮罩里”与“Esc 不生效”。
+ *
+ * 调用方负责挂载/卸载本组件（`open` 控制）；**取消按钮不发任何请求**——那是调用方必须
+ * 自己保证的（本组件只回调 `onCancel`/`onConfirm`，不做业务判断）。
+ */
+export function ConfirmDialog({
+  open,
+  title,
+  confirmLabel = "确认",
+  cancelLabel = "取消",
+  busy = false,
+  onConfirm,
+  onCancel,
+  children,
+}: {
+  open: boolean;
+  title: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement | null>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog === null) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      // Esc 关闭也要走 onCancel（否则调用方以为弹窗还开着，状态不同步）。
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!busy) onCancel();
+      }}
+      className="max-w-lg rounded-lg border border-slate-200 p-0 shadow-xl backdrop:bg-slate-900/40"
+    >
+      <div className="p-4">
+        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        <div className="mt-2 space-y-2 text-sm text-slate-600">{children}</div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {busy ? "处理中…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
 }
 
 /**

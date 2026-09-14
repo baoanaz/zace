@@ -112,23 +112,37 @@ CREATE TABLE IF NOT EXISTS query_audit (
   citation_coverage REAL,
   llm_latency_ms    INTEGER,
   answer_tokens     INTEGER,
+  request_id        TEXT,
   evidence_json     TEXT NOT NULL DEFAULT '[]',
   created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_project ON query_audit(project_id, created_at DESC);
 """
 
-#: ``query_audit`` 的**增量列**（TASK-088 §E）：``(列名, 列类型)``。
+#: 迁移后要确保存在的索引（**必须在 ALTER 之后建**：旧库里还没有该列，放在 ``_SCHEMA`` 里会在
+#: ``executescript`` 阶段以 ``no such column: request_id`` 直接失败——这正是本卡实施时实测踩到的）。
+_AUDIT_INDEXES: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_audit_request ON query_audit(request_id)",
+)
+
+
+#: ``query_audit`` 的**增量列**（TASK-088 §E 引入本模块的第一条 ALTER 路径；TASK-094 §C 追加
+#: ``request_id``）：``(列名, 列类型)``。
 #:
 #: 为什么要迁移而不是只改 DDL：TASK-084 已经在用户机上建好了表，而 ``CREATE TABLE IF NOT
 #: EXISTS`` 对**既有库**毫无作用（表已存在）。本模块原先没有 ALTER 先例，因此这里建一条最小
 #: 安全路径：``PRAGMA table_info`` 检查后再 ``ALTER TABLE ADD COLUMN``——可重复执行、
 #: **只加列不改列**；新列全部可空，旧行留 ``NULL``（"没测过"就是 ``NULL``，不编造 0）。
+#:
+#: ``request_id`` 为 ``NULL`` 表示"这条审计来自落库时还没有 requestId 的旧版本"或"调用方
+#: 没绑定"（如离线批量写库），**不填一个编造的 id**——历史页据此显示 ``—``。
 _AUDIT_COLUMNS: tuple[tuple[str, str], ...] = (
     #: LLM 调用耗时（毫秒）；未接 LLM 的降级路径为 NULL。
     ("llm_latency_ms", "INTEGER"),
     #: 答案 token 估算；降级路径为 NULL。
     ("answer_tokens", "INTEGER"),
+    #: 请求 trace id（TASK-094 §C：与响应头 ``X-Request-Id`` / 日志的 ``requestId`` 同源）。
+    ("request_id", "TEXT"),
 )
 
 
@@ -220,6 +234,8 @@ class QueryAuditRecord:
     citation_coverage: float | None
     llm_latency_ms: int | None
     answer_tokens: int | None
+    #: 请求 trace id（TASK-094 §C）；``None`` = 这条记录落库时没有 requestId（旧版本/未绑定）。
+    request_id: str | None
     created_at: int
 
     def to_json(self) -> dict[str, Any]:
@@ -239,6 +255,8 @@ class QueryAuditRecord:
             # TASK-088 §E：LLM 耗时与答案 token（未走 LLM 的请求为 None，"没测过"不是 0）。
             "llmLatencyMs": self.llm_latency_ms,
             "answerTokens": self.answer_tokens,
+            # TASK-094 §C：历史页展示它，用户报错时拿它去查服务端日志（TASK-090 的端点）。
+            "requestId": self.request_id,
             "createdAt": self.created_at,
         }
 
@@ -684,11 +702,16 @@ class MetaDB:
         citation_coverage: float | None = None,
         llm_latency_ms: int | None = None,
         answer_tokens: int | None = None,
+        request_id: str | None = None,
         evidence: Sequence[Mapping[str, Any]] = (),
         user_id: str | None = None,
         now: int | None = None,
     ) -> int:
         """写一条查询审计（``evidence`` 只存 ``{id,path,lines,tier,score}`` 元数据）。
+
+        ``request_id``（TASK-094 §C）是**当前请求的 trace id**（与响应头 ``X-Request-Id`` 同源）；
+        缺省 ``None`` 表示调用方未绑定（旧调用方/离线写库）——旧行因此可以看出"这条没有 trace"，
+        而不是被填上一个编造的 id。
 
         **调用方必须自己 try/except**：审计是旁路，记不上账不影响检索（TASK-064 §C）。
         """
@@ -699,8 +722,9 @@ class MetaDB:
             cursor = conn.execute(
                 "INSERT INTO query_audit (project_id, user_id, mode, query, answerable,"
                 " confidence, degraded, latency_ms, evidence_count, docs_count, used_tokens,"
-                " citation_coverage, llm_latency_ms, answer_tokens, evidence_json, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " citation_coverage, llm_latency_ms, answer_tokens, request_id, evidence_json,"
+                " created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     project_id,
                     user_id,
@@ -716,6 +740,7 @@ class MetaDB:
                     citation_coverage,
                     llm_latency_ms,
                     answer_tokens,
+                    request_id,
                     json.dumps([dict(item) for item in evidence], ensure_ascii=False),
                     created,
                 ),
@@ -809,6 +834,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name, sql_type in _AUDIT_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE query_audit ADD COLUMN {name} {sql_type}")
+    # 索引在列存在之后建（见 _AUDIT_INDEXES 的注释：放 _SCHEMA 里会让旧库打开直接失败）。
+    for statement in _AUDIT_INDEXES:
+        conn.execute(statement)
 
 
 def _user(row: sqlite3.Row) -> User:
@@ -852,5 +880,6 @@ def _audit_record(row: sqlite3.Row) -> QueryAuditRecord:
         citation_coverage=row["citation_coverage"],
         llm_latency_ms=row["llm_latency_ms"],
         answer_tokens=row["answer_tokens"],
+        request_id=row["request_id"],
         created_at=int(row["created_at"]),
     )

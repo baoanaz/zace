@@ -9,6 +9,10 @@
  * TASK-083：空态改由 `EmptyState` 渲染；并且**不再吞掉单项目读失败**——旧实现
  * 用 `catch { return [] }` 把"某个项目读历史失败"渲染成"还没有索引记录"，
  * 让后端故障看起来像"还没用"。现在失败的项目会与成功数据一起如实列出。
+ *
+ * TASK-094 §C：使用记录表加「trace id」列（可复制）。用户报错后拿它去查服务端日志
+ * （TASK-090 的 `/api/request-log/{requestId}`），从而把"历史页看到的这一次查询"
+ * 与"服务端那一次请求的完整链路"关联起来。旧记录（升级前写下的）没有该值 → 显示 `—`。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -22,7 +26,7 @@ import {
   getUsageSummary,
   listProjects,
 } from "../api/client";
-import { EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
 import { formatDuration, formatTime } from "./DashboardPage";
 
 type Tab = "index" | "usage";
@@ -297,6 +301,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
             <thead>
               <tr className="text-left text-xs text-slate-500">
                 <th className="px-4 py-2 font-normal">时间</th>
+                <th className="px-4 py-2 font-normal">trace id</th>
                 <th className="px-4 py-2 font-normal">模式</th>
                 <th className="px-4 py-2 font-normal">查询</th>
                 <th className="px-4 py-2 font-normal">结果</th>
@@ -310,6 +315,19 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
                 <tr key={record.queryId} className="border-t border-slate-100">
                   <td className="px-4 py-2 text-xs text-slate-500">
                     {formatTime(record.createdAt)}
+                  </td>
+                  {/* trace id：可复制；旧记录（后端升级前写的）没有它 → —。 */}
+                  <td className="px-4 py-2 text-xs">
+                    {record.requestId ? (
+                      <span className="inline-flex items-center gap-1">
+                        <code className="font-mono text-slate-600">{record.requestId}</code>
+                        <CopyButton text={record.requestId} label="复制" />
+                      </span>
+                    ) : (
+                      <span className="text-slate-400" title="该记录落库时尚未记录 trace id">
+                        —
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs">{record.mode}</td>
                   <td className="px-4 py-2">{record.query}</td>
@@ -336,6 +354,8 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
           </table>
           <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
             审计只保存证据的元数据（id/路径/行号/分层/分数），**不含源码内容**。
+            「trace id」是这次查询的请求标识：出现问题时**把这个 id 报给管理员**，
+            可在服务端按它回溯完整日志（含错误堆栈）。
           </p>
         </div>
       )}

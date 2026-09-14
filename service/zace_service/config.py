@@ -46,6 +46,9 @@ __all__ = [
     "DEFAULT_LOG_MAX_BYTES",
     "DEFAULT_LOG_RETENTION_DAYS",
     "DEFAULT_PORT",
+    "DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES",
+    "DEFAULT_STORAGE_LIMIT_PER_USER_BYTES",
+    "DEFAULT_STORAGE_WARN_RATIO",
     "LOCAL_MODE_ENV",
     "LOCAL_RESCAN_INTERVAL_ENV",
     "LOG_BACKUP_COUNT_ENV",
@@ -54,6 +57,9 @@ __all__ = [
     "LOG_RETENTION_DAYS_ENV",
     "PROJECTS_DIRNAME",
     "REGISTER_OPEN_ENV",
+    "STORAGE_LIMIT_PER_PROJECT_ENV",
+    "STORAGE_LIMIT_PER_USER_ENV",
+    "STORAGE_WARN_RATIO_ENV",
     "Settings",
 ]
 
@@ -82,6 +88,31 @@ DEFAULT_LOG_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_LOG_BACKUP_COUNT = 9
 #: 默认保留 14 天（用户报错往往隔几天才反馈，太短查不到、太长无必要）。
 DEFAULT_LOG_RETENTION_DAYS = 14
+
+# ------------------------------------------------------------------ 存储配额（TASK-094 §B1）
+#
+# 默认值由用户 2026-09-14 拍板；**实测依据**（编排者测量，两仓库外推，样本很少）：
+#
+# | 仓库 | 可索引文件 | chunks | 索引占用 |
+# |---|---|---|---|
+# | cockpit-agents-py | 287 | 3416 | 29 MB |
+# | zace 自身 | 399 | 4931 | 52 MB |
+#
+# 换算率 ≈ 10 KB / chunk → 单项目 500 MB ≈ 50,000 chunks，对中型项目（29 MB）有 17 倍余量。
+# 本卡实施时在真机复测：cockpit-agents 索引目录 **28.05 MiB / 3416 chunks**（≈ 8.6 KB/chunk），
+# 与上述外推一致。**不要为了"让默认值好看"而调它**——真实分布要靠上线后观察（TASK-093）。
+#: 单项目存储上限（字节，默认 500 MB）。
+STORAGE_LIMIT_PER_PROJECT_ENV = "ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES"
+#: 单用户存储总额上限（字节，默认 2 GB）。
+STORAGE_LIMIT_PER_USER_ENV = "ZACE_STORAGE_LIMIT_PER_USER_BYTES"
+#: 告警阈值比例（相对上限；默认 0.8 = 80%）。
+STORAGE_WARN_RATIO_ENV = "ZACE_STORAGE_WARN_RATIO"
+#: 默认单项目上限：500 MiB。
+DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES = 500 * 1024 * 1024
+#: 默认单用户上限：2 GiB（40G VPS 约容纳 20 个活跃用户）。
+DEFAULT_STORAGE_LIMIT_PER_USER_BYTES = 2 * 1024 * 1024 * 1024
+#: 默认告警阈值：上限的 80%（留出反应时间，而不是撞线才提醒）。
+DEFAULT_STORAGE_WARN_RATIO = 0.8
 
 # ------------------------------------------------------------------ LLM 总结（TASK-088）
 # 用户只需给三个必填项；下面三项是内置默认值（可覆盖），口径见 Module/04 §2 参数表。
@@ -131,7 +162,12 @@ class Settings:
     log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
     log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
     log_retention_days: int = DEFAULT_LOG_RETENTION_DAYS
-
+    #: 存储配额（TASK-094 §B1）：**0 表示不限**（本地开发与测试用；配额判定恒为 ``ok``）。
+    storage_limit_per_project_bytes: int = DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES
+    storage_limit_per_user_bytes: int = DEFAULT_STORAGE_LIMIT_PER_USER_BYTES
+    #: 告警阈值比例（相对上限）。比例语义下**0 不表示不限**，因此只接受 (0, 1]；
+    #: 想关掉告警就设上限为 0（那样配额恒为 ``ok``）。
+    storage_warn_ratio: float = DEFAULT_STORAGE_WARN_RATIO
     #: LLM 总结（TASK-088）：三个必填项＋三个可覆盖默认值。
     answer_base_url: str | None = None
     answer_api_key: str | None = None
@@ -166,6 +202,11 @@ class Settings:
         if not self.answer_model:
             missing.append(ANSWER_MODEL_ENV)
         return tuple(missing)
+
+    @property
+    def storage_quota_enabled(self) -> bool:
+        """是否有任何一份配额生效（两个上限都为 0 → 不限，判定恒为 ``ok``）。"""
+        return self.storage_limit_per_project_bytes > 0 or self.storage_limit_per_user_bytes > 0
 
     @property
     def meta_db_path(self) -> Path:
@@ -210,6 +251,22 @@ class Settings:
                 LOG_RETENTION_DAYS_ENV,
                 default=DEFAULT_LOG_RETENTION_DAYS,
             ),
+            # TASK-094 §B1：配额（0 = 不限；非法/负数显式报错，与日志窗口同纪律）。
+            storage_limit_per_project_bytes=_as_non_negative_int(
+                source.get(STORAGE_LIMIT_PER_PROJECT_ENV),
+                STORAGE_LIMIT_PER_PROJECT_ENV,
+                default=DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES,
+            ),
+            storage_limit_per_user_bytes=_as_non_negative_int(
+                source.get(STORAGE_LIMIT_PER_USER_ENV),
+                STORAGE_LIMIT_PER_USER_ENV,
+                default=DEFAULT_STORAGE_LIMIT_PER_USER_BYTES,
+            ),
+            storage_warn_ratio=_as_ratio(
+                source.get(STORAGE_WARN_RATIO_ENV),
+                STORAGE_WARN_RATIO_ENV,
+                default=DEFAULT_STORAGE_WARN_RATIO,
+            ),
             answer_base_url=(source.get(ANSWER_BASE_URL_ENV) or "").strip() or None,
             answer_api_key=(source.get(ANSWER_API_KEY_ENV) or "").strip() or None,
             answer_model=(source.get(ANSWER_MODEL_ENV) or "").strip() or None,
@@ -243,7 +300,24 @@ def _as_bool(raw: str | None, name: str, *, default: bool) -> bool:
 
 
 def _as_int(raw: str | None, name: str, *, default: int) -> int:
-    """解析非负整数（与 :func:`_as_float` 同纪律：非法值显式报错，不静默取默认）。"""
+    """解析**正整数**（与 :func:`_as_float` 同纪律：非法值显式报错，不静默取默认）。
+
+    只用于"0 无意义且危险"的项（如日志单文件上限：0 会变成无限增长）。
+    允许 0 的项（配额）用 :func:`_as_non_negative_int`。
+    """
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"环境变量 {name} 必须 ≥ 1，收到 {raw!r}") from None
+    return value
+
+
+def _as_non_negative_int(raw: str | None, name: str, *, default: int) -> int:
+    """解析**非负整数**（``0`` 是合法且有意义的值：配额里表示"不限"）。"""
     if raw is None or not raw.strip():
         return default
     try:
@@ -251,7 +325,27 @@ def _as_int(raw: str | None, name: str, *, default: int) -> int:
     except ValueError:
         raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
     if value < 0:
-        raise ValueError(f"环境变量 {name} 不能为负（0 表示禁用），收到 {raw!r}")
+        raise ValueError(f"环境变量 {name} 不能为负（0 表示不限），收到 {raw!r}")
+    return value
+
+
+def _as_ratio(raw: str | None, name: str, *, default: float) -> float:
+    """解析 ``(0, 1]`` 的比例（告警阈值）。
+
+    为什么不允许 0：比例语义下 ``0`` 会被读成"用量一超过 0 就告警"（正好相反），
+    静默接受就制造了一个反向开关。要关告警请把**上限**设为 0（配额恒 ``ok``）。
+    """
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"环境变量 {name} 必须是数字，收到 {raw!r}") from None
+    if not 0 < value <= 1:
+        raise ValueError(
+            f"环境变量 {name} 必须落在 (0, 1] 区间（0 会被读成「一超就告警」；"
+            f"要关闭告警请把配额上限设为 0），收到 {raw!r}"
+        )
     return value
 
 
@@ -264,16 +358,4 @@ def _as_float(raw: str | None, name: str, *, default: float) -> float:
         raise ValueError(f"环境变量 {name} 必须是数字，收到 {raw!r}") from None
     if value < 0:
         raise ValueError(f"环境变量 {name} 不能为负（0 表示禁用），收到 {raw!r}")
-    return value
-
-
-def _as_int(raw: str | None, name: str, *, default: int) -> int:
-    if raw is None or not raw.strip():
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
-    if value < 1:
-        raise ValueError(f"环境变量 {name} 必须 ≥ 1，收到 {raw!r}")
     return value
