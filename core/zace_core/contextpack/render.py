@@ -5,6 +5,15 @@ Suggested Next Queries / Meta。TASK-087 在 ``Missing Evidence`` 与 ``Meta`` �
 ``Suggested Next Queries``（D-24 的"有用的失败"：先给证据、再给缺口、最后给下一步该问什么），
 ``next_queries`` 为空时**整节不渲染**（空节白占 token）。
 
+TASK-095 §B：``### Code`` 节**内部**按置信度分 ``#### Core`` / ``#### Related`` / ``#### Tests``
+（四级标题，**不新增顶层节**；Flow / Docs 节不分组）。分组是**确定性**的（无 LLM）：
+
+- ``Core``：``score ≥ top1 × 0.70`` 且 ``type != test``；
+- ``Related``：``score ≥ top1 × 0.50`` 且 ``type != test``（即闸门内但非 Core）；
+- ``Tests``：``type == test``（**无论分数**）——直接解决"测试文件因字面匹配排第一"，
+  **不动 rerank 分**，只在渲染层归类；
+- 空组不渲染；``[E*]`` 的编号与顺序**不因分组而重排**（编号 = 装填顺序，D-21）。
+
 引用格式 ``[E*]`` / ``[F*]`` 与合同一致（04 citation 的锚点）；代码带行号（agent 可直接对齐
 Edit）；stale 文档带 ``⚠`` 行；budget/confidence/index 状态入 ``Meta``。
 
@@ -18,11 +27,23 @@ Edit）；stale 文档带 ``⚠`` 行；budget/confidence/index 状态入 ``Meta
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 
 from zace_core.contextpack.assembly import elision_note, has_elision_note
 from zace_core.types import ContextPack, EvidenceItem, Freshness
 
 __all__ = ["render_evidence_for_prompt", "render_markdown"]
+
+#: TASK-095 §B-2：``#### Core`` 的门槛（``score ≥ top1 × 本值`` 且非 test）。
+#: 与 `assembly.BudgetConfig.score_ratio`（默认 0.50，装填闸门）**同值域但用途不同**：
+#: 闸门决定"装不装"，本常量只决定"装进来的归哪一组"。两者都是 0.50/0.70 的实测取值，
+#: 测量过程见 TASK-095 执行记录；**不要**用 golden smoke 集去优化它们（R29/R30 冻结）。
+CORE_SCORE_RATIO = 0.70
+
+#: Code 节内部分组的组名（按渲染顺序；与 §B-1 的示例逐字一致）。
+_CORE_HEADING = "#### Core"
+_RELATED_HEADING = "#### Related"
+_TESTS_HEADING = "#### Tests"
 
 
 def render_markdown(pack: ContextPack, *, now: int | None = None) -> str:
@@ -49,12 +70,62 @@ def render_evidence_for_prompt(pack: ContextPack) -> str:
 
 
 def _code_section(pack: ContextPack, *, heading: str = "### Code") -> list[str]:
+    """``### Code`` 节。
+
+    TASK-095 §B：节内按置信度分 ``#### Core`` / ``#### Related`` / ``#### Tests``。分组
+    只影响**标题与分组归属**，不改任何一条证据的正文或编号——三个组的拼接顺序
+    （Core → Related → Tests）保证 ``[E*]`` 仍按装填顺序递增（编号 = 装填顺序，D-21）。
+    空组不渲染（全是 Core 时不出现 ``#### Related`` / ``#### Tests``）。
+    """
     if not pack.evidence:
         return []
     lines = [heading]
-    for item in pack.evidence:
-        lines.extend(_evidence_lines(item))
+    for group_heading, items in _group_evidence(pack.evidence):
+        if not items:
+            continue  # 空组不渲染（空标题白占 token）
+        lines.append(group_heading)
+        for item in items:
+            lines.extend(_evidence_lines(item))
     return lines
+
+
+def _group_evidence(
+    evidence: Sequence[EvidenceItem],
+) -> list[tuple[str, list[EvidenceItem]]]:
+    """按 §B-2 的确定性规则分组（顺序：Core → Related → Tests）。
+
+    - ``Core``：``score ≥ top1 × 0.70`` **且** ``type != test``；
+    - ``Related``：``score ≥ top1 × 0.50`` **且** ``type != test``；
+    - ``Tests``：``type == test``，无论分数（测试因字面匹配拿最高分时也不与代码混排；
+      **不动 rerank 分**，只在渲染层归类）。
+
+    ``top1`` = **包内证据的最高分**（含 test，即 ``max(item.score)``）——与 §A 装填闸门的参考分
+    同源：闸门用“池内非 spec 最高分”，而该候选必然是包内第一条证据，故两者一般相等；
+    包内没有非 spec 证据（纯文档包）时本层不渲染 Code 节。
+
+    为什么不把 test 排除在 ``top1`` 之外：卡内 §B-1 的示例正是“测试拿 100%、
+    真正的答案（``Runtime``）拿 72% 故入 Core、59% 的邻居入 Related”；若以非 test 最高分
+    为参考，Related 会被抬到几乎为空（实测把 ``Related`` 整组消掉）。
+
+    两个边界（都按"不丢数据、不造新组"处理）：
+
+    - 包内全是 test → 全部归 ``Tests``；
+    - 低于 ``top1×0.50`` 却仍在包里（保底块 **不受 §A 闸门约束**，以及手工构造的 pack）
+      → 归 ``Related``。它们确实进了包，不渲染才是真的丢数据；
+      不另开第四个组（契约 / §B-2 口径不变）。
+    """
+    top1 = max((item.score for item in evidence), default=0.0)
+    core: list[EvidenceItem] = []
+    related: list[EvidenceItem] = []
+    tests: list[EvidenceItem] = []
+    for item in evidence:
+        if item.type == "test":
+            tests.append(item)
+        elif top1 > 0.0 and item.score >= top1 * CORE_SCORE_RATIO:
+            core.append(item)
+        else:
+            related.append(item)
+    return [(_CORE_HEADING, core), (_RELATED_HEADING, related), (_TESTS_HEADING, tests)]
 
 
 def _docs_section(pack: ContextPack) -> list[str]:

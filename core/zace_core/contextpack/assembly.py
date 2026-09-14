@@ -41,9 +41,10 @@ tier 不作为排序键（D-17）：只做配额与资格线
 from __future__ import annotations
 
 import math
+import os
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from zace_core.parsing.markdown import classify_doctype
 from zace_core.storage import Store
@@ -60,6 +61,7 @@ from zace_core.types import (
 __all__ = [
     "ADJACENT_GAP_LINES",
     "CONSENSUS_SCORE_RATIO",
+    "CONTEXT_SCORE_RATIO",
     "DEEP_BUDGET",
     "FAST_BUDGET",
     "MIN_CONSENSUS_FILES",
@@ -82,6 +84,17 @@ MODE_DEEP = "deep"
 
 #: 相邻区间合并的行距阈值（Module/03 §3：同文件两 chunk 行距 ≤10 → 合并）。
 ADJACENT_GAP_LINES = 10
+
+#: TASK-095（用户 2026-09-14 拍板）：相对 top-1 的分数阈值——替代"贪心填满"。
+#: 分数 ≥ ``top1_score × 本值`` 的候选才进装填循环（相对而非绝对：实测同仓库不同查询的
+#: top-1 在 1.2~5.8 之间波动，绝对阈值无法通用；"明显弱于最佳命中"才是噪音的判据）。
+#: 默认 0.50 由**真实查询的分数分布**选定（`cockpit-agents-py` 四个真实查询：0.50 保留
+#: 11/30、1/37、15/29、13/60，含全部核心实现；0.70 在符号查询上只剩 1 条；0.30 在宽泛
+#: 查询上几乎等于没截断）——测量过程见 `docs/tasks/TASK-095-返回分组与分数阈值.md`。
+#: **不要**用它去拟合 `benches/golden` 的 smoke 集（R29/R30 冻结）。
+#: 覆盖方式：``assemble(config=replace(...))`` 或环境变量 ``ZACE_CONTEXT_SCORE_RATIO``
+#: （**不暴露给 MCP 工具参数**——CF-06 冻结）。
+CONTEXT_SCORE_RATIO = 0.50
 
 _AGGREGATION_NOTE = "同符号聚合"
 _MERGE_NOTE = "相邻区间合并"
@@ -134,11 +147,37 @@ class BudgetConfig:
     docs_ratio: float = 0.10
     skeleton_line_threshold: int = 300   # 超过此行数且超预算 → skeleton 降级
     skeleton_context_lines: int = 15     # 降级保留的上下文行数（±15）
+    # TASK-095：相对分数阈值——低于 ``top1_score × score_ratio`` 的候选**不装填**。
+    # 只在贪心主循环生效；code_floor / spec_floor 的保底装填**不受它约束**
+    # （保底是"至少给这些"，与"最多给到哪"不冲突，否则纯文档查询可能被清空）。
+    # ``0.0`` = 显式关闭闸门（回到"贪心填满"），供机制类测试与修改前/后对照测量使用。
+    score_ratio: float = CONTEXT_SCORE_RATIO
 
 
 FAST_BUDGET = BudgetConfig()
 #: Deep 12K 硬顶（Module/03 §4.2 裁决；Phase 3 接入，本卡只实现配置）。
 DEEP_BUDGET = BudgetConfig(hard_cap=12_000)
+
+#: TASK-095：``score_ratio`` 的环境变量覆盖名（不暴露给 MCP 工具参数——CF-06 冻结）。
+SCORE_RATIO_ENV = "ZACE_CONTEXT_SCORE_RATIO"
+
+
+def _score_ratio_from_env(source: Mapping[str, str]) -> float:
+    """``ZACE_CONTEXT_SCORE_RATIO`` → ``(0, 1]`` 的比例；缺省/非法一律回落默认值。
+
+    与 ``IndexScope.from_env`` 同一纪律：一个打错的调试环境变量不该让检索起不来。
+    允许 0.0——那是"关掉闸门"的显式写法（回到旧的贪心填满行为，便于对照测量）。
+    """
+    raw = source.get(SCORE_RATIO_ENV)
+    if not raw:
+        return CONTEXT_SCORE_RATIO
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return CONTEXT_SCORE_RATIO
+    if 0.0 <= parsed <= 1.0:
+        return parsed
+    return CONTEXT_SCORE_RATIO
 
 #: spec 候选的 ``Candidate.kind``（其余值 <code|test|fallback> 一律算代码侧证据，R21）。
 _SPEC_KIND = "spec"
@@ -153,11 +192,13 @@ CONSENSUS_SCORE_RATIO = 2.15
 
 
 def budget_for(mode: str) -> BudgetConfig:
-    if mode == MODE_DEEP:
-        return DEEP_BUDGET
-    if mode != MODE_FAST:
-        raise ValueError(f"mode 必须是 'fast' 或 'deep'，收到 {mode!r}")
-    return FAST_BUDGET
+    base = DEEP_BUDGET if mode == MODE_DEEP else None
+    if base is None:
+        if mode != MODE_FAST:
+            raise ValueError(f"mode 必须是 'fast' 或 'deep'，收到 {mode!r}")
+        base = FAST_BUDGET
+    ratio = _score_ratio_from_env(os.environ)
+    return base if ratio == base.score_ratio else replace(base, score_ratio=ratio)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +304,28 @@ def assemble(
     has_code = any(candidate.kind != _SPEC_KIND for candidate in pool)
     docs_cap = int(content_budget * active.docs_ratio) if has_code else content_budget
 
+    # TASK-095 §A：相对分数阈值（自适应查询难度）。“明显弱于最佳命中”才是噪音的判据——
+    # 绝对阈值无法通用（实测同仓库不同查询的 top-1 在 1.2~5.8 之间波动）。
+    # 口径：高于等于 top1 × ratio 才进装填循环；低于它**立即停止**（池已按分数降序）。
+    #
+    # 参考分 top1 = **非 spec 候选（含 test）的最高 rerank 分**，不是池总分。两个理由：
+    # ① spec 走 docs_ratio 配额这条独立路径，且其分数被 "high-value doctype" 等特征加成抬高；
+    # 用池总分会让代码侧阈值被文档抬到 3.25（实测把 Runtime 那题塔到只剩 4 条）。
+    # ② 与 TASK-095 §A-1 的实测表一致：以非 spec 最高分为 100% 时，四个真实查询在
+    # ≥70%/≥50%/≥30% 三列上的条数为 2/11/24、1/1/5、7/18/24、16/36/49，与卡内表 12/12 逐项吻合
+    # （卡内“总数”列 = 修改前贪心填满的证据条数 30/32/24/55）。
+    # 池里没有任何非 spec 候选（纯文档查询）时闸门**关闭**（不被本机制伤害），
+    # 且保底（code_floor / spec_floor）不走本闸门：保底是“至少给这些”，与“最多给到哪”不冲突。
+    non_spec_scores = [candidate.score for candidate in pool if candidate.kind != _SPEC_KIND]
+    top1_score = max(non_spec_scores, default=0.0)
+    # ``score_ratio <= 0`` 或池里没有非 spec 候选 → 闸门关闭（score_floor=None）。
+    score_floor = (
+        top1_score * active.score_ratio
+        if top1_score > 0.0 and active.score_ratio > 0.0
+        else None
+    )
+    below_floor = 0
+
     used = active.framework_overhead
     omitted = 0
     capacity_cut = 0
@@ -317,6 +380,13 @@ def assemble(
         if candidate.chunk_id in placed_ids:
             omitted += 1  # 同一 chunk 只装一次（与 _place / 保底分支共用同一判重集合）
             continue
+        # TASK-095 §A：低于相对分数阈值的候选不装填。池是分数降序的，越过阈值即可停。
+        # 先于 `_build_slot` 判定：被分数截掉的候选根本不需要读切片（省 IO，语义更清晰）。
+        # 保底（code_floor / spec_floor）不走本闸门：保底是“至少给这些”，与“最多给到哪”不冲突。
+        if score_floor is not None and candidate.score < score_floor:
+            below_floor += 1
+            omitted += 1
+            break
         slot = _build_slot(store, candidate, index_signals)
         if slot is None:
             omitted += 1
@@ -423,7 +493,7 @@ def assemble(
             _place(candidate, slot, tokens)
             code_placed += 1
 
-    truncated = capacity_cut > 0
+    truncated = capacity_cut > 0 or below_floor > 0
     flow_tokens = sum(
         estimate_tokens(node.symbol) + estimate_tokens(node.path)
         for flow in flows
@@ -465,6 +535,8 @@ def assemble(
         truncated=truncated,
         evidence_count=len(evidence) + len(docs),
         docs_capped=docs_capped,
+        score_capped=below_floor,
+        score_ratio=active.score_ratio,
     )
     pack.next_queries = _next_queries(pool, evidence, docs)
     return pack
@@ -732,6 +804,8 @@ def _missing_evidence(
     truncated: bool,
     evidence_count: int,
     docs_capped: int = 0,
+    score_capped: int = 0,
+    score_ratio: float = CONTEXT_SCORE_RATIO,
 ) -> list[MissingEvidence]:
     """Phase 1 可实现的缺失证据子集（Module/03 §5；graph_boundary/symbol_ambiguous 留接口）。"""
     missing: list[MissingEvidence] = []
@@ -781,15 +855,21 @@ def _missing_evidence(
             )
         )
     if truncated:
-        # R21 §C：docs_ratio 挡下的候选在这里如实说明（CF-03 无新增字段，message 为自由文本）。
-        share = (
-            f"（其中 {docs_capped} 个因 {_DOCS_RATIO_NOTE}让位给代码证据）" if docs_capped else ""
-        )
+        # R21 §C + TASK-095 §A：份额上限 / 相对分数阈值挡下的候选在这里如实说明
+        # （CF-03 无新增字段，message 为自由文本）。
+        reasons: list[str] = []
+        if docs_capped:
+            reasons.append(f"{docs_capped} 个因 {_DOCS_RATIO_NOTE}让位给代码证据")
+        if score_capped:
+            reasons.append(
+                f"{score_capped} 个因低于相对分数阈值（top1×{score_ratio:g}）未予装填"
+            )
+        share = f"（其中 {'；'.join(reasons)}）" if reasons else ""
         missing.append(
             MissingEvidence(
                 code="retrieval_truncated",
                 message=(
-                    f"候选池被预算裁剪：省略 {omitted} 个候选{share}，"
+                    f"候选池被裁剪：省略 {omitted} 个候选{share}，"
                     "可能有相关但未展示的证据；可提高预算或收窄查询。"
                 ),
             )

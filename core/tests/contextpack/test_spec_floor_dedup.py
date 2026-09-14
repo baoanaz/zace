@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from zace_core.contextpack import BudgetConfig, assemble, estimate_tokens
 from zace_core.types import SpecBlockDef
 
@@ -105,7 +107,11 @@ def test_reserved_spec_chunk_is_placed_only_once_when_greedy_takes_it_first(
     ]
     config = BudgetConfig(hard_cap=1_000, framework_overhead=0, single_file_ratio=1.0)
 
-    pack = assemble(store, "为什么这样设计", candidates, config=config)
+    # TASK-095：本用例验的是“同一 chunk 只装一次”的去重与 E 编号连续性；代码候选分数
+    # 0.5/0.4/0.3/0.2 会被默认分数闸门（top1×0.50）截掉，故显式关掉闸门。
+    pack = assemble(
+        store, "为什么这样设计", candidates, config=replace(config, score_ratio=0.0)
+    )
 
     assert [item.path for item in pack.docs] == [SPEC_PATH]
     assert len(pack.evidence) == 4 and len(pack.docs) == 1
