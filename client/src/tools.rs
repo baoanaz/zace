@@ -201,7 +201,13 @@ impl ToolLayer {
                 ))
             })?;
 
-        let manager = IndexManager::new(root.clone(), project_id.clone(), self.cache_root.clone());
+        // TASK-100：把服务端端点传给缓存（缓存目录按端点分片，且字段自证）。
+        let manager = IndexManager::new(
+            root.clone(),
+            project_id.clone(),
+            self.cache_root.clone(),
+            remote.base_url(),
+        );
         let mut scan = manager
             .scan()
             .map_err(|error| ToolError::Failed(format!("本地扫描失败：{error:#}")))?;

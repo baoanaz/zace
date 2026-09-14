@@ -40,7 +40,21 @@ pub struct FileEntry {
     pub blob_hash: String,
 }
 
-/// 本地索引（`~/.cache/zace/<projectId>/index.json`）。
+/// 本地索引（`~/.cache/zace/<serverKey>/<projectId>/index.json`）。
+///
+/// TASK-100 修正（用户 2026-09-14 报告的"每次调用都重新初始化"）：
+/// 缓存以前只按 `projectId` 分目录，**没有区分"这份缓存属于哪台服务端"**。
+/// 而 `projectId` 是从仓库路径算出来的（同一个仓库连两个不同后端 → 同一个 id），
+/// 于是出现两种坏事：
+///
+/// 1. 连新后端时缓存"看着有效"（`project_id` 与 `config_hash` 都匹配）→ 客户端认为
+///    "内容没变不用传"，而新后端库里根本没数据 → 检索为空；
+/// 2. 同名 `projectId` 的两台后端交替使用 → 两边都不停在"缓存 miss → 全量重传"。
+///
+/// 修正分两层（两道防线）：
+/// - **目录分片**（`IndexManager::new` 的 `endpoint`）：不同后端各用一棵缓存目录，物理隔离；
+/// - **字段自证**（本字段）：即使目录被混用（手动拷贝/回退版本），载入时也会因 `endpoint`
+///   不匹配而作废——不依赖目录名这种约定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexData {
     pub version: u32,
@@ -48,6 +62,13 @@ pub struct IndexData {
     pub project_id: String,
     /// 扫描配置指纹（阈值 + 忽略规则版本）；变更即作废。
     pub config_hash: String,
+    /// 服务端端点（TASK-100）：缓存自证属于哪个后端。
+    ///
+    /// `#[serde(default)]`：旧缓存没有这个字段 → 反序列化成空串 → 与当前值不等 →
+    /// **自动作废一次**（然后被新格式覆盖）。这是有意的：旧缓存缺少归属信息，
+    /// 与其冒着"错认服务端"的风险复用它，不如让它重传一次。
+    #[serde(default)]
+    pub endpoint: String,
     pub entries: BTreeMap<String, FileEntry>,
 }
 
@@ -57,6 +78,7 @@ impl Default for IndexData {
             version: CACHE_VERSION,
             project_id: String::new(),
             config_hash: String::new(),
+            endpoint: String::new(),
             entries: BTreeMap::new(),
         }
     }
@@ -109,17 +131,25 @@ pub struct IndexManager {
     cache_dir: PathBuf,
     rules: IgnoreRules,
     config_hash: String,
+    /// 服务端端点（TASK-100）：与 `IndexData::endpoint` 对账，换后端即作废缓存。
+    endpoint: String,
 }
 
 impl IndexManager {
     /// `cache_root` = 缓存根（通常是 `~/.cache/zace`）；实际写 `<cache_root>/<projectId>/`。
-    pub fn new(root: PathBuf, project_id: String, cache_root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, project_id: String, cache_root: PathBuf, endpoint: &str) -> Self {
         let rules = IgnoreRules::load(&root);
         let config_hash = config_fingerprint(&rules);
+        // 目录分片（TASK-100）：`<cache_root>/<serverKey>/<projectId>/`。
+        //
+        // `serverKey` 用 endpoint 的哈希前 16 位：base_url 可能含凭据类信息或很长，
+        // 不适合直接做目录名；不够防碰撞（16 hex = 64 bit）但足够区分本地几台服务。
+        let server_key = server_cache_key(endpoint);
         Self {
-            cache_dir: cache_root.join(&project_id),
+            cache_dir: cache_root.join(server_key).join(&project_id),
             root,
             project_id,
+            endpoint: endpoint.to_string(),
             rules,
             config_hash,
         }
@@ -127,6 +157,12 @@ impl IndexManager {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// 缓存目录（测试与诊断用：TASK-100 的回归用例需要直接改写缓存文件）。
+    #[cfg(test)]
+    fn cache_dir(&self) -> &Path {
+        &self.cache_dir
     }
 
     /// 扫描 + 对账（**纯本地、不联网**）。
@@ -227,6 +263,20 @@ impl IndexManager {
             .cloned()
             .collect();
 
+        // 缓存命中率**必须可见**（TASK-100 排查的教训）：用户报告"每次调用都重新初始化"时，
+        // 没有这行日志就只能靠猜。实测发现：同一批 287 个文件被连续两次全量上传，
+        // 但当时 `cached_files` 已经算出来了却从未输出。
+        //
+        // 打到 stderr（不能打到 stdout：stdout 是 MCP 的 JSON-RPC 通道，写脏会破协议）。
+        eprintln!(
+            "zace-client: 扫描完成 project={} 文件={} 命中缓存={} 待上传={} 待删除={}",
+            self.project_id,
+            entries.len(),
+            cached_files,
+            to_upload.len(),
+            deleted.len()
+        );
+
         Ok(ScanResult {
             to_upload,
             cached_files,
@@ -234,6 +284,7 @@ impl IndexManager {
                 version: CACHE_VERSION,
                 project_id: self.project_id.clone(),
                 config_hash: self.config_hash.clone(),
+                endpoint: self.endpoint.clone(),
                 entries,
             },
             skipped,
@@ -305,6 +356,9 @@ impl IndexManager {
         if data.version == CACHE_VERSION
             && data.config_hash == self.config_hash
             && data.project_id == self.project_id
+            // TASK-100：缓存必须自证属于**同一个服务端**（否则两合后端交替使用时
+            // 会错认"内容已上传"——它其实只传给了另一台）。
+            && data.endpoint == self.endpoint
         {
             Ok(data)
         } else {
@@ -347,6 +401,15 @@ fn config_fingerprint(rules: &IgnoreRules) -> String {
         rules.fingerprint()
     );
     blob_hash("zace-client-config", material.as_bytes())
+}
+
+/// 服务端端点的缓存目录名（TASK-100）：取端点哈希的前 16 hex。
+///
+/// 为什么不直接用 base_url 做目录名：它可能很长、含 `:`/`/`（部分平台不合法字符），
+/// 也可能内嵌凭据。哈希同时解决了这三个问题；16 hex（64 bit）足够区分本地几台服务。
+fn server_cache_key(endpoint: &str) -> String {
+    let digest = blob_hash("zace-client-endpoint", endpoint.as_bytes());
+    digest.chars().take(16).collect()
 }
 
 fn relative_path(root: &Path, path: &Path) -> Option<String> {
@@ -396,6 +459,7 @@ mod tests {
             root.to_path_buf(),
             "testproject0000".to_string(),
             cache.to_path_buf(),
+            "http://127.0.0.1:1",
         )
     }
 
@@ -551,8 +615,68 @@ mod tests {
             project.path().to_path_buf(),
             "otherproject0000".to_string(),
             cache.path().to_path_buf(),
+            "http://127.0.0.1:1",
         );
         assert!(other.load()?.entries.is_empty());
+        Ok(())
+    }
+
+    /// TASK-100 回归：**换服务端端点 → 缓存作废**（用户报告的"每次调用都重新初始化"
+    /// 的根因之一：同名 projectId 的两台后端共用一份缓存目录）。
+    #[test]
+    fn cache_is_invalidated_when_endpoint_changes() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let cache = tempfile::tempdir()?;
+        fs::write(project.path().join("a.txt"), "x")?;
+
+        let first = manager(project.path(), cache.path());
+        let scan = first.scan()?;
+        first.commit(&scan.index)?;
+        // 同一端点再读 → 命中。
+        assert_eq!(first.load()?.entries.len(), 1);
+
+        // 换端点（同一 projectId、同一 config，只有 base_url 不同）→ 必须作废。
+        let other_endpoint = IndexManager::new(
+            project.path().to_path_buf(),
+            "testproject0000".to_string(),
+            cache.path().to_path_buf(),
+            "http://127.0.0.1:2",
+        );
+        assert!(
+            other_endpoint.load()?.entries.is_empty(),
+            "换服务端后缓存必须失效（否则会把\"已上传给 A\"误认为\"已上传给 B\"）"
+        );
+        Ok(())
+    }
+
+    /// TASK-100 回归：**旧缓存（无 endpoint 字段）自动作废一次**。
+    #[test]
+    fn legacy_cache_without_endpoint_is_rejected() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let cache = tempfile::tempdir()?;
+        fs::write(project.path().join("a.txt"), "x")?;
+        let manager = manager(project.path(), cache.path());
+        let scan = manager.scan()?;
+        manager.commit(&scan.index)?;
+
+        // 取出现缓存里的字段，除去 `endpoint`，写成升级前那份文件的形状。
+        let current: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(manager.cache_file())?)?;
+        let mut legacy = current.clone();
+        legacy.as_object_mut().expect("对象").remove("endpoint");
+        assert!(
+            !legacy.to_string().contains("endpoint"),
+            "夹具必须先真的去掉 endpoint 字段"
+        );
+        fs::create_dir_all(manager.cache_dir())?;
+        fs::write(manager.cache_file(), legacy.to_string())?;
+
+        // 缺归属信息 → 不复用（宁可重传一次，也不能冒着认错服务端的风险）。
+        assert!(manager.load()?.entries.is_empty());
+
+        // 反向对照：带 endpoint 的当前格式必须能读回（证明作废原因确实是缺字段）。
+        fs::write(manager.cache_file(), current.to_string())?;
+        assert_eq!(manager.load()?.entries.len(), 1);
         Ok(())
     }
 }

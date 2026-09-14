@@ -63,6 +63,9 @@ const record = {
   usedTokens: 576,
   citationCoverage: null,
   requestId: "trace-094-abcdef",
+  // TASK-099 §A：答案正文与状态。fast 检索本条不落正文（answerStatus 为 null）。
+  answerText: null,
+  answerStatus: null,
   createdAt: 1789305566,
 };
 
@@ -170,10 +173,52 @@ describe("§需求2 合并表格（TASK-100）", () => {
     // 输入：查询全文。弹窗内标题与详情值都含该字符串，故用 getAllByText。
     expect(within(dialog).getByText("输入")).toBeInTheDocument();
     expect(within(dialog).getAllByText(/令牌在哪里刷新/).length).toBeGreaterThanOrEqual(1);
-    // 输出：证据概览（**不是** LLM 答案——answer 未落库，弹窗如实说明）。
+    // 输出：证据概览 + LLM 答案位（TASK-099 §A 补）。
     expect(within(dialog).getByText("输出")).toBeInTheDocument();
     expect(within(dialog).getByText("证据条数")).toBeInTheDocument();
-    expect(within(dialog).getByText(/答案正文未落库/)).toBeInTheDocument();
+    expect(within(dialog).getByText("LLM 答案")).toBeInTheDocument();
+    // 本条是 fast 检索（answerStatus 为 null）→ 如实说明"不是 LLM 问答"，不冒充有答案。
+    expect(within(dialog).getByText(/本条不是 LLM 问答/)).toBeInTheDocument();
+  });
+
+  it("TASK-099 §A：有 answerText 时弹窗展示答案正文", async () => {
+    stubAll([
+      {
+        ...record,
+        mode: "deep",
+        answerText: "## Answer\n令牌由 refresh_token 刷新 [E1]。",
+        answerStatus: "answered",
+      },
+    ]);
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const searchRow = within(table)
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("令牌在哪里刷新"))!;
+    await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("LLM 答案")).toBeInTheDocument();
+    expect(within(dialog).getByText(/令牌由 refresh_token 刷新/)).toBeInTheDocument();
+    expect(within(dialog).getByText("answered")).toBeInTheDocument();
+  });
+
+  it("TASK-099 §A：证据不足（未调 LLM）时弹窗如实说明，不假装有答案", async () => {
+    stubAll([
+      { ...record, mode: "deep", answerText: null, answerStatus: "insufficient_evidence" },
+    ]);
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const searchRow = within(table)
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("令牌在哪里刷新"))!;
+    await userEvent.click(within(searchRow).getByRole("button", { name: "查看" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/证据不足，未调用 LLM/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/按 D-24 短路，未调用 LLM/)).toBeInTheDocument();
   });
 
   it("弹窗可关闭（Esc 与按钮都行）", async () => {
@@ -233,5 +278,69 @@ describe("§需求3 时间范围选择（TASK-100）", () => {
     await waitFor(() => {
       expect(calls.some((url) => url.includes("days=7"))).toBe(true);
     });
+  });
+});
+
+describe("刷新（TASK-099 用户要求：刷新按钮 + 10 秒自动刷新）", () => {
+  it("点「刷新」重新拉取数据（fetch 次数增加）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+
+    await screen.findByRole("table");
+    const before = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+
+    await userEvent.click(screen.getByTestId("history-refresh"));
+
+    await waitFor(() => {
+      const after = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+      expect(after).toBeGreaterThan(before);
+    });
+  });
+
+  it("自动刷新是滑动开关（role=switch），且默认开启", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+    await screen.findByRole("table");
+
+    const sw = screen.getByRole("switch", { name: "自动刷新" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "false");
+
+    const fetchesBefore = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls
+      .length;
+    // 关掉后不该再自动发请求（等一小段时间观察）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const fetchesAfter = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls
+      .length;
+    expect(fetchesAfter).toBe(fetchesBefore);
+  });
+
+  it("点「自动刷新」文字也能切换开关（用户要求）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+    await screen.findByRole("table");
+
+    const sw = screen.getByRole("switch", { name: "自动刷新" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(screen.getByTestId("history-auto-refresh-label"));
+    expect(sw).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("静默刷新：表格不消失、不白屏（用户要求 UI 无感）", async () => {
+    stubAll();
+    renderPage(<HistoryPage />);
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("令牌在哪里刷新")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("history-refresh"));
+
+    // 刷新过程中与刷新之后，表格与数据**始终在**（不能出现 LoadingBlock）。
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByText("加载中…")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("history-refreshed-at").textContent).toMatch(/数据更新于/));
+    expect(within(screen.getByRole("table")).getByText("令牌在哪里刷新")).toBeInTheDocument();
   });
 });

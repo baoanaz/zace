@@ -21,9 +21,12 @@
  * | 输入输出 | 都有 | **可点击弹窗**看真实数据（用户的明确要求） |
  * | 体量 | 初始化=chunks，检索=token | 用户说"Token 数或者 chunk 数量那种" |
  *
- * **弹窗的诚实边界**：`query_audit` **不存 LLM 的 answer 正文**（只存证据元数据），
- * 因此弹窗对"检索"展示的是**输入（query 全文）+ 检索到的证据清单**，
- * 并如实说明"答案正文未落库"——不拿证据清单冒充 LLM 输出（TASK-099 补 answer 后再展示）。
+ * **弹窗的诚实边界**（TASK-099 §A 已补）：`query_audit.answer_text` 现在落 LLM 答案正文，
+ * 弹窗直接展示；证据不足（短路未调 LLM）与调用失败两种情况的正文为 `NULL`，
+ * 由 `answerStatus` 如实说明是哪种——**不拿证据清单冒充 LLM 输出**。
+ *
+ * **刷新**（用户 2026-09-14 要求）：页头有「刷新」按钮；默认每 10 秒自动刷新一次，
+ * 旁边的开关可关掉（关掉后仍能手动刷）。自动刷新只重新拉数据，不关闭已打开的弹窗。
  *
  * 时间范围（用户 2026-09-14 追加要求：天为单位）：固定档位一键切换。
  * 注意**索引记录的后端端点不支持 days 过滤**（只按 limit 取最近 N 条），
@@ -42,10 +45,12 @@ import {
   getUsageSummary,
   listProjects,
 } from "../api/client";
-import { CopyButton, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { CopyButton, EmptyState, ErrorBlock, LoadingBlock, Switch } from "../components/ui";
 import { formatDuration, formatTime } from "./DashboardPage";
 
 const ROW_LIMIT = 200;
+/** 自动刷新间隔（毫秒）：用户 2026-09-14 要求"全局自动 10 秒刷新一次"。 */
+const AUTO_REFRESH_MS = 10_000;
 
 /** 时间范围档位（天）。索引记录走前端过滤，检索走后端 `days` 参数。 */
 const RANGE_OPTIONS: [number, string][] = [
@@ -101,10 +106,28 @@ export function HistoryPage() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [detail, setDetail] = useState<ActivityRow | null>(null);
+  //: 最近一次成功刷新的时间（页头显示「刚刚 / N 秒前」，让"自动刷新开着"看得见）。
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  //: 自动刷新开关（默认开）。关掉后仍可用按钮手动刷。
+  const [auto, setAuto] = useState(true);
 
-  const load = useCallback(async () => {
+  /**
+   * 拉取数据。
+   *
+   * `silent`（TASK-099 前端收尾，用户 2026-09-14 要求"不要白屏、要无感刷新"）：
+   * - `silent=false`（首次进入 / 切时间档位）：`rows===null` 时显示 `LoadingBlock`，这是正常的首屏；
+   * - `silent=true`（刷新按钮 / 自动刷新）：**不动任何正在展示的数据**，也不把 `rows` 置空，
+   *   因此表格原样待着，新数据到了直接替换（React 只重渲染变化的行，不闪）。
+   *
+   * 为什么不用"先置空再填"：那正是白屏的来源——`rows` 一为 `null` 就渲染 `LoadingBlock`，
+   * 整块表格消失。刷新是**更新**已有视图，不是重新进入页面。
+   */
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
+    const silent = options.silent === true;
     setError(null);
-    setRunFailures([]);
+    if (!silent) setRunFailures([]);
+    setLoading(true);
     try {
       const listed = await listProjects();
       setProjects(listed);
@@ -128,17 +151,33 @@ export function HistoryPage() {
           .slice(0, ROW_LIMIT),
       );
       setUsage(await getUsageSummary(days, ROW_LIMIT));
+      setRefreshedAt(Date.now());
     } catch (err) {
+      // 刷新失败**不清空已有数据**：把上一次成功的结果留在屏幕上（清空会让"网络抖一下"
+      // 看起来像"记录全没了"），只显示错误横幅。
       setError(err);
-      setRuns(null);
-      setRunFailures([]);
-      setUsage(null);
+    } finally {
+      setLoading(false);
     }
   }, [days]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  //: 自动刷新：默认 10 秒一次（用户 2026-09-14 要求）。
+  //:
+  //: 三条纪律：① 关闭时不留定时器（不在后台偷偷发请求）；② 依赖 `auto`/`load`——
+  //: `load` 随 `days` 变化，因此切时间档位后定时器自动用新的窗口，不会拿旧闭包继续拉；
+  //: ③ 清理函数必须 clearInterval，否则每次挂载都叠一个定时器（请求数会指数增长）。
+  useEffect(() => {
+    if (!auto) return undefined;
+    const timer = window.setInterval(() => {
+      // 自动刷新一律静默：用户可能正在看表格或读弹窗，不能让他眼前的东西消失。
+      void load({ silent: true });
+    }, AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [auto, load]);
 
   const nameOf = useCallback(
     (projectId: string) =>
@@ -189,13 +228,34 @@ export function HistoryPage() {
         traceId: record.requestId,
         input: [{ label: "查询", value: record.query }],
         output: [
+          ...(record.answerText
+            ? [{ label: "LLM 答案", value: record.answerText }]
+            : [
+                {
+                  label: "LLM 答案",
+                  value:
+                    record.answerStatus === "insufficient_evidence"
+                      ? "（证据不足，未调用 LLM）"
+                      : record.answerStatus === "degraded"
+                        ? "（总结模型不可用，已降级为检索结果）"
+                        : "（本条不是 LLM 问答，无答案正文）",
+                },
+              ]),
+          ...(record.answerStatus ? [{ label: "答案状态", value: record.answerStatus }] : []),
           { label: "证据条数", value: String(record.evidenceCount) },
           { label: "文档条数", value: String(record.docsCount) },
           { label: "模式", value: record.mode },
           ...(record.confidence ? [{ label: "confidence", value: record.confidence }] : []),
         ],
-        // 诚实边界：answer 正文没有落库（TASK-099 补），不拿证据清单冒充它。
-        note: "答案正文未落库：这里展示的是输入与检索到的证据概览。",
+        // TASK-099 §A：answer 正文已落库；正文为 null 时用 answerStatus 说清是
+        // “没调 LLM”（证据不足短路）还是“调了但失败”——不拿证据清单冒充 LLM 输出。
+        note: record.answerText
+          ? undefined
+          : record.answerStatus === "insufficient_evidence"
+            ? "证据不足（answerable=false）：按 D-24 短路，未调用 LLM。"
+            : record.answerStatus === "degraded"
+              ? "调用了 LLM 但失败（超时/不可达/形状不对）：本条没有答案正文。"
+              : undefined,
       }));
 
     return [...initRows, ...searchRows].sort((left, right) => right.at - left.at);
@@ -205,6 +265,45 @@ export function HistoryPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="text-lg font-semibold">历史记录</h1>
+        {/*
+          刷新控制（用户 2026-09-14 要求）：
+          - 用滑动开关而不是勾选框；
+          - **点「自动刷新」文字也切换开关**（外层 button 包住文字与滑块，一条路径）；
+          - 「刷新」按钮做一次手动刷新（静默，不白屏）；
+          - 显示"数据更新于 HH:MM:SS"，让无感刷新看得见（否则用户不知道是否在更新）。
+        */}
+        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => void load({ silent: true })}
+            disabled={loading}
+            data-testid="history-refresh"
+            className="rounded border border-ink-line px-2.5 py-1 text-ink-primary hover:bg-paper-base disabled:opacity-40"
+          >
+            {loading ? "刷新中…" : "刷新"}
+          </button>
+
+          <span className="flex items-center gap-1.5">
+            <Switch
+              checked={auto}
+              onChange={setAuto}
+              label="自动刷新"
+              testId="history-auto-refresh"
+            />
+            <button
+              type="button"
+              onClick={() => setAuto(!auto)}
+              data-testid="history-auto-refresh-label"
+              className="text-ink-muted hover:text-ink-primary"
+            >
+              自动刷新
+            </button>
+          </span>
+
+          <span className="text-ink-muted" data-testid="history-refreshed-at">
+            {refreshedAt === null ? "尚未更新" : `数据更新于 ${formatTime(Math.floor(refreshedAt / 1000))}`}
+          </span>
+        </div>
         <div className="flex overflow-hidden rounded border border-ink-line text-xs">
           {RANGE_OPTIONS.map(([value, label]) => (
             <button
