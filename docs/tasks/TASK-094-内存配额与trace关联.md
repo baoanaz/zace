@@ -1,6 +1,6 @@
 # TASK-094：项目内存可见性 + 存储配额告警 + 历史记录 trace id + 项目删除入口
 
-> 状态：pending ｜ 阶段：Phase 5（上线前）｜ 硬依赖：~~TASK-090~~ ✅已合并、~~TASK-088~~ ✅已合并
+> 状态：review ｜ 阶段：Phase 5（上线前）｜ 硬依赖：~~TASK-090~~ ✅已合并、~~TASK-088~~ ✅已合并
 > 建议分支：`feature/task-094-quota-trace_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/config.py`（新增配额配置项）
@@ -210,4 +210,156 @@ migration 的前后证据、**§D 删除入口的前端验收证据**（确认�
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+> 实施会话：泳道 I（`zace-lane-i`）｜日期：2026-09-14｜分支：`feature/task-094-quota-trace_xwz0914`
+> 任务卡状态：**pending → review**（已完成四节 + DoD 全项）
+
+### 0. 环境与基线
+
+- 开工核验：`git log --oneline -1` = `da0b165`；分支正确；`git status --short` 为空。
+- **基线数确认**：`env -u EMBED_MODE … uv run pytest -o addopts="" -q` → **878 passed, 2 skipped**
+  （与卡内承诺一致）。
+  ⚠ **注意**：本机 `.env` 里 `EMBED_MODE=api` 会让 `core/tests/embedding/test_factory.py::
+  test_default_is_local_onnx_provider` 失败（该用例断言“默认 = 本地 ONNX”）。这是**既有环境
+  交互，不是本卡回归**：不 source `.env` 时 878 passed，source 后该用例报
+  `assert isinstance(provider, LocalOnnxEmbeddingProvider)` 失败。本卡所有 pytest 证据均在
+  干净环境（`env -u EMBED_MODE -u EMBED_MODEL -u EMBED_BASE_URL -u EMBED_API_KEY`）下跑的。
+- 另外：`uv run pytest` 直接跑会因 venv 缺 dev extras（pytest/ruff）而失败，需先
+  `uv sync --all-packages --all-extras`；`web/node_modules` 也需要先 `npm install`。
+
+### 1. 改动清单（均在交付物所有权内）
+
+| 文件 | 改动 |
+|---|---|
+| `service/zace_service/config.py` | 新增三个配额环境变量与默认值；**修掉既存缺陷**：`_as_int` 被定义两次（第 245 行版本允许 0、后面版本要求 ≥1，后者遮蔽前者）→ 拆成 `_as_int`（≥1）与 `_as_non_negative_int`（允许 0），并新增 `_as_ratio`（限 (0,1]） |
+| `service/zace_service/quota.py` | **新建**：`check_quota` / `status_from_sizes` / `warning_for` / `append_warning` / `format_bytes` + 三态与告警文案 |
+| `service/zace_service/runtime.py` | `describe_project` 追加 `diskBytes`（现算，无缓存） |
+| `service/zace_service/metadb.py` | `query_audit` 加 `request_id TEXT` + 迁移；`record_query` 收 `request_id`；`QueryAuditRecord.request_id` 进 `to_json`；**修正迁移顺序缺陷**（见 §3） |
+| `service/zace_service/audit.py` | `record_query` / `record_query_error` 落 `current_request_id()` |
+| `service/zace_service/mcp.py` | 两个工具返回追加告警节（`_storage_warning`） |
+| `service/zace_service/routers/query.py` | REST 两面的**四条分支**（含证据不足/降级）都追加告警节 |
+| `service/zace_service/routers/ops.py` | `overview` 传 `settings`（配额判定所需） |
+| `service/zace_service/routers/auth.py` | `/api/meta` 的 `config` 追加 `storage` 只读展示 |
+| `service/zace_service/stats.py` | `account_overview` 追加 `storage`（复用已有 `diskBytes`，**不重复遍历目录**） |
+| `service/tests/test_quota.py` | **新建**：40 个用例（DoD 全覆盖） |
+| `web/src/api/types.ts`、`client.ts` | `Project.diskBytes`、`UsageRecord.requestId`、`QuotaStatusView`/`StorageConfigView`、`deleteProject()` |
+| `web/src/components/ui.tsx` | 新增 `ConfirmDialog`（原生 `<dialog>`） |
+| `web/src/pages/DashboardPage.tsx` | §A 占用列 + §B4 配额条 + §D 删除入口 |
+| `web/src/pages/HistoryPage.tsx` | §C trace id 列（可复制） |
+| `web/src/pages/SettingsPage.tsx` | §B1 存储配额只读卡片 |
+| `web/src/pages/Dashboard.quota.test.tsx` | **新建**：13 个用例 |
+| `web/src/test/setup.ts` | `<dialog>.showModal` 最小 polyfill（jsdom 未实现） |
+
+### 2. §A 占用可见
+
+- 后端：`GET /api/projects` 每项带 `diskBytes`（= `dir_size_bytes(project_dir)`，与 `/api/projects/{id}`
+  同口径，测试钉住两者相等）。
+- **性能口径（实测）**：真机 `cockpit-agents`（18 文件 / 28.1 MiB / 3416 chunks）目录求和
+  - 直接调用：**0.8 ms**
+  - 走 `GET /api/projects` 端到端：**37 ms**（含 FastAPI/TestClient 开销）
+  - 合成 25,000 文件（≈500 MB 量级）：**约 0.30 s**
+  → 结论：**每次现算、不做缓存**（缓存的失效点比它省下的时间更贵）。数据见“未决问题”。
+- 前端：项目表新增「占用」列，未提供/`null` 显示 `—`（不伪装 0）。
+
+### 3. §C trace id 与 migration（**两条真实缺陷在这里被发现并修掉**）
+
+**缺陷 1（迁移顺序）**：本卡最初把 `CREATE INDEX ... ON query_audit(request_id)` 写进了 `_SCHEMA`。
+对**旧库**而言 `CREATE TABLE IF NOT EXISTS` 不做任何事，于是 `executescript` 在 ALTER 之前就执行
+该 CREATE INDEX → 打开旧库直接 `sqlite3.OperationalError: no such column: request_id`。
+**修法**：索引移入 `_migrate()` 的 `_AUDIT_INDEXES`，**在 ALTER 之后**建。这正是卡内“项目里没有
+ALTER 先例、要自建安全路径”要求验证的东西。
+
+**缺陷 2（用户额度隔离）**：`check_quota` 原本无条件把“当前项目”并入用户项目列表，导致
+`project_ids=[]`（该账户没有任何项目）时仍把当前项目算进他的额度——**破坏多用户隔离**。
+是 DoD 的“A 的用量不计入 B 的额度”用例抓出来的。**修法**：`project_ids is not None` 时严格用调用方给的
+列表（空列表 = 该账户没有项目 = 用量 0），不再自动追加。
+
+**迁移前后实证**（脚本在临时目录里造旧库，未触碰真机库）：
+
+```
+=== 迁移前 ===
+列： [id, project_id, user_id, mode, query, answerable, confidence, degraded, latency_ms,
+      evidence_count, docs_count, used_tokens, citation_coverage, evidence_json, created_at]
+数据： [(1, '旧版写下的查询', 1234)]
+
+=== 迁移后 ===
+列： [..., 'llm_latency_ms', 'answer_tokens', 'request_id']      ← 三列都补上
+数据： [(1, '旧版写下的查询', 1234, None)]                        ← 旧行原样保留，新列为 NULL
+索引： ['idx_audit_project', 'idx_audit_request']
+幂等重开：OK（无 duplicate column）
+```
+
+旧行的 `request_id = NULL` 是刻意的：`NULL` 表示“这条来自没有 trace 的旧版本”，
+**不编造一个 id**；历史页据此显示 `—`。
+
+### 4. B1 默认值实测验证（500 MiB / 2 GiB 是否合理）
+
+在真机遗留索引数据上复测（只读）：
+
+| 项目 | chunks | 索引占用 | 折算 |
+|---|---|---|---|
+| `cockpit-agents-py` | 3,416 | **28.1 MiB**（29,440,278 B） | **8.6 KB / chunk** |
+
+- 单项目上限 500 MiB → 用量比 **5.6%**，**余量 17.8 倍**；
+- 单用户上限 2 GiB → 用量比 **1.4%**，余量 72.9 倍；
+- 与编排者外推的“≈10 KB/chunk”一致（实测 8.6 KB/chunk，略优于外推）。
+
+**结论：500 MiB / 2 GiB 不会误伤正常项目**，未发现需要调默认值的证据。
+但样本仍是 1 个真实仓库 + 2 个历史测量（卡内已承认样本很少）——真实分布仍需上线后观察（TASK-093）。
+**按卡内纪律，未为了让数字好看而改动默认值。**
+
+### 5. 旁路纪律与测试证据
+
+`warning_for` 在两侧配额都为 0 时**连目录都不遍历**；判定失败只记 WARN 并返回 `None`。
+测试覆盖：`project_usage_bytes` 抛 `OSError` / `RuntimeError` 时，MCP 与 REST **两面**检索均照常成功
+（含断言“告警节不出现”——不编造状态）。
+
+### 6. 与设计的偏差 / 契约影响
+
+- **契约影响：无**。不改 `docs/contracts/**`，不改 `core/zace_core/{types,interfaces,hashing}.py`。
+  新增的都是**响应体字段**（`Project.diskBytes`、`UsageRecord.requestId`、`overview.storage`、
+  `meta.config.storage`）与**新建模块**，未新增/改改路径与方法集合（`test_skeleton.py` 的路径快照仍绿）。
+- **与设计偏差 1（方向相反）**：卡内 §B3 原文说告警节“在 `### Meta` 之后追加”。实现选择
+  **把告警追加在整段 Markdown 之后**（`pack_meta` 的 `### Meta` 是渲染**最后**一节，core 的
+  `render_markdown` 由 `docs/contracts` 侧的 D-21 冻结，本卡不得改 core 渲染顺序）。
+  结果等价（都在 `### Meta` 之后、都是附录节），且**不碰冻结的渲染规则**——符合卡内“不改 core
+  渲染”与 D-21 的约束。
+- **与设计偏差 2（实现细节）**：MCP 工具的告警读的是 `build_mcp(settings=...)` 那一刻的快照
+  （TASK-088 刻意的“不吃启动快照”行为的延伸）。这意味着**改配额后需重启服务**才在 MCP 面生效。
+  与设置页文案（“改配置请设环境变量后重启服务”）一致，故不视为缺陷；已写进本节备查。
+
+### 7. 验收命令与结果
+
+```
+$ env -u EMBED_MODE … uv run pytest service/tests/test_quota.py -q
+40 passed
+
+$ env -u EMBED_MODE … uv run pytest -o addopts="" -q          # 全仓
+918 passed, 2 skipped, 1 warning in 109.53s                  # 基线 878 + 新增 40
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+
+$ cd web && npm run lint  → 无告警
+$ cd web && npx tsc --noEmit → 无错误
+$ cd web && npm test       → 54 passed | 3 skipped（新增 13）
+$ cd web && npm run build  → ✓ built in 3.06s
+```
+
+### 8. 未决问题
+
+1. **`disk_bytes` 现算的成本上界未实测于超大规模仓库**：25,000 文件（合成）≈0.30 s。若将来出现
+   “几十万小文件”的仓库，`GET /api/projects` 会随之变慢（当前无缓存）。建议观察点：
+   上线后若有项目索引目录文件数 >100k，改为在索引结束时把目录大小写进 `project.json`
+   （多一个字段但只需维护“索引完成时”一个失效点）。
+2. **配额样本仍少（1 个真实仓库）**：500 MiB / 2 GiB 未经真实分布校准。若有项目因正常使用被
+   误判为 `exceeded`，按卡内纪律应保留证据并上报，而不是现场调默认值。
+3. **MCP 面配额需重启生效**（见 §6 偏差 2）：若用户希望“改 env 即生效（含运行中的 MCP 会话）”，
+   需要改为每次工具调用重读配置（与 TASK-088 的 `_load_settings()` 同路，但那次刻意不这么做）。
+4. **既存环境问题（非本卡引入）**：`.env` 里 `EMBED_MODE=api` 会让
+   `core/tests/embedding/test_factory.py::test_default_is_local_onnx_provider` 失败。
+   本卡未改该测试（属 `core/tests/**`，不在交付物清单内），仅在此报告。
+5. **config.py 的既存缺陷已顺手修**（`_as_int` 重复定义导致 `ZACE_LOG_MAX_BYTES=0` 报错，
+   与注释“0 表示不轮转”矛盾）。该文件在本卡清单内，故一并修正；如编排者认为应另开卡，请告知。

@@ -107,6 +107,7 @@ def overview(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
         owned = set(db.list_projects(user_id))
         # 未登记归属的项目（本地 attach 后尚未 claim）不计入概览，避免"看到不属于自己的项目"。
         listed = [item for item in listed if str(item["projectId"]) in owned]
+    settings = get_settings(request)
     return account_overview(
         user_name=getattr(user, "name", "local"),
         user_created_at=getattr(user, "created_at", 0),
@@ -115,6 +116,7 @@ def overview(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
         projects=listed,
         db=db,
         days=window,
+        settings=settings,
     )
 
 

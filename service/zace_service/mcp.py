@@ -61,6 +61,7 @@ from zace_service.errors import (
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.packmeta import pack_meta
+from zace_service.quota import append_warning, warning_for
 from zace_service.routers.query import (
     DEFAULT_MAX_TOKENS,
     DEGRADED_NOTICE,
@@ -389,7 +390,10 @@ def _search_text(
         reason=redact_text(trace.degraded_reason) if trace.degraded_reason else None,
         candidate_count=trace.candidate_count,
     )
-    return f"{_status_line(meta)}\n\n{render_markdown(trace.pack)}"
+    return append_warning(
+        f"{_status_line(meta)}\n\n{render_markdown(trace.pack)}",
+        _storage_warning(manager, settings, project_id),
+    )
 
 
 def _provider_resolver(
@@ -416,6 +420,7 @@ def _ask_text(
     """``ask_project`` 的正体：grounded LLM 总结；未配置/失败一律降级（D-26，绝不空手）。"""
     _rescan_if_due(manager, settings, project_id)
     trace = _call_engine(lambda: manager.search(project_id, question, max_tokens))
+    warning = _storage_warning(manager, settings, project_id)
     meta = pack_meta(
         trace.pack,
         project_id=project_id,
@@ -427,7 +432,9 @@ def _ask_text(
     provider = provider_resolver()
     status_line = _status_line(meta)
     if provider is None:
-        return f"{DEGRADED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}"
+        return append_warning(
+            f"{DEGRADED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}", warning
+        )
     try:
         outcome = answer_question(
             provider=provider, settings=settings, pack=trace.pack, question=question
@@ -439,9 +446,26 @@ def _ask_text(
             project_id,
             redact_text(f"{type(exc).__name__}: {exc}"),
         )
-        return f"{LLM_FAILED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}"
+        return append_warning(
+            f"{LLM_FAILED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}", warning
+        )
     degraded_line = _status_line({**meta, "degraded": False})
-    return f"{outcome.answer}\n\n{degraded_line}"
+    return append_warning(f"{outcome.answer}\n\n{degraded_line}", warning)
+
+
+def _storage_warning(manager: EngineManager, settings: Settings, project_id: str) -> str | None:
+    """存储告警节（TASK-094 §B3；**旁路**：失败返回 ``None``，绝不影响检索）。
+
+    身份取自 :func:`current_user`（与 :func:`_require_owned_project` 同一通道）：配额是
+    **按用户**算的，拿不到身份就不能把别人的项目算进额度。
+    """
+    return warning_for(
+        manager,
+        settings,
+        project_id=project_id,
+        db=manager.meta_db,
+        user_id=getattr(current_user(), "id", None),
+    )
 
 
 def build_answer_provider(settings: Settings) -> Any:

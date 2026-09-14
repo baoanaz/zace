@@ -58,6 +58,11 @@ export interface Project {
   attachedRoot?: string | null;
   indexProgress?: IndexProgress | null;
   sync?: SyncStatus;
+  /**
+   * 索引数据的磁盘占用（TASK-094 §A：`{data_root}/projects/{id}` 递归求和，**不含源码仓库**）。
+   * `null`/缺失表示后端未提供（页面显示 `—`，不伪装成 0）。
+   */
+  diskBytes?: number | null;
 }
 
 /** `meta`（TASK-032 冻结字段集；`service/zace_service/packmeta.py`）。 */

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from zace_service.config import Settings
 from zace_service.metadb import MetaDB
 
 __all__ = ["IndexStatsBundle", "account_overview", "dir_size_bytes"]
@@ -75,15 +76,20 @@ def account_overview(
     projects: list[dict[str, Any]],
     db: MetaDB,
     days: int = 30,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """首页账户面板的数据：账户资料 + 跨项目索引统计 + 查询用量。
+    """首页账户面板的数据：账户资料 + 跨项目索引统计 + 查询用量 + 存储配额（TASK-094 §B4）。
 
     ``projects`` 是 ``EngineManager.list_projects()`` 的原始项（含 ``sync`` 与 ``indexProgress``），
     本函数**不改写**它们，只做聚合与转名——保证"页面看到的项目数"与"项目列表页"一致。
+
+    ``storage``（TASK-094）直接复用 ``projects`` 里已经算好的 ``diskBytes``：**不重复遍历目录**。
+    ``settings`` 为 ``None`` 时（旧调用方/单测）不输出 ``storage`` 键——宁可少一个展示字段，
+    也不编一份用量。
     """
     index = db.all_index_stats(project_ids, limit=10)
     usage = db.usage_summary(project_ids, days=days, recent_limit=10)
-    return {
+    payload: dict[str, Any] = {
         "account": {
             "name": user_name,
             "createdAt": user_created_at,
@@ -95,3 +101,24 @@ def account_overview(
         "projects": projects,
         "days": days,
     }
+    if settings is not None:
+        payload["storage"] = _storage_overview(settings, projects, project_ids)
+    return payload
+
+def _storage_overview(
+    settings: Settings, projects: list[dict[str, Any]], project_ids: list[str]
+) -> dict[str, Any]:
+    """存储用量与判定（TASK-094 §B4；与 tool 告警**同一份判定**）。
+
+    ``projectId`` 取项目列表里的第一个：``account_overview`` 是跨项目视图，没有"当前项目"这个
+    概念，但 :class:`QuotaStatus` 需要它才能给项目维度的判定。页面只用 ``status`` 与两个维度，
+    因此这里选列表首项（**不是**"随便选一个当成用户的项目"——项目维度会因此只代表那一项，
+    用户维度才是页面真正显示的"已用/上限"）。项目维度逐项状态由 ``projects[].diskBytes`` 在前端
+    行内标注。
+    """
+    # 局部导入打破 stats ↔ quota 的导入环（quota 顶部 import stats.dir_size_bytes）。
+    from zace_service.quota import status_from_sizes
+
+    sizes = {str(item.get("projectId", "")): int(item.get("diskBytes") or 0) for item in projects}
+    subject = project_ids[0] if project_ids else ""
+    return status_from_sizes(sizes, settings, project_id=subject).to_json()

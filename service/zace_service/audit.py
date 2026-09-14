@@ -29,7 +29,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from zace_service.logging import get_logger, redact_text
+from zace_service.logging import current_request_id, get_logger, redact_text
 from zace_service.metadb import MetaDB
 
 __all__ = [
@@ -114,6 +114,11 @@ def record_query(
     字段默认取自 ``pack`` / 调用方给出的**真实值**，不编造；新增的三个 LLM 观测值
     （TASK-088 §E：``citation_coverage`` / ``llm_latency_ms`` / ``answer_tokens``）在
     **没走 LLM** 时保持 ``None``——"尚未测量"不是 0（TASK-064 §A 的诚实性纪律）。
+
+    ``request_id``（TASK-094 §C）取自上下文的 ``current_request_id()``：与响应头
+    ``X-Request-Id``、日志的 ``requestId`` **同一个 contextvar**，因此历史页看到的 id 与用户
+    在报错时拿到的头、以及 TASK-090 的日志端点能查到的记录**必然一致**（这就是本卡要的接缝）。
+    取不到（未绑定）时落 ``None``，不编造。
     """
     if db is None:
         return
@@ -133,6 +138,7 @@ def record_query(
             citation_coverage=citation_coverage,
             llm_latency_ms=_millis_or_none(llm_latency_ms),
             answer_tokens=answer_tokens,
+            request_id=current_request_id(),
             evidence=evidence_meta(pack),
             user_id=user_id,
         )
@@ -172,6 +178,7 @@ def record_query_error(
                 docs_count=0,
                 used_tokens=0,
                 citation_coverage=None,
+                request_id=current_request_id(),
                 evidence=(),
                 user_id=user_id,
             )

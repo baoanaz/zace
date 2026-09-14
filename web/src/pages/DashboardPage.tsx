@@ -11,6 +11,9 @@
  *
  * TASK-086：页面名从「账户」改为「控制台」；删掉「最近索引」记录面板（历史页的
  * 「索引记录」页签已覆盖该职能）。**「账户资料」是面板名，不是页面名，保持不变。**
+ *
+ * TASK-094：§A 项目表加「占用」列（未提供时显示 `—`）、§B4 顶部配额提示、§D 删除入口
+ * （二次确认；**取消不发请求**；删除后重新拉取列表，不留残影）。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -19,15 +22,24 @@ import { Link } from "react-router-dom";
 import {
   type Account,
   type AccountOverview,
+  type QuotaStatusView,
+  deleteProject,
   getAccountOverview,
 } from "../api/client";
-import { EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
+import { ConfirmDialog, EmptyState, ErrorBlock, LoadingBlock } from "../components/ui";
 
 const WINDOW_DAYS = 30;
+
+/** 待删除的项目（非 null 时弹二次确认；**不直接发请求**）。 */
+type PendingDelete = { projectId: string; name: string };
 
 export function DashboardPage({ account }: { account: Account | null }) {
   const [data, setData] = useState<AccountOverview | null>(null);
   const [error, setError] = useState<unknown>(null);
+  //: 删除流程的独立状态：**不要**复用页面级 `error`，否则一次删除失败会把整个控制台换成错误页。
+  const [pending, setPending] = useState<PendingDelete | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -42,6 +54,24 @@ export function DashboardPage({ account }: { account: Account | null }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const confirmDelete = useCallback(async () => {
+    if (pending === null) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteProject(pending.projectId);
+      setPending(null);
+      // 删除后**重新拉取**：不能只把该行从本地数组里滤掉——占用/统计都变了，
+      // 本地删行会留下一份与后端不一致的旧数字（"残影"）。
+      await load();
+    } catch (err) {
+      // 失败如实报错（404/网络错误都不静默）：保留弹窗，让用户看到原因再决定。
+      setDeleteError(err);
+    } finally {
+      setDeleting(false);
+    }
+  }, [pending, load]);
 
   if (error !== null) return <ErrorBlock error={error} />;
   if (data === null) return <LoadingBlock />;
@@ -96,6 +126,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
             />
             <Metric label="项目" value={String(data.projects.length)} />
           </div>
+          {data.storage !== undefined && <StorageBar storage={data.storage} />}
         </Panel>
       </div>
 
@@ -128,6 +159,11 @@ export function DashboardPage({ account }: { account: Account | null }) {
       </Panel>
 
       <Panel title="项目">
+        {deleteError !== null && (
+          <div className="mb-3">
+            <ErrorBlock error={deleteError} />
+          </div>
+        )}
         {data.projects.length === 0 ? (
           <EmptyState
             title="还没有项目"
@@ -147,6 +183,10 @@ export function DashboardPage({ account }: { account: Account | null }) {
                 <th className="border-b border-slate-200 py-1">文件</th>
                 <th className="border-b border-slate-200 py-1">chunks</th>
                 <th className="border-b border-slate-200 py-1">状态</th>
+                <th className="border-b border-slate-200 py-1" title="索引数据磁盘占用">
+                  占用
+                </th>
+                <th className="border-b border-slate-200 py-1">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -165,12 +205,101 @@ export function DashboardPage({ account }: { account: Account | null }) {
                   <td className="border-b border-slate-100 py-1 text-xs">
                     {project.indexProgress?.state ?? "—"}
                   </td>
+                  {/* 占用：后端未提供时 `—`（不把"未测量"伪装成 0 B）。 */}
+                  <td
+                    className="border-b border-slate-100 py-1"
+                    data-testid={`disk-${project.projectId}`}
+                  >
+                    {project.diskBytes == null ? "—" : formatBytes(project.diskBytes)}
+                  </td>
+                  <td className="border-b border-slate-100 py-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPending({
+                          projectId: project.projectId,
+                          name: project.displayName || project.projectId,
+                        })
+                      }
+                      className="rounded border border-rose-200 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-50"
+                    >
+                      删除
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        <p className="mt-2 text-xs text-slate-400">
+          「占用」是索引数据的磁盘占用（index.db + 向量 + 源码镜像），**不含源码仓库本身**；
+          后端未提供时显示 —（不当作 0）。
+        </p>
       </Panel>
+
+      <ConfirmDialog
+        open={pending !== null}
+        title={`删除项目 ${pending?.name ?? ""}？`}
+        confirmLabel="删除索引数据"
+        busy={deleting}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          // 取消**不发请求**（只关弹窗）；顺手清掉上一次的删除错误，避免下次点开时残留。
+          setPending(null);
+          setDeleteError(null);
+        }}
+      >
+        <p>将删除该项目的**全部索引数据**（含向量与同步账本）。</p>
+        <p>源码文件不受影响；下次 Agent 提问时会重新上传并索引。</p>
+        <p className="text-xs text-slate-500">
+          projectId：<code className="font-mono">{pending?.projectId ?? ""}</code>
+        </p>
+      </ConfirmDialog>
+    </div>
+  );
+}
+
+/**
+ * 存储配额条（TASK-094 §B4）：已用 / 上限 + 三态颜色。
+ *
+ * 口径：**不限时只显示已用**（不画进度条、不显示百分比）——“没有上限”不是“用了 0%”。
+ * 这与后端 :class:`zace_service.quota.QuotaDimension` 的 `unlimited` 语义一一对应。
+ */
+function StorageBar({ storage }: { storage: QuotaStatusView }) {
+  const { user } = storage;
+  const tone =
+    storage.status === "exceeded"
+      ? { bar: "bg-rose-500", text: "text-rose-700", label: "已超出上限" }
+      : storage.status === "warning"
+        ? { bar: "bg-amber-500", text: "text-amber-700", label: "接近上限" }
+        : { bar: "bg-emerald-500", text: "text-emerald-700", label: "正常" };
+
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3" data-testid="storage-quota">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-xs text-slate-500">存储配额（索引数据）</span>
+        <span className={`text-xs font-medium ${user.unlimited ? "text-slate-600" : tone.text}`}>
+          {user.unlimited
+            ? `已用 ${formatBytes(user.usedBytes)} · 未设上限`
+            : `已用 ${formatBytes(user.usedBytes)} / 上限 ${formatBytes(user.limitBytes)}`}
+          {!user.unlimited && user.ratio !== null && `（${(user.ratio * 100).toFixed(0)}%）`}
+        </span>
+      </div>
+      {!user.unlimited && (
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-slate-100">
+          <div
+            className={`h-full ${tone.bar}`}
+            // 宽度封顶 100%：超限时进度条不能撑破容器（比例由文字如实给出）。
+            style={{ width: `${Math.min(100, (user.ratio ?? 0) * 100).toFixed(1)}%` }}
+          />
+        </div>
+      )}
+      {storage.status !== "ok" && (
+        <p className={`mt-2 text-xs ${tone.text}`}>
+          {tone.label}：可在下方「项目」表按占用从大到小判断该删哪个；
+          删除只影响索引数据，源码文件不受影响。
+        </p>
+      )}
     </div>
   );
 }

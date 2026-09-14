@@ -188,7 +188,7 @@ export interface DeploymentMeta {
   registerOpen: boolean;
   needsBootstrap: boolean;
   userCount: number | null;
-  /** TASK-088 §F：设置页的只读配置（**绝不含 key 任何部分**）。 */
+  /** TASK-088 §F：设置页的只读配置（**绝不含 key 任何部分**）。TASK-094 §B1 追加 `storage`。 */
   config: EffectiveConfig;
 }
 
@@ -201,6 +201,8 @@ export interface DeploymentMeta {
 export interface EffectiveConfig {
   embedding: EmbeddingConfigView;
   llm: LlmConfigView;
+  /** TASK-094 §B1：存储配额（只读展示；`0` 表示不限）。 */
+  storage?: StorageConfigView;
 }
 
 export interface EmbeddingConfigView {
@@ -345,6 +347,12 @@ export interface UsageRecord {
   docsCount: number;
   usedTokens: number;
   citationCoverage: number | null;
+  /**
+   * 请求 trace id（TASK-094 §C）：与响应头 `X-Request-Id`、服务端日志的 `requestId` 同源。
+   * `null` = 这条记录落库时没有 trace（旧版本写下的行）——页面显示 `—`，不编造。
+   * 用户报错时把它报给管理员，可到 `/api/request-log/{requestId}` 查完整链路（TASK-090）。
+   */
+  requestId: string | null;
   createdAt: number;
 }
 
@@ -363,7 +371,34 @@ export interface UsageSummary {
   recent: UsageRecord[];
 }
 
-/** 首页仪表盘（账户资料 + 索引统计 + 查询用量）。 */
+/** 一个配额的维度（用量 / 上限 / 状态；`limitBytes=0` 表示**不限**）。 */
+export interface QuotaDimensionView {
+  usedBytes: number;
+  limitBytes: number;
+  ratio: number | null;
+  status: "ok" | "warning" | "exceeded";
+  unlimited: boolean;
+}
+
+/** 存储配额状态（TASK-094 §B4；`/api/account/overview` 的 `storage`）。 */
+export interface QuotaStatusView {
+  status: "ok" | "warning" | "exceeded";
+  warnRatio: number;
+  projectId: string;
+  user: QuotaDimensionView;
+  project: QuotaDimensionView;
+}
+
+/** 设置页展示的配额配置（`/api/meta` 的 `config.storage`，只读）。 */
+export interface StorageConfigView {
+  perProjectBytes: number;
+  perUserBytes: number;
+  warnRatio: number;
+  /** 两个上限都为 0 时为 `false`（“不限”，页面只显示已用）。 */
+  enabled: boolean;
+}
+
+/** 首页仪表盘（账户资料 + 索引统计 + 查询用量 + 存储配额）。 */
 export interface AccountOverview {
   account: {
     name: string;
@@ -375,6 +410,8 @@ export interface AccountOverview {
   usage: UsageSummary;
   projects: Project[];
   days: number;
+  /** TASK-094 §B4：后端未提供时缺省（页面隐藏配额条）。 */
+  storage?: QuotaStatusView;
 }
 
 export function getAccountOverview(days = 30): Promise<AccountOverview> {
@@ -401,4 +438,14 @@ export function getProjectUsage(id: string, days = 30): Promise<UsageSummary> {
   return request<UsageSummary>(
     `/api/usage/projects/${encodeURIComponent(id)}?days=${days}`,
   );
+}
+
+/**
+ * 删除项目（TASK-094 §D）：级联删除该项目的**索引数据**（含向量与同步账本）。
+ *
+ * 后端已就绪（`DELETE /api/projects/{id}`，含 TASK-061 归属校验：他人项目同样 404）。
+ * 返回 204（无内容），因此调用方不需要处理响应体。
+ */
+export function deleteProject(id: string): Promise<void> {
+  return request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

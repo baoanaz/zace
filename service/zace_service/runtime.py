@@ -199,7 +199,21 @@ class EngineManager:
     def describe_project(
         self, project_id: str, meta: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
-        """项目摘要 + 本地模式字段（``attachedRoot`` / ``indexProgress``；TASK-034 冻结）。"""
+        """项目摘要 + 本地模式字段（``attachedRoot`` / ``indexProgress``；TASK-034 冻结）。
+
+        TASK-094 §A 追加 ``diskBytes``：该项目索引数据的磁盘占用（``{data_root}/projects/{id}``
+        递归求和，含 ``index.db`` / ``vectors/`` / ``blobs/`` / 同步账本），**不含源码仓库**。
+
+        性能口径（实测，本卡实施日）：真机 ``cockpit-agents`` 项目（18 个文件、28 MiB、3416
+        chunks）一次求和 **0.8 ms**；合成 25,000 文件（≈500 MB 量级）**约 0.3 s**。因此**每次列表
+        都现算**，不做缓存——缓存要引入失效点，而当前成本远低于该复杂度。
+        （项目列表页是用户主动打开的页面，毫秒级成本可接受；大仓数量级变差时再加缓存
+        并如实标注，见任务卡"未决问题"。）
+
+        **口径诚实（TASK-083 纪律）**：目录不存在 → ``0``（确实没有数据）；目录存在但求和失败
+        （权限/并发删除）由 :func:`dir_size_bytes` 自行跳过单个文件，因此不会把"未测量"伪装成 0
+        ——前端对 ``null`` 显示 ``—``，对本字段的 0 则如实显示 ``0 B``。
+        """
         base = dict(meta) if meta is not None else self.project_meta(project_id)
         if base is None:  # pragma: no cover - 调用方先判存在性
             base = {"projectId": project_id, "displayName": "", "createdAt": 0}
@@ -208,6 +222,7 @@ class EngineManager:
             **base,
             "attachedRoot": str(root) if root is not None else None,
             "indexProgress": self.index_progress(project_id).to_json(),
+            "diskBytes": dir_size_bytes(self._engine.project_dir(project_id)),
         }
 
     def delete_project(self, project_id: str) -> bool:

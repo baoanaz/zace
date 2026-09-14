@@ -70,6 +70,7 @@ from zace_service.errors import (
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.packmeta import evidence_summary, pack_meta
+from zace_service.quota import append_warning, warning_for
 from zace_service.runtime import EngineManager
 
 router = APIRouter(tags=["query"])
@@ -155,7 +156,12 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
         meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
         ctx["pack"] = trace.pack
         ctx["degraded"] = trace.degraded
-        return {"markdown": render_markdown(trace.pack), "meta": meta}
+        # TASK-094 §B3：存储告警进**返回内容**（不只是日志）——REST 面与 MCP 面同一份文案，
+        # 旁路纪律与审计一致：判定失败返回 None，检索照常。
+        markdown = append_warning(
+            render_markdown(trace.pack), _storage_warning(request, manager, project_id)
+        )
+        return {"markdown": markdown, "meta": meta}
 
 
 @router.post("/api/query/ask")
@@ -202,18 +208,21 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         )
         meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
         ctx["pack"] = pack
+        # TASK-094 §B3：四条分支（证据不足 / 未配置 / 调用失败 / 成功）都带告警——
+        # 用户报"内存满了"时不该因为恰好走了降级分支而看不到提醒。
+        warning = _storage_warning(request, manager, project_id)
         # D-24 优先：证据不足时**不调 LLM**（省一次调用，也避免模型在弱证据上硬编）。
         # 审计如实记 degraded=true（本路径不含 LLM 总结）。
         if insufficient:
             ctx["degraded"] = True
-            return _insufficient_package(pack, meta)
+            return _insufficient_package(pack, meta, warning=warning)
 
         provider = provider_for_app(request.app)
         if provider is None:
             # L5：未配置不报错（也不是 500）——降级包 + 告诉管理员该配什么。
             ctx["degraded"] = True
             return _degraded_response(
-                pack, meta, notice=DEGRADED_NOTICE, reason=DEGRADED_NOTICE
+                pack, meta, notice=DEGRADED_NOTICE, reason=DEGRADED_NOTICE, warning=warning
             )
 
         try:
@@ -237,7 +246,7 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
             ctx["degraded"] = True
             meta["degradedReason"] = LLM_FAILED_NOTICE
             return _degraded_response(
-                pack, meta, notice=LLM_FAILED_NOTICE, reason=LLM_FAILED_NOTICE
+                pack, meta, notice=LLM_FAILED_NOTICE, reason=LLM_FAILED_NOTICE, warning=warning
             )
 
         ctx["degraded"] = False
@@ -246,13 +255,32 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         _write_llm_observations(ctx, provider, outcome)
         return {
             "status": "answered",
-            "answer": outcome.answer,
+            "answer": append_warning(outcome.answer, warning),
             "evidenceSummary": evidence_summary(pack),
             "meta": meta,
         }
 
 
-def _insufficient_package(pack: ContextPack, meta: dict[str, Any]) -> dict[str, Any]:
+def _storage_warning(
+    request: Request, manager: EngineManager, project_id: str
+) -> str | None:
+    """存储告警节（TASK-094 §B3；**旁路**：失败返回 ``None``，绝不影响检索）。
+
+    身份与元数据库都从 ``request`` 取（与审计的归属口径一致）：云端按当前用户的项目求和，
+    本地模式（无账户，R34）按全量口径。
+    """
+    return warning_for(
+        manager,
+        get_settings(request),
+        project_id=project_id,
+        db=_meta_db(request),
+        user_id=_user_id(request),
+    )
+
+
+def _insufficient_package(
+    pack: ContextPack, meta: dict[str, Any], *, warning: str | None = None
+) -> dict[str, Any]:
     """D-24 的结构化证据不足包（Module/04 §3）：有什么给什么 + 缺什么 + 怎么补。
 
     - ``bestEffortContext``：``render_markdown(pack)``——搜索确实命中了些东西，别丢；
@@ -264,7 +292,7 @@ def _insufficient_package(pack: ContextPack, meta: dict[str, Any]) -> dict[str, 
     """
     return {
         "status": "insufficient_evidence",
-        "bestEffortContext": render_markdown(pack),
+        "bestEffortContext": append_warning(render_markdown(pack), warning),
         "missingEvidence": [
             f"[{item.code}]" + (f" ({item.symbol})" if item.symbol else "") + f" {item.message}"
             for item in pack.missing_evidence
@@ -275,14 +303,19 @@ def _insufficient_package(pack: ContextPack, meta: dict[str, Any]) -> dict[str, 
 
 
 def _degraded_response(
-    pack: Any, meta: dict[str, Any], *, notice: str, reason: str
+    pack: Any,
+    meta: dict[str, Any],
+    *,
+    notice: str,
+    reason: str,
+    warning: str | None = None,
 ) -> dict[str, Any]:
     """D-26 降级包（未配置与调用失败共用；Promise.all 式复用避免两处文案漂移）。"""
     meta["degraded"] = True
     meta["degradedReason"] = reason
     return {
         "status": "degraded",
-        "answer": f"{notice}\n\n{render_markdown(pack)}",
+        "answer": append_warning(f"{notice}\n\n{render_markdown(pack)}", warning),
         "evidenceSummary": evidence_summary(pack),
         "meta": meta,
     }
