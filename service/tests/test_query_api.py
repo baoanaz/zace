@@ -1,4 +1,8 @@
-"""TASK-032 验收：``/api/query/search`` 与 ``/api/query/ask``（含 CF-03 校验与降级包）。"""
+"""TASK-032 验收：``/api/query/search`` 与 ``/api/query/ask``（含 CF-03 校验与降级包）。
+
+TASK-087 追加：``answerable=false`` → ``status="insufficient_evidence"`` 的结构化证据不足包
+（D-24 短路）与它的审计落库；``answerable=true`` 的行为保持不变（降级包，TASK-088 接 LLM）。
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,20 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from zace_core.engine import Engine
 from zace_core.types import ChangeSet
+from zace_service.app import create_app
+from zace_service.config import Settings
+from zace_service.metadb import MetaDB
 from zace_service.packmeta import DECISION_SUMMARY_LIMIT, meta_field_names
-from zace_service.routers.query import DEGRADED_NOTICE, MAX_MAX_TOKENS, MAX_QUERY_CHARS
+from zace_service.routers.query import (
+    DEGRADED_NOTICE,
+    INSUFFICIENT_NOTICE,
+    MAX_MAX_TOKENS,
+    MAX_QUERY_CHARS,
+)
 from zace_service.runtime import EngineManager
 
 from tests.conftest import (
@@ -19,6 +33,8 @@ from tests.conftest import (
     SAMPLE_FILES,
     SAMPLE_MODULE_PATH,
     TARGET_SYMBOL,
+    DeterministicBigramEmbedding,
+    make_client,
     upload_files,
 )
 
@@ -26,6 +42,10 @@ from tests.conftest import (
 MISSING_SYMBOL = TARGET_SYMBOL
 #: 与任何上传内容都不重叠的自然语言问题（用于空索引/校验类断言）。
 UNKNOWN_PROJECT = "0123456789abcdef"
+
+#: 必然 "证据不足" 的问题（与语料无任何共识命中；TASK-087 §B 的短路分支入口）。
+#: 与 ``service/tests/test_usage_api.py`` 的同名常量同一形态（假 provider 下 answerable=false）。
+INSUFFICIENT_QUESTION = "zzzz qqqq 与语料完全无关的主题"
 
 
 @pytest.fixture
@@ -188,6 +208,94 @@ def test_ask_evidence_summary_shape(client: TestClient, indexed: str) -> None:
         assert set(item) == {"id", "type", "path", "lines", "tier", "score"}
         assert item["id"].startswith("E")
         assert item["type"] in {"code", "test", "spec"}
+
+
+# ------------------------------------------------------------------ ask 短路（§B）
+
+
+def _ask(client: TestClient, project_id: str, question: str) -> dict:
+    response = client.post("/api/query/ask", json={"projectId": project_id, "question": question})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_ask_insufficient_evidence_returns_structured_package(
+    client: TestClient, engine_manager: EngineManager, indexed: str
+) -> None:
+    """``answerable=false`` → 结构化证据不足包（D-24）：三键齐全且 ``bestEffortContext`` 非空。
+
+    ``missingEvidence`` 非空用**可复现**的缺失来源：
+    删掉被文档引用的代码文件 → 文档引用变 stale（G4；同 test_missing_evidence_is_passed_through）。
+    口径说明：M1/M2a 里"向量通道总有候选"，单靠无关问题**不会**产生
+    ``no_context_match``（R22 已登记，属 TASK-050 校准）。
+    """
+    _blobs, state = engine_manager.project_paths(indexed)
+    state.remove_paths([SAMPLE_MODULE_PATH])
+    state.save()
+    engine_manager.ingest(indexed, ChangeSet(deleted=(SAMPLE_MODULE_PATH,)))
+
+    body = _ask(client, indexed, INSUFFICIENT_QUESTION)
+
+    assert body["status"] == "insufficient_evidence"
+    assert {"bestEffortContext", "missingEvidence", "nextQueries", "meta"} <= set(body)
+    # 有什么给什么：即使证据不足，命中的内容仍渲染出来（不许返回空壳）。
+    assert body["bestEffortContext"].startswith("## Relevant Context")
+    assert body["bestEffortContext"].strip()
+    assert body["meta"]["answerable"] is False
+    assert body["meta"]["degraded"] is True
+    assert body["meta"]["degradedReason"] == INSUFFICIENT_NOTICE
+    assert isinstance(body["missingEvidence"], list)
+    assert isinstance(body["nextQueries"], list)
+    assert body["missingEvidence"], "证据不足必须说清缺什么（D-24 的'有用的失败'）"
+    assert body["nextQueries"], "且必须给改问建议（Module/03 §5 确定性生成）"
+    for line in body["missingEvidence"]:
+        assert line.startswith("["), "可读文本形如 '[code] (symbol) message'"
+    # 短路包里没有 "answer"（那是 LLM 的词，TASK-088）；也没有证据概览（无答可引）。
+    assert "answer" not in body
+    assert "evidenceSummary" not in body
+
+
+def test_ask_when_answerable_keeps_the_degraded_package(client: TestClient, indexed: str) -> None:
+    """``answerable=true`` → 行为与今天一致（``status="degraded"``）；LLM 接入是 TASK-088。"""
+    body = _ask(client, indexed, TARGET_SYMBOL)
+    assert body["meta"]["answerable"] is True, "语料前提：这个提问应当有答案"
+    assert body["status"] == "degraded"
+    assert body["answer"].startswith(DEGRADED_NOTICE)
+    assert "bestEffortContext" not in body, "有答案时不得走 D-24 短路包"
+
+
+def test_ask_short_circuit_is_audited_as_deep_mode(tmp_path: Path) -> None:
+    """短路路径**也要落审计**（TASK-084 的 ``_audited``）：一条 ``mode=deep``、
+    ``degraded=true``、``answerable=false`` 的记录（建库口径同 ``test_usage_api``）。"""
+    settings = Settings(
+        data_root=tmp_path / "data", local_mode=True, local_rescan_interval_s=0.0
+    )  # type: ignore[arg-type]
+    manager = EngineManager.open(
+        settings.data_root,
+        engine_factory=lambda root: Engine.open(root, provider=DeterministicBigramEmbedding()),
+    )
+    app: FastAPI = create_app(settings)
+    app.state.meta_db = MetaDB.open(settings.meta_db_path)
+    app.state.engine_manager = manager
+    try:
+        project_id = manager.resolve_project("identity:audit-short", "audit-short").project_id
+        upload_files(manager, project_id, SAMPLE_FILES)
+        with make_client(app) as client:
+            body = _ask(client, project_id, INSUFFICIENT_QUESTION)
+        assert body["status"] == "insufficient_evidence"
+
+        assert app.state.meta_db is not None
+        rows = (
+            app.state.meta_db._connect()
+            .execute("SELECT mode, degraded, answerable FROM query_audit ORDER BY id")
+            .fetchall()
+        )
+        assert len(rows) == 1
+        assert rows[0]["mode"] == "deep"
+        assert rows[0]["degraded"] == 1
+        assert rows[0]["answerable"] == 0, "短路路径必须如实记 answerable=false（不是 null）"
+    finally:
+        manager.close()
 
 
 # --------------------------------------------------------------------------- 校验与错误

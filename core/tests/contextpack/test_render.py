@@ -124,6 +124,7 @@ def _build_pack(store, seed_file, sym, cand):
 
 
 def test_render_section_order_and_details(store, seed_file, sym, cand) -> None:
+    """既有四节的标题与顺序逐字未变（TASK-087 回归保护：新节插在 Meta 之前）。"""
     pack = _build_pack(store, seed_file, sym, cand)
     text = render_markdown(pack, now=NOW)
 
@@ -133,10 +134,12 @@ def test_render_section_order_and_details(store, seed_file, sym, cand) -> None:
         "### Flow",
         "### Docs",
         "### Missing Evidence",
+        "### Suggested Next Queries",
         "### Meta",
     ]
     positions = [text.index(section) for section in order]
     assert positions == sorted(positions)
+    assert pack.next_queries, "语料前提：这个 pack 必然有 next_queries"
 
     assert "[E1] TokenService.refresh — src/auth/token_service.py:45-46" in text
     assert "45 | def refresh(self):" in text          # 行号（agent 可对齐 Edit）
@@ -171,7 +174,56 @@ def test_render_evidence_for_prompt_has_no_meta_or_flow(store, seed_file, sym, c
     assert "### Meta" not in prompt_section
     assert "### Flow" not in prompt_section
     assert "### Missing Evidence" not in prompt_section
+    assert "### Suggested Next Queries" not in prompt_section, (
+        "本节是给 Agent 的；LLM prompt 的 evidence 分节不含它（TASK-087 §A）"
+    )
     assert "[E1]" in prompt_section and "[E4]" in prompt_section
+
+
+# ------------------------------------------------------------------ next_queries（§A）
+
+
+def test_next_queries_section_lists_each_query_without_numbering(
+    store, seed_file, sym, cand
+) -> None:
+    """``next_queries`` 非空 → 渲染 ``### Suggested Next Queries``，每行 ``- <query>``。"""
+    pack = _build_pack(store, seed_file, sym, cand)
+    text = render_markdown(pack, now=NOW)
+
+    assert "### Suggested Next Queries" in text
+    section = text.split("### Suggested Next Queries\n", 1)[1].split("\n### ", 1)[0]
+    lines = section.splitlines()
+    assert lines == [f"- {query}" for query in pack.next_queries]
+    # 不加编号：正文里不应出现 ``- [N]`` 形态（会和 [E*] / [F*] 证据编号混淆）。
+    assert "- [" not in section
+
+
+def test_next_queries_empty_omits_the_section(store, seed_file, sym, cand) -> None:
+    """``next_queries`` 为空 → 整节不渲染（空节白占 token）。"""
+    seed_file(store, path="src/a.py", symbols=[sym("f", "f", start=1)])
+    pack = assemble(
+        store,
+        "q",
+        [cand("src/a.py", "f", 1, score=1.0)],
+        freshness=Freshness(indexed_at=NOW - 300),
+    )
+    pack.next_queries = []
+    md = render_markdown(pack, now=NOW)
+    assert "Suggested Next Queries" not in md
+
+
+def test_existing_sections_are_byte_identical_to_the_snapshot(store, seed_file, sym, cand) -> None:
+    """快照式回归：除新增节外，渲染结果与快照**逐字一致**（旧节不能被本卡动到）。"""
+    pack = _build_pack(store, seed_file, sym, cand)
+    expected = SNAPSHOT_PATH.read_text(encoding="utf-8").rstrip("\n")
+    text = render_markdown(pack, now=NOW)
+
+    before, marker, after = expected.partition("### Suggested Next Queries\n")
+    assert marker, "快照里必须含 TASK-087 的新节"
+    golden_next, _, tail = after.partition("### Meta")
+    assert text.startswith(before), "Meta 之前（含 Missing Evidence）的旧节逐字未变"
+    assert f"### Suggested Next Queries\n{golden_next}" in text
+    assert text.endswith(f"### Meta{tail}"), "Meta 与之前四节的顺序/内容未变"
 
 
 def test_render_empty_pack_keeps_missing_and_meta(store) -> None:

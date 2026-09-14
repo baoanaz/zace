@@ -1,6 +1,6 @@
 # TASK-087：ContextPack 渲染补齐（next_queries + answerable 短路）
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-088（LLM 接入，可并行）
+> 状态：review ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-088（LLM 接入，可并行）
 > 建议分支：`feature/task-087-pack-render_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `core/zace_core/contextpack/render.py`（补渲染节）
@@ -123,4 +123,146 @@ missing_evidence: 2 条（unresolved_reference 70 个符号、retrieval_truncate
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-14 ｜ 泳道 A ｜ 分支 `feature/task-087-pack-render_xwz0914`
+
+**状态：review**（验收命令全部跑通；行为验收用真实 Voyage embedding + 真实仓库测得）
+
+#### 1. 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest core/tests/contextpack -q` | **62 passed**（新增 4 个断言用例，见下） |
+| `uv run pytest service/tests/test_query_api.py -q` | **26 passed**（新增 3 个用例） |
+| `uv run ruff check .` | **All checks passed!** |
+| `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过（core 纯库 / service 不上探） |
+| `uv run pytest -o addopts="" -q` | **810 passed, 2 skipped**（基线 804 + 本卡新增 6） |
+
+> 环境注记：lane-a 工作区的 `.venv` 缺 dev 组，已用 `uv sync --frozen --all-packages --all-extras`
+> 补齐 `pytest`/`ruff`（`--frozen` 不改 `uv.lock`，无依赖变更）。另：跑基线时必须 `env -u EMBED_MODE`，
+> 否则 `.env` 的 `EMBED_MODE=api` 会让 `test_default_is_local_onnx_provider` 因环境而红（与本卡无关）。
+
+新增断言（§A / §B 逐条对应 DoD）：
+
+- `test_next_queries_section_lists_each_query_without_numbering`：非空 → 出节，每行 `- <query>` 且**无编号**；
+- `test_next_queries_empty_omits_the_section`：空 → `"Suggested Next Queries" not in md`；
+- `test_existing_sections_are_byte_identical_to_the_snapshot`：**快照式回归**，Meta 之前的旧节逐字未变；
+- `test_render_evidence_for_prompt_has_no_meta_or_flow`：追加一条断言，**prompt 分节不含新节**；
+- `test_ask_insufficient_evidence_returns_structured_package`：`status="insufficient_evidence"` +
+  `bestEffortContext` / `missingEvidence` / `nextQueries` 三键齐全且 `bestEffortContext` 非空（用一个**可复现**的
+  缺失来源构造 `missingEvidence` 非空：删掉被文档引用的代码 → `stale_doc_reference`）；
+- `test_ask_when_answerable_keeps_the_degraded_package`：`answerable=true` → 仍 `status="degraded"`（不回归）；
+- `test_ask_short_circuit_is_audited_as_deep_mode`：短路路径查库得一条 `mode=deep` / `degraded=1` / `answerable=0`。
+
+#### 2. 渲染前后对照（Markdown 片段）
+
+**旧节逐字未变**：下面对照取自 `core/tests/contextpack/snapshots/rich_pack.md` 的快照 diff——
+除新增 4 行外**零改动**（`git diff` 只显示这 4 行 `+`，无 `-`）：
+
+```diff
+  - [stale_doc_reference] (LegacyToken.rotate) 文档 docs/design/auth.md 引用了已删除或改名的符号（LegacyToken.rotate），该文档可能已过时；需要以代码为准并更新文档。
++ ### Suggested Next Queries
++ - refresh 的调用方有哪些
++ - src/auth/token_service.py 里还有哪些与查询相关的符号
++ - 认证 > Token Refresh 对应的实现代码在哪里
+  ### Meta
+  confidence: high | index: stale (1 files) | budget: 574/10.0K
+```
+
+渲染后完整节顺序（`## Relevant Context` → Code / Flow / Docs / Missing Evidence /
+Suggested Next Queries / Meta）由 `test_render_section_order_and_details` 用 `text.index()` 顺序断言守住。
+
+**真实仓库的渲染效果**（同上 index 的 `HelloAgents`，查询「这个仓库的量子计算模块在哪」——该问题在本仓库
+`answerable=true`，故用 `zzzz qqqq…` 作真·证据不足样本，两者只差 `answerable` 分支）：
+
+```markdown
+### Missing Evidence
+- [unresolved_reference] 70 个符号引用无法解析（unresolved_refs status=failed），涉及这些符号的调用关系可能缺失。
+- [retrieval_truncated] 候选池被预算裁剪：省略 63 个候选（其中 51 个因 spec 份额上限让位给代码证据），可能有相关但未展示的证据；可提高预算或收窄查询。
+### Suggested Next Queries
+- skills/podcast-generate/readme.md 里还有哪些与查询相关的符号
+- Podcast Generate Skill（TypeScript 线上版本） 对应的实现代码在哪里
+### Meta
+confidence: low | index: fresh (1 min ago) | budget: 8.4K/10.0K
+```
+
+#### 3. 行为验收（真实 Voyage embedding + 真实仓库，非假 provider）
+
+- 靶场：`/home/xuwenzheng/2_github/Agent开发/hello-agents/HelloAgents`（**只读，未在其中建任何文件**）；
+- 索引：`zace-core ingest --repo … --data /tmp/zace-087-data` → 237 文件 / 2730 chunks / 2730 vectors（57.2s，`EMBED_MODE=api` / `voyage-4-lite`）；
+- `POST /api/query/ask`（TestClient 驱动真实服务，`question="zzzz qqqq 与语料完全无关的主题"`）：
+
+```text
+HTTP 200 | status = insufficient_evidence
+keys: ['status', 'bestEffortContext', 'missingEvidence', 'nextQueries', 'meta']
+meta.answerable = False | degraded = True
+meta.degradedReason = 证据不足（answerable=false）：按 D-24 不调用 LLM，返回尽力而为的上下文与补齐建议。
+
+--- missingEvidence ---
+["[unresolved_reference] 70 个符号引用无法解析（unresolved_refs status=failed），涉及这些符号的调用关系可能缺失。",
+ "[retrieval_truncated] 候选池被预算裁剪：省略 63 个候选（其中 51 个因 spec 份额上限让位给代码证据），可能有相关但未展示的证据；可提高预算或收窄查询。"]
+
+--- nextQueries ---
+["skills/podcast-generate/readme.md 里还有哪些与查询相关的符号",
+ "Podcast Generate Skill（TypeScript 线上版本） 对应的实现代码在哪里"]
+
+--- bestEffortContext（末 5 行） ---
+### Suggested Next Queries
+- skills/podcast-generate/readme.md 里还有哪些与查询相关的符号
+- Podcast Generate Skill（TypeScript 线上版本） 对应的实现代码在哪里
+### Meta
+confidence: low | index: fresh (1 min ago) | budget: 8.4K/10.0K
+```
+
+对照（同一仓库、同一服务，`question="流式输出在哪个文件实现"`）：
+
+```text
+HTTP 200 | status = degraded | answerable = True
+keys: ['status', 'answer', 'evidenceSummary', 'meta']
+Deep 模式（LLM 总结）尚未接入（Phase 3）；以下为检索与组装结果，可直接作为上下文使用。
+
+## Relevant Context
+### Code
+[E3] StreamBuffer — hello_agents/core/streaming.py:74-82
+```
+
+审计落库（同一次真实运行，查 `zace-meta.db`）：
+
+```text
+{'mode': 'deep', 'degraded': 1, 'answerable': 0, 'confidence': 'low',    'query': 'zzzz qqqq 与语料完全无关的主题', 'latency_ms': 2073}
+{'mode': 'deep', 'degraded': 1, 'answerable': 1, 'confidence': 'medium', 'query': '流式输出在哪个文件实现',       'latency_ms': 525}
+```
+
+即：**短路路径确实落了一条 deep / degraded / answerable=false 的记录**（DoD 最后一条）。
+
+#### 4. 交付物
+
+- `core/zace_core/contextpack/render.py`：新增 `_next_queries_section`，插在
+  `_missing_section` 与 `_meta_section` 之间（`render_markdown` 调用链）；**未动** `render_evidence_for_prompt`；
+- `core/tests/contextpack/test_render.py` + `snapshots/rich_pack.md`：新增断言与快照新节；
+- `service/zace_service/routers/query.py`：`ask` 增 `answerable` 分支 + `INSUFFICIENT_NOTICE` + `_insufficient_package`；
+- `service/tests/test_query_api.py`：3 个新用例。
+
+#### 5. 与设计的偏差
+
+1. **短路包不含 `evidenceSummary`**。Module/04 §3 列的三个键（`status` / `bestEffortContext` /
+   `missingEvidence` / `nextQueries`）全部照做；`evidenceSummary` 是 Phase 2 降级包（D-26）的既有扩展字段，
+   本卡的 DoD 未要求它。判断依据：「证据不足」时给 Agent 一份"证据概览"是自相矛盾的信号，
+   而 `bestEffortContext` 里已含全部证据。TASK-088 若需要，可零成本加上。
+2. **`meta.degradedReason` 在短路路径取 `INSUFFICIENT_NOTICE`**（而非沿用 `DEGRADED_NOTICE`）。
+   两者语义不同（"有 LLM 也答不了" vs "没有 LLM"），用户看 meta 时更需要前者。字段名与字段集未变（只改值）。
+3. **`meta.mode` 仍为 `pack.mode`（实际组装模式，Fast）**，未改成 `"deep"`——这是 `packmeta.py` 的既有口径
+   （TASK-032 注释已写明：如实描述实际发生了什么），字段集冻结，本卡不动。
+
+以上均属"新增取值/新增键"，不改 `pack_meta` 字段名、不删字段（CF-05 / TASK-040 契约不受影响）。
+
+#### 6. 未决问题
+
+1. **CF-05 的 `AskResponse` schema 未同步**（`docs/contracts/openapi.yaml`：`status` enum 已含
+   `insufficient_evidence`，但 `bestEffortContext` / `missingEvidence` / `nextQueries` 三个响应字段未登记）。
+   契约文件不在本卡文件所有权清单内，**未改**。请编排者同步 openapi.yaml（或在 TASK-088 一并做）。
+   注：现有测试只校验**路径与方法集合**（`test_skeleton.py`），故本卡未破坏任何测试。
+2. **阈值观察（非缺陷，属校准范畴）**：「这个仓库的量子计算模块在哪」在真实仓库下 `answerable=true`
+   （confidence=medium），即"问题与仓库无关"未必判为证据不足——这是 R22/`_assess` 的口径
+   （向量通道总有候选 + ≥2 通道共识即算可回答）。R22 已登记该诚实性缺口，归 TASK-050 校准，本卡不越界。
+3. 客户端（TASK-040）与 WebUI 尚未消费新形状：`status` 多了一个取值、响应多了三个键。
+   属"只增不改"，向后兼容；是否要在 TASK-040 里加展示，由编排者定。
