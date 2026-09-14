@@ -122,7 +122,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
             value={usage.p95LatencyMs === null ? "—" : `${usage.p95LatencyMs} ms`}
           />
         </div>
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-ink-muted">
           引用覆盖率：{usage.citationCoverageAvg === null ? "— 尚未测量（LLM 总结未接入）" : `${(usage.citationCoverageAvg * 100).toFixed(1)}%`}
         </p>
       </Panel>
@@ -141,28 +141,28 @@ export function DashboardPage({ account }: { account: Account | null }) {
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-500">
-                <th className="border-b border-slate-200 py-1">项目</th>
-                <th className="border-b border-slate-200 py-1">projectId</th>
-                <th className="border-b border-slate-200 py-1">文件</th>
-                <th className="border-b border-slate-200 py-1">chunks</th>
-                <th className="border-b border-slate-200 py-1">状态</th>
+              <tr className="text-left text-xs text-ink-muted">
+                <th className="border-b border-ink-line py-1">项目</th>
+                <th className="border-b border-ink-line py-1">projectId</th>
+                <th className="border-b border-ink-line py-1">文件</th>
+                <th className="border-b border-ink-line py-1">chunks</th>
+                <th className="border-b border-ink-line py-1">状态</th>
               </tr>
             </thead>
             <tbody>
               {data.projects.map((project) => (
                 <tr key={project.projectId}>
-                  <td className="border-b border-slate-100 py-1">
+                  <td className="border-b border-ink-line/60 py-1">
                     {project.displayName || project.projectId}
                   </td>
-                  <td className="border-b border-slate-100 py-1 font-mono text-xs">
+                  <td className="border-b border-ink-line/60 py-1 font-mono text-xs">
                     {project.projectId}
                   </td>
-                  <td className="border-b border-slate-100 py-1">
+                  <td className="border-b border-ink-line/60 py-1">
                     {project.sync?.filesIndexed ?? "—"}
                   </td>
-                  <td className="border-b border-slate-100 py-1">{project.sync?.chunks ?? "—"}</td>
-                  <td className="border-b border-slate-100 py-1 text-xs">
+                  <td className="border-b border-ink-line/60 py-1">{project.sync?.chunks ?? "—"}</td>
+                  <td className="border-b border-ink-line/60 py-1 text-xs">
                     {project.indexProgress?.state ?? "—"}
                   </td>
                 </tr>
@@ -186,9 +186,9 @@ function Panel({
 }) {
   return (
     <section
-      className={`rounded-lg border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      className={`rounded-lg border border-ink-line bg-paper-card p-4 shadow-sm ${className}`}
     >
-      <h2 className="mb-3 text-sm font-semibold text-slate-800">{title}</h2>
+      <h2 className="mb-3 text-sm font-semibold text-ink-primary">{title}</h2>
       {children}
     </section>
   );
@@ -196,9 +196,9 @@ function Panel({
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-slate-100 py-1.5">
-      <span className="text-xs text-slate-500">{label}</span>
-      <span className="text-sm text-slate-800">{value}</span>
+    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-ink-line/70 py-1.5">
+      <span className="text-xs text-ink-muted">{label}</span>
+      <span className="text-sm text-ink-primary">{value}</span>
     </div>
   );
 }
@@ -221,12 +221,12 @@ function Metric({
         ? "text-rose-700"
         : tone === "warn"
           ? "text-amber-700"
-          : "text-slate-900";
+          : "text-ink-primary";
   return (
     <div>
-      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-xs text-ink-muted">{label}</div>
       <div className={`text-xl font-semibold ${color}`}>{value}</div>
-      {hint && <div className="text-xs text-slate-400">{hint}</div>}
+      {hint && <div className="text-xs text-ink-muted">{hint}</div>}
     </div>
   );
 }

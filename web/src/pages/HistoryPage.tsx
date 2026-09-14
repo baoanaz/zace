@@ -85,14 +85,14 @@ export function HistoryPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-baseline gap-3">
         <h1 className="text-lg font-semibold">历史记录</h1>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-ink-muted">
           使用记录窗口：近 {usage?.days ?? WINDOW_DAYS} 天
         </span>
       </div>
 
       {error !== null && <ErrorBlock error={error} />}
 
-      <div className="flex overflow-hidden rounded border border-slate-300 text-sm">
+      <div className="flex overflow-hidden rounded border border-ink-line text-sm">
         {(
           [
             ["index", "索引记录"],
@@ -104,7 +104,7 @@ export function HistoryPage() {
             type="button"
             onClick={() => setTab(value)}
             className={`px-4 py-1.5 ${
-              tab === value ? "bg-slate-900 text-white" : "bg-white hover:bg-slate-50"
+              tab === value ? "bg-accent-seal text-white" : "bg-paper-card hover:bg-paper-base"
             }`}
           >
             {label}
@@ -136,13 +136,13 @@ function IndexHistory({
 
   if (runs.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="rounded-lg border border-ink-line bg-paper-card shadow-sm">
         {failures.length > 0 ? (
           <div className="space-y-2 p-4">
             <p className="text-sm font-medium text-rose-800">
               索引记录读取失败：{failures.map((item) => nameOf(item.projectId)).join("、")}
             </p>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-ink-muted">
               这**不代表还没有数据**——请先解决上面的错误，再判断是否有记录。
             </p>
             {failures.map((item) => (
@@ -181,10 +181,10 @@ function IndexHistory({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto rounded-lg border border-ink-line bg-paper-card shadow-sm">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="text-left text-xs text-slate-500">
+            <tr className="text-left text-xs text-ink-muted">
               <th className="px-4 py-2 font-normal">结束时间</th>
               <th className="px-4 py-2 font-normal">项目</th>
               <th className="px-4 py-2 font-normal">结果</th>
@@ -196,8 +196,8 @@ function IndexHistory({
           </thead>
           <tbody>
             {runs.map(({ projectId, run }) => (
-              <tr key={`${projectId}-${run.runId}`} className="border-t border-slate-100">
-                <td className="px-4 py-2 text-xs text-slate-500">{formatTime(run.finishedAt)}</td>
+              <tr key={`${projectId}-${run.runId}`} className="border-t border-ink-line/60">
+                <td className="px-4 py-2 text-xs text-ink-muted">{formatTime(run.finishedAt)}</td>
                 <td className="px-4 py-2">{nameOf(projectId)}</td>
                 <td className="px-4 py-2">
                   <span
@@ -223,12 +223,12 @@ function IndexHistory({
                   {run.filesProcessed} / {run.filesTotal}
                 </td>
                 <td className="px-4 py-2">{run.chunks}</td>
-                <td className="px-4 py-2 text-xs text-slate-500">{run.errors || "—"}</td>
+                <td className="px-4 py-2 text-xs text-ink-muted">{run.errors || "—"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+        <p className="border-t border-ink-line/60 px-4 py-2 text-xs text-ink-muted">
           "文件（解析/总数）"两列不是同一量纲（总数含二进制/超限文件），**不换算百分比**；
           失败记录没有有意义的耗时，因此不参与平均耗时的计算。
         </p>
@@ -242,7 +242,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4 rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 rounded-lg border border-ink-line bg-paper-card p-4 text-sm shadow-sm sm:grid-cols-4">
         <Stat label="查询次数" value={String(usage.total)} />
         <Stat label="有答案" value={String(usage.succeeded)} />
         <Stat label="证据不足" value={String(usage.insufficient)} />
@@ -267,11 +267,11 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
       </div>
 
       {Object.keys(usage.confidenceDistribution).length > 0 && (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
-          <h2 className="mb-2 text-sm font-semibold text-slate-800">confidence 分布</h2>
+        <div className="rounded-lg border border-ink-line bg-paper-card p-4 text-sm shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold text-ink-primary">confidence 分布</h2>
           <div className="flex flex-wrap gap-3">
             {Object.entries(usage.confidenceDistribution).map(([key, count]) => (
-              <span key={key} className="rounded bg-slate-100 px-2 py-1 text-xs">
+              <span key={key} className="rounded bg-paper-base px-2 py-1 text-xs text-ink-primary">
                 {key}: {count}
               </span>
             ))}
@@ -280,7 +280,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
       )}
 
       {usage.recent.length === 0 ? (
-        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="rounded-lg border border-ink-line bg-paper-card shadow-sm">
           <EmptyState
             title="这段时间还没有查询记录"
             hint="在编辑器里接入 Agent 后向它提问，每次查询都会记录在这里（默认看近 30 天）。"
@@ -292,10 +292,10 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
           />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-lg border border-ink-line bg-paper-card shadow-sm">
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-500">
+              <tr className="text-left text-xs text-ink-muted">
                 <th className="px-4 py-2 font-normal">时间</th>
                 <th className="px-4 py-2 font-normal">模式</th>
                 <th className="px-4 py-2 font-normal">查询</th>
@@ -307,8 +307,8 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
             </thead>
             <tbody>
               {usage.recent.map((record) => (
-                <tr key={record.queryId} className="border-t border-slate-100">
-                  <td className="px-4 py-2 text-xs text-slate-500">
+                <tr key={record.queryId} className="border-t border-ink-line/60">
+                  <td className="px-4 py-2 text-xs text-ink-muted">
                     {formatTime(record.createdAt)}
                   </td>
                   <td className="px-4 py-2 text-xs">{record.mode}</td>
@@ -322,7 +322,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
                         ? "有答案"
                         : "证据不足"}
                     {record.confidence && (
-                      <span className="ml-1 text-slate-400">({record.confidence})</span>
+                      <span className="ml-1 text-ink-muted">({record.confidence})</span>
                     )}
                   </td>
                   <td className="px-4 py-2 text-xs">{record.latencyMs} ms</td>
@@ -334,7 +334,7 @@ function UsageHistory({ usage }: { usage: UsageSummary | null }) {
               ))}
             </tbody>
           </table>
-          <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
+          <p className="border-t border-ink-line/60 px-4 py-2 text-xs text-ink-muted">
             审计只保存证据的元数据（id/路径/行号/分层/分数），**不含源码内容**。
           </p>
         </div>
@@ -350,8 +350,8 @@ function sumTokens(usage: UsageSummary): number {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-lg font-semibold text-slate-900">{value}</div>
+      <div className="text-xs text-ink-muted">{label}</div>
+      <div className="text-lg font-semibold text-ink-primary">{value}</div>
     </div>
   );
 }

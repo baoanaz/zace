@@ -143,7 +143,7 @@
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
-| [TASK-098](TASK-098-WebUI复古风格改版.md) | **WebUI 复古博物院风格**（老纸底 `#f3e4c7` + 侧边栏布局 + 登录页双栏） | 无（soft: TASK-094，同改两页） | `web/src/{index.css,tailwind.config.js}`、`web/src/app/Layout.tsx`、`web/src/pages/LoginPage.tsx`、`web/src/components/ui.tsx` | pending |
+| [TASK-098](TASK-098-WebUI复古风格改版.md) | **WebUI 复古博物院风格**（老纸底 `#f3e4c7` + 侧边栏布局 + 登录页双栏） | 无（soft: TASK-094，同改两页） | `web/src/{index.css,tailwind.config.js}`、`web/src/app/Layout.tsx`、`web/src/pages/LoginPage.tsx`、`web/src/components/ui.tsx` | review |
 
 > **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
 > 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。

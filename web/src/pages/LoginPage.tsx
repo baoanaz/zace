@@ -1,5 +1,5 @@
 /**
- * 登录 / 注册 / 初始化（TASK-071；首屏页面）。
+ * 登录 / 注册 / 初始化（TASK-071；首屏页面）。TASK-098 §B 改版为**左装饰 + 右白卡片**。
  *
  * 一个页面承担三件事，由 `GET /api/meta` 决定显示哪个：
  *
@@ -10,6 +10,10 @@
  * | 云端 + 有账户 | **登录**（register 开启时下方多一个注册表单） |
  *
  * 都不需要用户去记"我该点哪个"。
+ *
+ * TASK-098 只改**外观**：左侧装饰区（老纸底 + 衬线品牌字 + 细线几何图案），
+ * 右侧纯白浮卡片（参考 Voyage 登录页）。三种模式、三个字段、错误展示、忙态禁用、
+ * 注册开关提示**一个都没动**；窄屏（<768px）时装饰区收起，只留表单。
  */
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
@@ -86,97 +90,153 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
     mode === "bootstrap" ? "创建并进入" : mode === "register" ? "注册并进入" : "登录";
 
   return (
-    <div className="mx-auto max-w-md py-10">
-      <div className="mb-6 text-center">
-        <div className="font-mono text-2xl font-semibold">zace</div>
-        <p className="mt-1 text-sm text-slate-500">Workspace Context Engine</p>
-      </div>
-
-      <form
-        onSubmit={submit}
-        className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+    <div className="flex min-h-screen flex-col md:flex-row">
+      {/*
+       * 左装饰区：老纸底 + 衬线品牌字 + 细线几何图案（§B）。
+       * 窄屏收起（hidden md:flex）——不能挤压表单。
+       * 图案只用 CSS 边框渐变拼出细线矩形，不引图片/字体资源。
+       */}
+      <section
+        aria-hidden="true"
+        className="relative hidden overflow-hidden border-r border-ink-line md:flex md:w-1/2 md:flex-col md:justify-between md:p-12 lg:w-3/5"
       >
-        <h1 className="text-base font-semibold">{title}</h1>
-
-        {mode === "bootstrap" && (
-          <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-            这是首次部署：创建第一个账户后，初始化入口会自动关闭。
-          </p>
-        )}
-
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs text-slate-500">账户</span>
-          <input
-            name="name"
-            autoComplete="username"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            required
-          />
-        </label>
-
-        <label className="block text-sm">
-          <span className="mb-1 block text-xs text-slate-500">密码</span>
-          <input
-            name="password"
-            type="password"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            required
-          />
-        </label>
-
-        {mode === "register" && (
-          <label className="block text-sm">
-            <span className="mb-1 block text-xs text-slate-500">确认密码</span>
-            <input
-              name="confirm"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(event) => setConfirm(event.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-              required
-            />
-          </label>
-        )}
-
-        {error !== null && <ErrorBlock error={error} />}
-
-        <button
-          type="submit"
-          disabled={busy || name.trim().length === 0 || password.length === 0}
-          className="w-full rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-40"
-        >
-          {busy ? "处理中…" : submitLabel}
-        </button>
-
-        <div className="space-y-1 border-t border-slate-100 pt-3 text-center text-xs">
-          {mode === "login" && meta.registerOpen && (
-            <button type="button" className="underline" onClick={() => setMode("register")}>
-              没有账户？注册
-            </button>
-          )}
-          {mode === "register" && (
-            <button type="button" className="underline" onClick={() => setMode("login")}>
-              已有账户？登录
-            </button>
-          )}
-          {!meta.registerOpen && mode === "login" && (
-            <p className="text-slate-400">
-              注册已关闭（ZACE_REGISTER_OPEN）——单用户自部署的默认配置。
-            </p>
-          )}
+        <div className="relative z-10 flex items-center gap-3">
+          <span className="h-6 w-6 rounded-full border-2 border-accent-seal/60" />
+          <span className="font-serif text-lg tracking-[0.2em] text-ink-muted uppercase">
+            zace
+          </span>
         </div>
-      </form>
 
-      <p className="mt-4 text-center text-xs text-slate-400">
-        zace v{meta.version}
-        {meta.authRequired ? " · 云端形态（需鉴权）" : " · 本地形态"}
-      </p>
+        <div className="relative z-10 max-w-md">
+          {/* 装饰性大标题：用 p 而不是 h1——真正的 h1 是表单标题（屏幕阅读器只该读一个）。 */}
+          <p className="font-serif text-4xl leading-tight font-semibold text-ink-primary lg:text-5xl">
+            Workspace
+            <br />
+            Context Engine
+          </p>
+          <p className="mt-5 text-sm leading-relaxed text-ink-muted">
+            把仓库索引成可检索的上下文，让编码 Agent 在你的代码里找到依据，
+            <br />
+            而不是靠猜。
+          </p>
+        </div>
+
+        <p className="relative z-10 text-xs tracking-wider text-ink-muted">
+          本地优先 · 证据可溯 · 服务端渲染
+        </p>
+
+        {/* 细线几何图案：三层同心圆角矩形，颜色取自墨线 token。 */}
+        <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center">
+          <div className="h-[26rem] w-[26rem] rotate-12 rounded-[3rem] border border-ink-line/70" />
+          <div className="absolute h-[34rem] w-[34rem] rotate-12 rounded-[4rem] border border-ink-line/50" />
+          <div className="absolute h-[42rem] w-[42rem] rotate-12 rounded-[5rem] border border-ink-line/30" />
+        </div>
+      </section>
+
+      {/* 右表单区：纯白浮卡片（用户明确"右边是白色的登入卡片"）。 */}
+      <section className="flex flex-1 items-center justify-center px-4 py-10 md:px-10">
+        <div className="w-full max-w-md">
+          {/* 窄屏下装饰区收起，品牌字改在卡片上方显示。 */}
+          <div className="mb-6 text-center md:hidden">
+            <div className="font-serif text-2xl font-semibold text-ink-primary">zace</div>
+            <p className="mt-1 text-sm text-ink-muted">Workspace Context Engine</p>
+          </div>
+
+          <form
+            onSubmit={submit}
+            className="space-y-4 rounded-xl border border-ink-line bg-paper-card p-6 shadow-[0_18px_50px_-24px_rgba(42,36,25,0.45)] md:p-8"
+          >
+            <h1 className="font-serif text-xl font-semibold text-ink-primary">{title}</h1>
+
+            {mode === "bootstrap" && (
+              <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                这是首次部署：创建第一个账户后，初始化入口会自动关闭。
+              </p>
+            )}
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs text-ink-muted">账户</span>
+              <input
+                name="name"
+                autoComplete="username"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary"
+                required
+              />
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs text-ink-muted">密码</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary"
+                required
+              />
+            </label>
+
+            {mode === "register" && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-xs text-ink-muted">确认密码</span>
+                <input
+                  name="confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(event) => setConfirm(event.target.value)}
+                  className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary"
+                  required
+                />
+              </label>
+            )}
+
+            {error !== null && <ErrorBlock error={error} />}
+
+            <button
+              type="submit"
+              disabled={busy || name.trim().length === 0 || password.length === 0}
+              className="w-full rounded bg-accent-seal px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {busy ? "处理中…" : submitLabel}
+            </button>
+
+            <div className="space-y-1 border-t border-ink-line pt-3 text-center text-xs">
+              {mode === "login" && meta.registerOpen && (
+                <button
+                  type="button"
+                  className="text-accent-seal underline"
+                  onClick={() => setMode("register")}
+                >
+                  没有账户？注册
+                </button>
+              )}
+              {mode === "register" && (
+                <button
+                  type="button"
+                  className="text-accent-seal underline"
+                  onClick={() => setMode("login")}
+                >
+                  已有账户？登录
+                </button>
+              )}
+              {!meta.registerOpen && mode === "login" && (
+                <p className="text-ink-muted">
+                  注册已关闭（ZACE_REGISTER_OPEN）——单用户自部署的默认配置。
+                </p>
+              )}
+            </div>
+          </form>
+
+          <p className="mt-4 text-center text-xs text-ink-muted">
+            zace v{meta.version}
+            {meta.authRequired ? " · 云端形态（需鉴权）" : " · 本地形态"}
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

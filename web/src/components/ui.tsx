@@ -35,10 +35,10 @@ export function Card({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section className="rounded-lg border border-ink-line bg-paper-card shadow-sm">
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+        <header className="flex items-center justify-between gap-3 border-b border-ink-line/70 px-4 py-3">
+          <h2 className="text-sm font-semibold text-ink-primary">{title}</h2>
           {actions}
         </header>
       )}
@@ -105,7 +105,7 @@ export function CopyButton({ text, label = "复制" }: { text: string; label?: s
     <button
       type="button"
       onClick={onCopy}
-      className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+      className="rounded border border-ink-line bg-paper-card px-2 py-1 text-xs text-ink-primary hover:bg-paper-base"
     >
       {copied ? "已复制" : label}
     </button>
@@ -116,9 +116,9 @@ export function KeyValue({ items }: { items: [string, ReactNode][] }) {
   return (
     <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
       {items.map(([key, value]) => (
-        <div key={key} className="flex items-baseline justify-between gap-3 border-b border-dashed border-slate-100 pb-1">
-          <dt className="text-xs text-slate-500">{key}</dt>
-          <dd className="text-sm text-slate-800">{value}</dd>
+        <div key={key} className="flex items-baseline justify-between gap-3 border-b border-dashed border-ink-line/70 pb-1">
+          <dt className="text-xs text-ink-muted">{key}</dt>
+          <dd className="text-sm text-ink-primary">{value}</dd>
         </div>
       ))}
     </dl>
@@ -126,7 +126,7 @@ export function KeyValue({ items }: { items: [string, ReactNode][] }) {
 }
 
 export function LoadingBlock({ text = "加载中…" }: { text?: string }) {
-  return <p className="py-6 text-center text-sm text-slate-500">{text}</p>;
+  return <p className="py-6 text-center text-sm text-ink-muted">{text}</p>;
 }
 
 /**
@@ -151,8 +151,8 @@ export function EmptyState({
 }) {
   return (
     <div className="px-4 py-6 text-center">
-      <p className="text-sm font-medium text-slate-700">{title}</p>
-      {hint && <p className="mx-auto mt-1 max-w-prose text-sm text-slate-500">{hint}</p>}
+      <p className="text-sm font-medium text-ink-primary">{title}</p>
+      {hint && <p className="mx-auto mt-1 max-w-prose text-sm text-ink-muted">{hint}</p>}
       {action && <div className="mt-3 flex justify-center">{action}</div>}
     </div>
   );

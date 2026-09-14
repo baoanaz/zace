@@ -66,10 +66,16 @@ export function describeIndexProgress(
   }
 }
 
+/*
+ * 徽标配色（TASK-098 §D）：改为老纸主题 token。
+ *
+ * `idle` 由 slate 灰换成纸面色卡；`running/done/warning/failed` 保留语义色相（蓝/绿/黄/红），
+ * 只把边框换成墨线色系，避免半透明边框叠在白色卡片上发脏。
+ */
 export const TONE_CLASS: Record<ProgressTone, string> = {
-  idle: "bg-slate-100 text-slate-600 border-slate-200",
-  running: "bg-blue-50 text-blue-700 border-blue-200",
-  done: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  warning: "bg-amber-50 text-amber-800 border-amber-200",
-  failed: "bg-rose-50 text-rose-700 border-rose-200",
+  idle: "bg-paper-base text-ink-muted border-ink-line",
+  running: "bg-blue-50 text-blue-800 border-blue-200",
+  done: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  warning: "bg-amber-50 text-amber-900 border-amber-300",
+  failed: "bg-rose-50 text-rose-800 border-rose-200",
 };

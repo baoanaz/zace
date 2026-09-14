@@ -16,14 +16,14 @@ export function Markdown({ source }: { source: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           h2: (props) => <h2 className="mt-4 mb-2 text-base font-semibold" {...props} />,
-          h3: (props) => <h3 className="mt-3 mb-1 text-sm font-semibold text-slate-700" {...props} />,
+          h3: (props) => <h3 className="mt-3 mb-1 text-sm font-semibold text-ink-primary" {...props} />,
           p: (props) => <p className="my-1 text-sm leading-relaxed" {...props} />,
           code: (props) => (
-            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs" {...props} />
+            <code className="rounded bg-paper-base px-1 py-0.5 font-mono text-xs" {...props} />
           ),
           pre: (props) => (
             <pre
-              className="my-2 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-xs text-slate-100"
+              className="my-2 overflow-x-auto rounded bg-ink-primary p-3 font-mono text-xs text-paper-base"
               {...props}
             />
           ),
@@ -31,9 +31,9 @@ export function Markdown({ source }: { source: string }) {
             <table className="my-2 w-full border-collapse text-sm" {...props} />
           ),
           th: (props) => (
-            <th className="border border-slate-200 bg-slate-50 px-2 py-1 text-left" {...props} />
+            <th className="border border-ink-line bg-paper-base px-2 py-1 text-left" {...props} />
           ),
-          td: (props) => <td className="border border-slate-200 px-2 py-1" {...props} />,
+          td: (props) => <td className="border border-ink-line px-2 py-1" {...props} />,
           ul: (props) => <ul className="my-1 list-disc pl-5 text-sm" {...props} />,
           ol: (props) => <ol className="my-1 list-decimal pl-5 text-sm" {...props} />,
         }}
