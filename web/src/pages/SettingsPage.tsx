@@ -172,8 +172,8 @@ export function SettingsPage() {
               ]}
             />
             <p className="mt-2 text-xs text-ink-muted">
-              达到阈值的 {Math.round(storage.warnRatio * 100)}% 时，检索工具会在**返回内容里**提醒
-              Agent 转告用户去控制台删项目；**超限不阻断**（新索引与检索照常）。
+              达到阈值的 {Math.round(storage.warnRatio * 100)}% 时，检索工具会在<strong>返回内容里</strong>提醒
+              Agent 转告用户去控制台删项目；<strong>超限不阻断</strong>（新索引与检索照常）。
               改这三项请设环境变量后重启：
               <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES</code>
               <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_USER_BYTES</code>

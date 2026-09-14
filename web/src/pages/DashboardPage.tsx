@@ -232,7 +232,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
           </table>
         )}
         <p className="mt-2 text-xs text-ink-muted">
-          「占用」是索引数据的磁盘占用（index.db + 向量 + 源码镜像），**不含源码仓库本身**；
+          「占用」是索引数据的磁盘占用（index.db + 向量 + 源码镜像），<strong>不含源码仓库本身</strong>；
           后端未提供时显示 —（不当作 0）。
         </p>
       </Panel>
@@ -249,7 +249,9 @@ export function DashboardPage({ account }: { account: Account | null }) {
           setDeleteError(null);
         }}
       >
-        <p>将删除该项目的**全部索引数据**（含向量与同步账本）。</p>
+        <p>
+          将删除该项目的<strong>全部索引数据</strong>（含向量与同步账本）。
+        </p>
         <p>源码文件不受影响；下次 Agent 提问时会重新上传并索引。</p>
         <p className="text-xs text-ink-muted">
           projectId：<code className="font-mono">{pending?.projectId ?? ""}</code>
