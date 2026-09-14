@@ -14,13 +14,19 @@ crate），
 "忽略语义清单"**——将来 client 用 ``ignore`` crate 时，两侧行为必须一致（见
 ``core/tests/pipeline/test_ignore.py``）。
 
-三层优先级（高 → 低，后写的规则覆盖先写的）：
+层优先级（高 → 低；同层内后写的规则覆盖先写的）：
 
 ```text
-1. {repo}/.zaceignore                 项目自定义（语法同 gitignore）
+0. {repo}/.zaceinclude + 内置白名单 + $ZACE_INDEX_ALLOWLIST   强制**包含**（TASK-097）
+1. {repo}/.zaceignore                 项目自定义排除（语法同 gitignore）
 2. {repo}/**/.gitignore               真实解析：注释 / ! 否定 / 目录尾 / / ** / 前导 / / 字符类
 3. 内置默认（DEFAULT_SKIP_DIRS + 常见产物模式）
 ```
+
+第 0 层与其余三层**方向相反**（"包含"而非"排除"），因此它不是一条规则而是求值顺序上的一个
+短路分支：命中白名单的文件在第 1/2 层**无条件放行**；但**第 3 层的目录剪枝仍然先判**——
+`.git/objects/**` 与 `node_modules/*/skills/a.py` 救不回来（TASK-097 §A-4 的硬约束，
+理由见 :class:`Allowlist`）。
 
 V1 明确不读（与卡内 §A 一致，简化理由写在执行记录）：``{repo}/.git/info/exclude`` 与全局
 ``core.excludesFile``。
@@ -33,22 +39,36 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
+    "ALLOWLIST_DEFAULT_SCOPE",
+    "ALLOWLIST_ENV_VAR",
+    "ALLOWLIST_SCOPE_DEEP",
+    "ALLOWLIST_SCOPE_ENV_VAR",
+    "ALLOWLIST_SCOPE_GITIGNORED",
+    "ALLOWLIST_SCOPE_SHALLOW",
+    "ALLOWLIST_SCOPES",
+    "Allowlist",
     "BINARY_RATIO",
+    "DEFAULT_ALLOWLIST",
+    "DEFAULT_ALLOWLIST_DIRS",
+    "DEFAULT_ALLOWLIST_FILENAMES",
+    "DEFAULT_LOOKTHROUGH_DEPTH",
     "DEFAULT_SKIP_DIRS",
     "DEFAULT_SKIP_DIR_PATTERNS",
     "DEFAULT_MAX_FILE_BYTES",
     "IGNORE_FILENAME",
+    "INCLUDE_FILENAME",
     "GITIGNORE_FILENAME",
     "IgnoreRules",
     "IndexScope",
     "SKIP_REASON_BINARY",
     "SKIP_REASON_OVERSIZE",
     "binary_reason",
+    "is_allowlist_scope",
     "oversize_reason",
     "reason_from_entry",
 ]
@@ -57,6 +77,12 @@ __all__ = [
 GITIGNORE_FILENAME = ".gitignore"
 #: 项目自定义忽略文件名（D-28 第 1 层，优先级最高）。
 IGNORE_FILENAME = ".zaceignore"
+#: 项目自定义**白名单**文件名（TASK-097 第 0 层；只读仓库根这一份）。
+INCLUDE_FILENAME = ".zaceinclude"
+#: 白名单的全局环境变量（逗号分隔；服务端 / CI 场景）。
+ALLOWLIST_ENV_VAR = "ZACE_INDEX_ALLOWLIST"
+#: 白名单**下钻范围**的环境变量，取 ALLOWLIST_SCOPES 之一。
+ALLOWLIST_SCOPE_ENV_VAR = "ZACE_ALLOWLIST_SCOPE"
 
 #: 默认大小阈值：``> 128 KB`` 跳过（Module/05 §3.1 / R43，与 client 同口径）。
 DEFAULT_MAX_FILE_BYTES = 128 * 1024
@@ -155,6 +181,353 @@ DEFAULT_SKIP_DIR_PATTERNS: tuple[str, ...] = (
     ".parcel-cache",   # Parcel 缓存
     "__pypackages__",  # PDM 本地包目录
 )
+
+
+# ---------------------------------------------------------------------------
+# 第 0 层：索引白名单（TASK-097，强制包含）
+# ---------------------------------------------------------------------------
+
+#: 默认放行的**文件名**（按 basename 匹配，大小写不敏感）。
+#:
+#: 只收"AI 指令文档"这一类高信息密度、且常被项目写进 ``.gitignore`` 的文件：
+#: ``AGENTS.md`` / ``CLAUDE.md`` 是主流编辑器的项目指令文件，``.agent.md`` 是
+#: agent 专用变体，``.cursorrules`` 是 Cursor 的规则文件，``HANDOFF.md`` 是项目交接文档。
+#: **刻意不内置** ``README.md`` / ``SKILL.md``：前者本来就被索引，后者靠 ``skills/`` 目录规则覆盖，
+#: 单独放行反而会在 ``node_modules`` 之外的任意目录里把同名文件拽进来。
+DEFAULT_ALLOWLIST_FILENAMES: tuple[str, ...] = (
+    "agents.md",
+    "claude.md",
+    ".agent.md",
+    ".cursorrules",
+    "handoff.md",
+)
+
+#: 默认放行的**目录名**（路径中任意一段命中即放行该文件）。
+#:
+#: ``skills`` 命中任意层级：``skills/`` / ``.claude/skills/`` / ``tools/mine/skills/`` 都算。
+#: 用户原话是"skills/ 文件夹里面的都上传吧？代替 SKILL.md"——因此**不限文件名**，
+#: ``SKILL.md`` 与同目录的参考文件、脚本、模板一起进来。
+#: 风险（已写进 ``docs/handbook/索引白名单.md``）：这是个通用目录名，可能与其他项目的同名目录撞车
+#: （如依赖包的 ``node_modules/*/skills/``）；后者由内置目录剪枝拦住（不参与白名单）。
+DEFAULT_ALLOWLIST_DIRS: tuple[str, ...] = ("skills",)
+
+#: 内置默认白名单（文件名 + 目录）的对外只读视图；**基线内容受测试锁定**。
+#: 用户既可以在 ``.zaceinclude`` 里追加，也可以用 ``!`` 前缀取消（第 0 层内部的否定）。
+DEFAULT_ALLOWLIST: tuple[str, ...] = DEFAULT_ALLOWLIST_DIRS + DEFAULT_ALLOWLIST_FILENAMES
+
+#: 白名单**下钻**范围（见 :data:`ALLOWLIST_SCOPES`）——控制"要不要进被忽略的目录"。
+#: ``deep``（默认）：**按名字下钻**——被忽略的目录里只要有直接子项命中白名单，就进去看；
+#: ``gitignored``：只进"自己就被白名单命中"的被忽略目录（更保守）；
+#: ``shallow``：完全不进（白名单只能救回被 ``.gitignore`` 匹配的文件，救不回被排除目录里的）。
+ALLOWLIST_SCOPE_DEEP = "deep"
+ALLOWLIST_SCOPE_GITIGNORED = "gitignored"
+ALLOWLIST_SCOPE_SHALLOW = "shallow"
+#: 三个取值的全名单（顺序无关，仅供校验与文档）。
+ALLOWLIST_SCOPES: frozenset[str] = frozenset(
+    {ALLOWLIST_SCOPE_DEEP, ALLOWLIST_SCOPE_GITIGNORED, ALLOWLIST_SCOPE_SHALLOW}
+)
+#: 默认范围：``deep``（名字下钻）。
+ALLOWLIST_DEFAULT_SCOPE = ALLOWLIST_SCOPE_DEEP
+
+#: 下钻链的**深度上限**（仅 :data:`ALLOWLIST_SCOPE_DEEP` 的"名字下钻"计数；
+#: 单位：连续被忽略的层数）。
+#:
+#: 为什么必须有界：``.gitignore`` 里的 ``vendor/`` / ``logs/`` 可能有几十万文件；
+#: 无界下钻会推翻
+#: TASK-037 的性能约束（“遇到被忽略的目录就整体剪枝”）。有界 + **名字定向**两重限制后，
+#: 额外代价仅为"每个被忽略目录多一次 ``scandir`` 看子项名字"：
+#: ``hacks/skills/**`` 这种只要 2 层，而 ``vendor/{a,b,c…}`` 第一层就不命中、立即剪掉。
+DEFAULT_LOOKTHROUGH_DEPTH = 4
+
+
+def is_allowlist_scope(value: str) -> bool:
+    """:data:`ALLOWLIST_SCOPES` 的取值校验（配置从环境变量来，非法值应回落默认）。"""
+    return value in ALLOWLIST_SCOPES
+
+
+def _lookthrough_depth(value: object, *, default: int = DEFAULT_LOOKTHROUGH_DEPTH) -> int:
+    """下钻深度解析：非法值回落默认（一个打错的环境变量不该让索引起不来）。"""
+    if isinstance(value, bool):  # bool 是 int 的子类，先排掉
+        return default
+    if not isinstance(value, int):
+        return default
+    return value if value >= 0 else default
+
+
+@dataclass(frozen=True, slots=True)
+class _AllowEntry:
+    """一条已编译的白名单条目。
+
+    ``negated`` = 行首 ``!``：第 0 层内部的否定（把内置白名单里的某项取消）。这里的方向与
+    gitignore **相反**——白名单的本意是"包含"，所以无前缀是包含、``!`` 是排除；但"后写覆盖先写"
+    的求值语义完全一致。
+    """
+
+    raw: str
+    negated: bool
+    #: 目录型（``skills`` / 显式 ``skills/``）——命中任意路径段，含其下全部文件。
+    directory: bool
+    #: 文件名型——按 basename 匹配，大小写不敏感。
+    filename: str | None
+    #: 目录型时用于匹配的目录名（原始大小写）。
+    dirname: str
+
+
+class Allowlist:
+    """第 0 层"强制包含"白名单（TASK-097）。
+
+    来源取并集：``.zaceinclude`` ∪ 内置默认 ∪ ``$ZACE_INDEX_ALLOWLIST``。
+
+    **语义（三条，缺一会让本卡最容易写错的地方侥幸通过）**：
+
+    1. **只压第 1/2 层**：命中白名单的文件/目录在 ``.zaceignore`` / ``.gitignore`` 面前无条件放行；
+    2. **绝不压第 3 层**：内置目录剪枝（``.git`` / ``node_modules`` / ``build-*`` …）
+       **先于**白名单生效，
+       且白名单不得把剪枝过的目录重新拉进来。这是卡内 §A-4 的硬约束，
+       由 :meth:`IgnoreRules.is_ignored` 的短路顺序与 :meth:`DirectorySource._descend` 共同保证
+       （内置命中的目录连白名单都看不到）。
+    3. **允许下钻但必须有界**：``.gitignore`` 排除了 ``.claude/``，而白名单要救的 ``skills`` 就住在
+       它下面（``.claude/skills/SKILL.md``）——不进目录就永远发现不了。是否下钻由**遍历侧**
+       （:meth:`DirectorySource._descend`）按 :data:`ALLOWLIST_SCOPES` + :meth:`matches_name` 裁决：
+       "被忽略的目录里有没有直接子项命中白名单"，有才进；连续下钻层数受
+       :data:`DEFAULT_LOOKTHROUGH_DEPTH` 封顶（否则一个被忽略的 ``vendor/`` 会无界枚举）。
+       本类不负责遍历，只回答"这个名字/路径算不算白名单"。
+
+    ``scope`` 决定下钻的激进程度（取值见 :data:`ALLOWLIST_SCOPES`）：
+
+    - ``deep``（默认）：被忽略的目录里只要有**直接子项**命中白名单就进去（名字定向，有深度上限）；
+    - ``gitignored``：只进"目录名自身命中白名单"的被忽略目录（如 ``.claude/skills``）；
+    - ``shallow``：完全不进——等同于"白名单只压 ``.gitignore`` 的文件级规则"。
+    """
+
+    __slots__ = ("_builtin", "_config", "_env", "_entries", "_scope", "_depth")
+
+    def __init__(
+        self,
+        *,
+        include: Sequence[str] = (),
+        env: Sequence[str] = (),
+        builtin: Sequence[str] = DEFAULT_ALLOWLIST,
+        scope: str = ALLOWLIST_DEFAULT_SCOPE,
+        lookthrough_depth: int = DEFAULT_LOOKTHROUGH_DEPTH,
+    ) -> None:
+        self._scope = scope if is_allowlist_scope(scope) else ALLOWLIST_DEFAULT_SCOPE
+        self._depth = _lookthrough_depth(lookthrough_depth)
+        self._builtin = tuple(builtin)
+        self._config = tuple(include)
+        self._env = tuple(env)
+        entries: list[_AllowEntry] = []
+        # 顺序即优先级（后写覆盖先写）：内置默认 < 环境变量 < ``.zaceinclude``。
+        # “越靠近项目越优先”与第 1/2 层（.zaceignore > .gitignore）方向一致，且让 ``!skills``
+        # 这样的取消条目真能生效——默认清单因此是"可删的"（手册 §默认清单 明写）。
+        for raw in (*self._builtin, *self._env, *self._config):
+            entry = _parse_allow_entry(raw)
+            if entry is not None:
+                entries.append(entry)
+        self._entries = tuple(entries)
+
+    # ---------------------------------------------------------------- 构建
+
+    @classmethod
+    def from_root(
+        cls,
+        root: str | Path,
+        *,
+        builtin: Sequence[str] = DEFAULT_ALLOWLIST,
+        env: Mapping[str, str] | None = None,
+        scope: str | None = None,
+    ) -> Allowlist:
+        """读 ``{root}/.zaceinclude`` + 环境变量，与 ``builtin`` 取并集。
+
+        与 :meth:`IgnoreRules.from_root` 的差异：**只读仓库根这一份** ``.zaceinclude``。
+        忽略规则需要按目录作用域（``sub/.gitignore`` 只管 ``sub/``），而白名单是
+        "用户声明的高价值文件"，嵌套声明会让作用域判定变复杂而收益为零。
+
+        ``.zaceinclude`` 不存在 / 不可读 → 该来源为空（与忽略文件同口径，不报错）。
+        """
+        import os
+
+        source = os.environ if env is None else env
+        lines: list[str] = []
+        candidate = Path(root) / INCLUDE_FILENAME
+        try:
+            if candidate.is_file():
+                lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        raw_env = source.get(ALLOWLIST_ENV_VAR, "")
+        env_lines = [part for part in raw_env.split(",") if part.strip()]
+        raw_scope = scope if scope is not None else source.get(ALLOWLIST_SCOPE_ENV_VAR, "")
+        return cls(
+            include=lines,
+            env=env_lines,
+            builtin=builtin,
+            scope=raw_scope or ALLOWLIST_DEFAULT_SCOPE,
+            lookthrough_depth=source.get(
+                "ZACE_ALLOWLIST_DEPTH", DEFAULT_LOOKTHROUGH_DEPTH
+            ),
+        )
+
+    # ---------------------------------------------------------------- 查询
+
+    def __bool__(self) -> bool:
+        return bool(self._entries)
+
+    @property
+    def scope(self) -> str:
+        return self._scope
+
+    @property
+    def lookthrough_depth(self) -> int:
+        """下钻链的深度上限（仅 :data:`ALLOWLIST_SCOPE_DEEP` 的"名字下钻"计数）。
+
+        单位是"连续被忽略的层数"：每为一个被忽略的目录进入下一层就 -1，跨过未被忽略的目录则重置。
+        """
+        return self._depth
+
+    def names(self) -> tuple[str, ...]:
+        """生效条目的规范名（供文档 / ``__repr__`` / 配置指纹使用）。"""
+        seen: list[str] = []
+        for entry in self._entries:
+            name = entry.filename or entry.dirname
+            value = f"!{name}" if entry.negated else name
+            if value not in seen:
+                seen.append(value)
+        return tuple(seen)
+
+    def matched_entry(self, path: str, *, is_dir: bool) -> _AllowEntry | None:
+        """返回**最终**命中的条目（``None`` = 未命中；命中的是 ``!`` 条目也算"最终排除"）。
+
+        顺序扫描、后写覆盖先写：``.zaceinclude`` 里的 ``!skills`` 能取消内置的 ``skills``。
+        """
+        normalized = _normalize(path)
+        if not normalized:
+            return None
+        parts = normalized.split("/")
+        name = parts[-1]
+        directories = parts if is_dir else parts[:-1]
+        winner: _AllowEntry | None = None
+        for entry in self._entries:
+            if entry.directory:
+                hit = any(_same_name(part, entry.dirname) for part in directories)
+            else:
+                hit = _same_name(name, entry.filename or "")
+            if hit:
+                winner = entry
+        return winner
+
+    def allows(self, path: str, *, is_dir: bool) -> bool:
+        """``path`` 是否被白名单**最终**放行（``!`` 条目命中时为 False）。"""
+        entry = self.matched_entry(path, is_dir=is_dir)
+        return entry is not None and not entry.negated
+
+    def dir_matches(self, path: str) -> bool:
+        """``path``（目录）是否被**目录型**条目放行。
+
+        与 :meth:`allows` 的差异：只看目录名条目、不看文件名条目。用于
+        :data:`ALLOWLIST_SCOPE_GITIGNORED` 的保守下钻（"这个被忽略的目录本身就是白名单目录"）。
+        """
+        entry = self.matched_entry(path, is_dir=True)
+        return entry is not None and entry.directory and not entry.negated
+
+    def matches_name(self, name: str) -> bool:
+        """``name``（单个路径段）是否命中任一白名单条目（含 ``!`` 条目）。
+
+        遍历侧的"名字下钻"探针：一个被忽略的目录里只要有直接子项命中这里，就值得进去看。
+        与 :meth:`allows` 一样遵循后写覆盖先写。
+        """
+        if not name:
+            return False
+        winner: _AllowEntry | None = None
+        for entry in self._entries:
+            if entry.directory:
+                hit = _same_name(name, entry.dirname)
+            else:
+                hit = _same_name(name, entry.filename or "")
+            if hit:
+                winner = entry
+        return winner is not None and not winner.negated
+
+    def descent_policy(self, path: str) -> str:
+        """``path``（被忽略的目录）的下钻策略：``"none"`` / ``"by-name"``。
+
+        - ``shallow`` 范围：一律 ``"none"``——白名单只压 ``.gitignore`` 的**文件级**规则；
+        - ``gitignored`` 范围：命中目录名 → ``"always"``（调用方直接开子树）；否则 ``"none"``；
+        - ``deep``（默认）→ ``"by-name"``：遍历侧看直接子项名字决定要不要进。
+
+        这个策略只影响**遍历是否进入一个已被忽略的目录**；进来的文件算不算索引仍由
+        :meth:`allows` 决定（两个问题分开答，才不会出现"进去了但文件还是被忽略"的静默失败）。
+        """
+        if self._scope == ALLOWLIST_SCOPE_SHALLOW:
+            return "none"
+        if self._scope == ALLOWLIST_SCOPE_GITIGNORED:
+            return "always" if self.dir_matches(path) else "none"
+        return "by-name"
+
+
+def _parse_allow_entry(raw: str) -> _AllowEntry | None:
+    """一行白名单文本 → 条目；空行 / 注释返回 ``None``。
+
+    语法刻意收窄（不是完整 gitignore 语法，避免语义分裂）：
+
+    - ``#`` 开头是注释（``\\#`` 转义为字面量）；
+    - ``!`` 前缀是"取消该白名单项"（第 0 层内部否定）；
+    - **目录型**：含 ``/``（``skills/``、``docs/skills``）或**不含点**的裸名字（``skills``）
+      ——取末段作目录名，命中任意深度的同名目录；
+    - **文件名型**：不含 ``/`` 且**含点**的裸名字（``AGENTS.md``、``.cursorrules``、``.agent.md``）
+      ——按 basename 匹配，大小写不敏感；
+    - 不支持 ``*`` / ``**`` / ``?`` 字符类：白名单是"我必须拿到这些高价值文件"的显式清单，
+      通配会把它变成第二个 ``.gitignore``（双份语义，R42 的对照测试会立刻失效）。
+
+    "含点 = 文件、不含点 = 目录"是启发式：它对实际会写的两种形态都正确；带 ``/`` 的写法可完全
+    消除歧义（``skills/`` 明确是目录）。无扩展名的文件名不在支持范围内（手册已注明）。
+    """
+    text = raw.rstrip("\n")
+    if text.endswith("\r"):
+        text = text[:-1]
+    text = text.rstrip()
+    if not text or text.lstrip().startswith("#"):
+        return None
+    negated = text.startswith("!")
+    if negated:
+        text = text[1:].strip()
+    if not text:
+        return None
+    if text.startswith("\\") and len(text) > 1 and text[1] in "#!":
+        text = text[1:]
+    if any(char in text for char in "*?["):
+        return None  # 不支持通配（见 docstring）
+    if "/" in text:
+        text = text.strip("/")
+        if not text:
+            return None
+        return _AllowEntry(
+            raw=raw,
+            negated=negated,
+            directory=True,
+            filename=None,
+            dirname=text.rsplit("/", 1)[-1],
+        )
+    if "." not in text:  # 不含点的裸名字 → 目录型（``skills`` / ``my-notes``）
+        return _AllowEntry(
+            raw=raw,
+            negated=negated,
+            directory=True,
+            filename=None,
+            dirname=text,
+        )
+    return _AllowEntry(
+        raw=raw,
+        negated=negated,
+        directory=False,
+        filename=text.lower(),
+        dirname="",
+    )
+
+
+def _same_name(left: str, right: str) -> bool:
+    """文件名 / 目录名比较：大小写不敏感（卡内 DoD 要求 ``agents.md`` 等于 ``AGENTS.md``）。"""
+    return left.casefold() == right.casefold()
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +739,7 @@ class IgnoreRules:
     """一个仓库的三层忽略规则（``from_root`` 构建一次，之后只读）。"""
 
     __slots__ = (
+        "_allowlist",
         "_builtin_dirs",
         "_builtin_dir_patterns",
         "_custom",
@@ -379,6 +753,7 @@ class IgnoreRules:
         *,
         custom: Sequence[str | tuple[str, str]] = (),
         gitignore: Sequence[str | tuple[str, str]] = (),
+        allowlist: Allowlist | None = None,
         builtin_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
         builtin_dir_patterns: Sequence[str] = DEFAULT_SKIP_DIR_PATTERNS,
     ) -> None:
@@ -389,6 +764,8 @@ class IgnoreRules:
         #: 求值时先扫高优先层；同层内后写的规则覆盖先写的（git 语义）。
         self._custom = _Layer(_as_pairs(custom))
         self._gitignore = _Layer(_as_pairs(gitignore))
+        #: 第 0 层（TASK-097）：强制包含。``None`` = 关闭白名单（旧行为，由测试的对照组使用）。
+        self._allowlist = allowlist
 
     # ---------------------------------------------------------------- 构建
 
@@ -397,13 +774,18 @@ class IgnoreRules:
         cls,
         root: str | Path,
         *,
+        allowlist: Allowlist | None = None,
         builtin_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
         builtin_dir_patterns: Sequence[str] = DEFAULT_SKIP_DIR_PATTERNS,
     ) -> IgnoreRules:
-        """扫描 ``root``，解析 ``.zaceignore`` 与**所有层级**的 ``.gitignore``。
+        """扫描 ``root``，解析 ``.zaceignore`` / ``.zaceinclude`` 与**所有层级**的 ``.gitignore``。
 
-        ``.gitignore`` / ``.zaceignore`` 不存在时**不报错**（与"忽略规则未引入前"的行为一致），
-        只是该层为空。读取失败的忽略文件同样按"该层为空"处理——忽略规则文件坏了不该让索引整体失败。
+        ``allowlist`` 默认从 ``root`` 构建（读 ``.zaceinclude`` + 环境变量）；传入现成对象可覆盖，
+        传 ``Allowlist(builtin=())`` 则关闭白名单（对照测量旧行为）。
+
+        忽略规则文件（``.gitignore`` / ``.zaceignore``）不存在时**不报错**（与"忽略规则未引入前"
+        的行为一致），只是该层为空。读取失败的忽略文件同样按"该层为空"处理——忽略规则文件坏了
+        不该让索引整体失败。
         """
         root_path = Path(root)
         custom: list[tuple[str, str]] = []
@@ -427,6 +809,7 @@ class IgnoreRules:
             root_path,
             custom=custom,
             gitignore=gitignore,
+            allowlist=Allowlist.from_root(root_path) if allowlist is None else allowlist,
             builtin_dirs=builtin_dirs,
             builtin_dir_patterns=builtin_dir_patterns,
         )
@@ -437,31 +820,70 @@ class IgnoreRules:
     def root(self) -> Path:
         return self._root
 
+    @property
+    def allowlist(self) -> Allowlist | None:
+        """第 0 层白名单（``None`` = 本规则集未启用白名单）。"""
+        return self._allowlist
+
+    def allowlist_policy(self, relative_dir: str) -> str:
+        """遍历侧的下钻策略：``"none"`` / ``"by-name"`` / ``"always"``。
+
+        目录名命中的子树由 :meth:`allowlist_dir_match` 判（调用方直接开子树）。
+
+        白名单未启用时一律 ``"none"``——目录剪枝行为与 TASK-037 逐字一致。
+        """
+        if self._allowlist is None:
+            return "none"
+        return self._allowlist.descent_policy(relative_dir)
+
+    def allowlist_dir_match(self, relative_dir: str) -> bool:
+        """目录名是否命中白名单（命中则整棵子树强制包含，见 ``DirectorySource._walk``）。"""
+        return self._allowlist is not None and self._allowlist.dir_matches(relative_dir)
+
+    def allowlist_names(self) -> tuple[str, ...]:
+        """生效白名单条目的规范名（服务/CLI 可据以自述“我打算强制索引什么”）。"""
+        return () if self._allowlist is None else self._allowlist.names()
+
     def is_ignored(self, path: str, *, is_dir: bool) -> bool:
-        """``path``（仓库相对、正斜杠）是否被忽略。``is_dir`` 决定目录专属规则的适用性。"""
+        """``path``（仓库相对、正斜杠）是否被忽略。``is_dir`` 决定目录专属规则的适用性。
+
+        顺序（TASK-097 后为四层，但第 0 层方向相反、只压第 1/2 层）：
+
+        1. **第 3 层内置目录剪枝先判，命中即返回**——白名单不得救回 ``.git/objects`` /
+           ``node_modules/*/skills/*``（卡内 §A-4）；
+        2. 第 0 层白名单命中 → 强制包含（越过第 1/2 层）；
+        3. 否则走原三层（第 2 层 → 第 1 层）。
+
+        **注意**：这是独立 API 的语义，覆盖"文件自身或祖先命中白名单"两种情形；
+        ``DirectorySource._walk`` 的**下钻**另有一层带预算的裁决（见该方法的 docstring），
+        以免一个被 ``.gitignore`` 排除的大目录被无界枚举。
+        """
         normalized = _normalize(path)
         if not normalized:
             return False
 
-        # 第 3 层（最低）：内置目录名 + 目录模式。
+        # 第 3 层（最低）、也是唯一的硬剪枝：内置目录名 + 目录模式。
         # 注：内置层只判目录（卡内 §A 限定为“常见产物**目录**”）；文件级裁决走 §B 阈值，
         # 这样被跳过的文件才会带得上原因（否则会静默消失）。
         # 但“在被内置忽略的目录**里面**”的文件也算被忽略（否则 ``is_ignored`` 作为
         # 独立 API 会与遍历结果不一致：``DirectorySource`` 早把该目录剪掉了）。
+        # **此处必须短路返回**：白名单不突破内置剪枝（TASK-097 §A-4）。
         if self._builtin_dir_hit(normalized, is_dir=is_dir):
-            builtin = True
-        else:
-            builtin = False
+            return True
 
-        # 第 2 层：.gitignore（否定可救回内置命中的条目）。
-        decision = self._gitignore.decide(normalized, is_dir=is_dir, initial=builtin)
-        # 第 1 层：.zaceignore（最高优先级，可覆盖前两层）。
+        # 第 0 层（TASK-097）：强制包含。
+        if self._allowlist is not None and self._allowlist.allows(normalized, is_dir=is_dir):
+            return False
+
+        # 第 2 层：.gitignore。
+        decision = self._gitignore.decide(normalized, is_dir=is_dir, initial=False)
+        # 第 1 层：.zaceignore（最高优先级的**排除**层，可覆盖第 2 层）。
         return self._custom.decide(normalized, is_dir=is_dir, initial=decision)
 
     def reason_for(self, path: str) -> str | None:
         """被忽略的**原因标签**（``"gitignore"`` / ``"zaceignore"`` / ``"builtin"``）。
 
-        未忽略返回 ``None``。
+        未忽略返回 ``None``。注意：命中白名单的路径**不**产生原因（它没被忽略）。
         """
         normalized = _normalize(path)
         if not normalized:
@@ -469,6 +891,9 @@ class IgnoreRules:
         is_dir = (self._root / normalized).is_dir()
         if not self.is_ignored(normalized, is_dir=is_dir):
             return None
+        # 内置剪枝优先于白名单（见 is_ignored 的短路），因此这里也要先判内置。
+        if self._builtin_dir_hit(normalized, is_dir=is_dir):
+            return "builtin"
         if self._custom.decide(normalized, is_dir=is_dir, initial=False):
             return "zaceignore"
         if self._gitignore.decide(normalized, is_dir=is_dir, initial=False):
