@@ -1,7 +1,7 @@
 # TASK-090：请求日志持久化与 trace id 查询（用户报错可追溯）
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-084（审计表已建）｜ soft 依赖：无
-> 建议分支：`feature/task-090-request-log_<你的缩写><MMDD>`
+> 状态：**review** ｜ 阶段：Phase 3（M2c）｜ 硬依赖：TASK-084（审计表已建）｜ soft 依赖：无
+> 分支：`feature/task-090-request-log_xwz0914`（泳道 D，已完成待合并）
 > 交付物所有权：
 > - `service/zace_service/logging.py`（文件 sink + 轮转）
 > - `service/zace_service/requestlog.py`（**新建**：结构化请求日志的落库与查询，若选 DB 方案）
@@ -100,4 +100,153 @@
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+**日期**：2026-09-14 ｜ **分支**：`feature/task-090-request-log_xwz0914` ｜ **泳道**：D
+
+### §A 方案选择与理由：**文件轮转 sink（方案 A）**
+
+| 方案 | 裁定 |
+|---|---|
+| A. 文件轮转 sink | ✅ **选它** |
+| B. SQLite `request_log` 表 | ✗ |
+| C. 文件 + DB 索引 | ✗ |
+
+决定性的那条证据：`app.py` 只在非本地模式建 `zace-meta.db`（`meta_db = ... if
+resolved.auth_required else None`），且 `test_tenancy.py:361` 明确钉住"本地模式不该创建
+zace-meta.db"（R34）。**表方案下本地模式（默认形态、也是绝大多数单机场景）将完全没有日志**——
+恰好把用户诉求打掉一半。文件方案两种形态都持久化，且与 metadb 零耦合。
+
+两点与卡内假设的偏差（已在报告说明）：
+
+1. 卡内担心"`_ensure_schema` 只跑 `executescript`，旧库不会自动加新表"——**实测不成立**：
+   `executescript` 每次 `MetaDB.open` 都执行，`CREATE TABLE IF NOT EXISTS` 对旧库是纯追加，
+   不会破坏现有库。也就是说 B 方案的兼容性障碍其实不存在；我们不选 B 是因为 R34，不是兼容性。
+2. 本卡**未修改** `metadb.py`（交付物清单里它是"若选 DB 方案"才需要），因此与
+   TASK-088/094 抢 `metadb.py` 的冲突面直接归零。
+
+### 窗口配置项与实测清理效果
+
+新增三个环境变量（`.env.example` 已补说明）：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `ZACE_LOG_MAX_BYTES` | 8388608（8 MiB） | 单文件上限；写满即轮转（`RotatingFileHandler`） |
+| `ZACE_LOG_BACKUP_COUNT` | 9 | 轮转备份数（连同当前文件共 10 个） |
+| `ZACE_LOG_RETENTION_DAYS` | 14 | 保留天数；启动时 `prune_log_files` 清理超期文件 |
+
+两个维度各管一件事（也是"有界保留"的完整表达）：**体积**管上界（低流量下不涨），**天数**
+管陈旧（低流量下不触发轮转也能过期）。默认上界 ≈ 80 MiB / 14 天。
+
+实测清理（真实跑过，前后计数）：
+
+```text
+prune 前: ['request.log']                     | 计数 = 1
+造出超期备份后: ['request.log', '.1', '.2', '.3'] | 计数 = 4
+删除文件数 = 3
+prune 后: ['request.log']                     | 计数 = 1
+```
+
+解析行为也实测：默认 `(8388608, 9, 14)`；覆盖 `(1024, 2, 3)` 生效；非法值 `'abc'` / `'-5'`
+**显式报错**（与 `config.py` 既有 `_as_bool`/`_as_float` 同纪律，不静默取默认）。
+
+### 脱敏断言结果
+
+- 带 `Authorization: Bearer sk-live-SHOULD-NOT-LEAK-abc123XYZ` 的请求：**落盘文件里该 key
+  出现 0 次**，查询响应里也是 0 次；
+- 记录里**不存在**请求头字段（"Authorization" 字样只在错误文案里出现，且其中的 `Bearer` 已被抹成
+  `***`）；
+- 裸 `sk-` / `zace_` 串由 `requestlog.redact_request_text` 兜底（与 TASK-084 的
+  `audit.redact_query_text` 同形态），单测钉住 `redact_request_text("sk-live-...") == "***"`；
+- 5xx 堆栈照记（排查核心价值），但**响应仍只给通用文案**：单测断言 500 响应既不含异常文本也不含
+  `Traceback`（`errors.py` 口径未动）。
+
+### 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `uv run pytest service/tests/test_request_log.py -q` | **20 passed** |
+| `uv run pytest -o addopts="" -q` | **824 passed, 2 skipped**（基线 804 → 新增 20，无回归） |
+| `uv run ruff check .` | All checks passed |
+| `uv run python scripts/check_dependency_direction.py` | 通过 |
+
+行为验收（真实起服务于 `:9600`，`ZACE_LOCAL_MODE=false`，真实 curl）：
+
+```text
+① 未认证 GET /api/projects
+   HTTP/1.1 401 Unauthorized
+   x-request-id: 7e785acda9974b93          ← 修好了：此前该路径不回写 id
+   {"error":{"code":"unauthorized",...}}
+
+② 带凭据的失败请求 GET /api/projects/nope-project
+   HTTP/1.1 404 Not Found
+   x-request-id: 6f75ad9a71fe4bb5
+   {"error":{"code":"project_not_found","message":"项目不存在：nope-project"}}
+
+③ 用该 id 查日志 GET /api/request-log/6f75ad9a71fe4bb5
+   {"requestId":"6f75ad9a71fe4bb5","ts":"2026-09-14T04:44:04.106+00:00",
+    "method":"GET","path":"/api/projects/nope-project","status":404,
+    "durationMs":20.87,"userId":"6ab7c0436f8abb97d39d20a1389d21ec",
+    "projectId":"nope-project","errorCode":"project_not_found",
+    "errorMessage":"项目不存在：nope-project","traceback":null,
+    "relatedLogs":[],"relatedLogCount":0}
+
+④ 重启验证（本卡存在的意义）
+   重启前 status=200；kill 服务 → 重新起同 data_root → **仍查得同一条记录**：
+   requestId: 6f75ad9a71fe4bb5 | status: 404 | errorCode: project_not_found
+```
+
+### 与卡内示例的一处必要偏差（已经编排者拍板）
+
+卡内行为验收写的是"未认证的 `/api/projects`"，但按裁定后的**严格归属**规则，未认证请求没有
+`userId`（无 owner），**任何人都查不到**（与不存在同 404）——否则 path 里的 projectId 会成为
+信息泄露面。因此行为验收改用"带凭据的失败请求"（`project_not_found`），其 owner 明确、可查；
+未认证 401 的 `X-Request-Id` 回写仍被单测与真实 curl 双重覆盖。
+
+### 顺带修好的一个真实缺陷（写在 `app.py` 注释里）
+
+原中间件装配顺序使 `_install_auth` 位于 `_install_request_context` **外层**，于是鉴权短路返回的
+401 **绕过**了 requestId 中间件：响应没有 `X-Request-Id`、日志里也没有那次失败请求。实测证据：
+云瑞形态 `curl -D - /api/projects` → 无 `x-request-id` 头。本卡把 `_install_request_context`
+改为最后注册（最外层）后修复——这正是"报错后按 trace id 查"的前提。
+
+### 查询端点形状（说明）
+
+`GET /api/request-log/{requestId}`（**受保护区域**，不在 `PUBLIC_PATHS`）：
+
+- 返回主条目（method/path/status/durationMs/userId/projectId/errorCode/errorMessage/traceback）
+  + `relatedLogs`（同一 requestId 下的旁路日志：**已处理的 5xx** 的堆栈由 `errors.py` 处理器打在
+  另一行，不带它则 503 报错会查到空堆栈）+ `relatedLogCount`；
+- 越权 / 不存在 / 无 owner 一律 `404 request_log_not_found`，**文案不回显 requestId**，
+  三种情况响应**逐字节一致**（不给探测面）；
+- 长字段截断：普通字段 2000 字符，`traceback` 8000 字符且**保头保尾**（异常链根因在尾部）。
+
+### 契约影响
+
+无。未改 `docs/contracts/**`、`core/**`、`core/zace_core/{types,interfaces,hashing}.py`。
+新增路径 `/api/request-log/{requestId}` 属 CF-05 **扩展**，已按 TASK-090 登记进
+`service/tests/test_skeleton.py::TASK_EXTENSION_PATHS`（与 TASK-062/064 同做法）；
+`docs/contracts/openapi.yaml` 的同步由编排者执行。
+
+### 与设计偏差
+
+无（方案选择在卡内授权范围内；中间件顺序修正属实现细节，L1）。
+
+### 未决问题
+
+1. **越权面的既有限制**：只有"查自己的"，**管理员无法帮用户查 401 日志**（V1 无角色体系，
+   卡内明确不做）。用户报错若只给一个未认证请求的 id，只能请 TA 带凭据重试。若将来要支持
+   "管理员代查"，需要引入角色判定（本轮已向编排者确认按严格归属处理）。
+2. **本地模式的跨用户可见性**：本地模式 `zace_user is None`，归属按"放行"（R34 行为一致），
+   因此本地单机上任何进程都能查到全部请求日志。单机单用户场景可接受，VPS 多用户场景应跑非本地模式。
+3. **日志不读请求体**：POST body 里的 projectId 不记（避免 token/源码内容进入日志面），
+   因此 `POST /api/query/*` 的日志只有路径参数、没有项目归属。若排查需要，可在
+   `routers/query.py` 另行显式传 projectId（不推荐直接从 body 取）。
+4. **与 TASK-088/094 的合并**：`config.py` / `routers/ops.py` / `.env.example` 为共同改动面，
+   本卡已按约定"只在自己的区块追加、不重排既有顺序"；`metadb.py` 本卡未动。
+
+### 回填清单
+
+- [x] 本执行记录
+- [x] `docs/tasks/README.md` 中 TASK-090 行 → `review`
+- [x] 新增手册 `docs/handbook/请求日志与trace-id报错手册.md`（未改动既有四份手册）
+- [x] 本地提交（`task-090: ...`），**未 push**
+

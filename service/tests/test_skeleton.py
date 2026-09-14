@@ -35,6 +35,7 @@ from tests.conftest import make_app, make_client
 #: - TASK-060：部署形态（``/api/meta``）、当前身份（``/api/auth/me``）、
 #:   首个用户初始化（``/api/auth/bootstrap``）；
 #: - TASK-062/064：账户概览、索引历史与统计、查询用量汇总。
+#: - TASK-090：按 trace id 查请求日志（只读；只查自己的）。
 TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
     {
         "/api/projects/attach",
@@ -47,6 +48,7 @@ TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
         "/api/projects/{id}/index-stats",
         "/api/index-stats",
         "/api/usage/summary",
+        "/api/request-log/{requestId}",
     }
 )
 
