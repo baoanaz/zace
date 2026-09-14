@@ -1,5 +1,7 @@
 # 多仓库规模自举与索引健壮性（TASK-036）
 
+> **历史报告（2026-09-14 归档）**：本文引用的 `aibox-super-sdk` / `linux-mtk-mw-cameraservice` 旧靶场及其用例已于 2026-09-14 清理（见 `benches/README.md`「靶场变更」），文中命令与路径不可再执行；数字仅作决策依据留档，**与当前靶场不可比**。
+
 > 状态：进行中（§A 部分靶场仍在跑，见 §A.1 的"未完成"标注）
 > 分支：`feature/task-036_xwz0910`（从 `main` @ `ea4084d` 开出）
 > 原始证据：`~/.zace-lanec/raw.jsonl`（每靶场一条 JSON，含**全部** errors/skipped_files）、

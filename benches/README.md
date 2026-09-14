@@ -4,12 +4,14 @@
 
 ## 目录约定
 
-| 路径 | 归属任务 | 内容 |
-|---|---|---|
-| `golden/*.jsonl` | TASK-014（样例骨架见 `golden/sample.jsonl`） | 查询用例集 |
-| `run.py` | TASK-013 | golden runner：逐条执行 `engine.search`，产出 recall/MRR 报告 |
-| `results/` | 各任务 | 报告产物（Markdown）：`phase1-baseline.md`、`phase1-bakeoff.md` 等 |
-| `bakeoff/` | TASK-015 | embedding 对比与 rerank 校准脚本 |
+| 路径 | 内容 |
+|---|---|
+| `targets.json` | **靶场清单**：把「用例集 + 预建索引」绑成靶场名（golden / commit / projectId / 指纹 / 产物获取方式）。只放元信息，**不放索引** |
+| `golden/<repo>/*.jsonl` | 查询用例集（问题 + 期望文件/符号；**不含正文**） |
+| `run.py` | 统一入口：`--target <靶场名>` 展开 `--golden`/`--project-id`，其余参数原样转给 `zace-core eval` |
+| `test_targets.py` | 清单与入口的单元测试（不在根 `pyproject.toml` 的 `testpaths` 里，跑法见"运行"） |
+| `results/*.md` | 报告产物：当前口径的原始报告 + 整理过的基线/选型报告 |
+| `bakeoff/` | embedding 选型脚本（TASK-015A；一次性方法学工具，不是用例集） |
 
 ## 用例格式（JSONL，一行一条）
 
@@ -38,25 +40,22 @@
 - 命中判定在 runner 中实现（TASK-013）；评估分列：整体 + 按 `lang` + 按 `category`。
 - `negative` 用例单独统计：top5 无强相关证据且 `missingEvidence` 非空视为通过。
 
-## 外部仓库准备（不 vendor 源码）
+## 靶场（用例集 + 索引产物）
 
 ```bash
-# 示例：按用例中记录的 commit 检出，runner 的 --repo 指向这里
-git clone https://github.com/psf/requests /tmp/repos/requests && git -C /tmp/repos/requests checkout <commit>
+uv run python benches/run.py --list-targets     # 当前清单与各自的索引来源
 ```
 
-外部仓库的选取与 commit 记录在 `golden/*.jsonl` 与报告里；同一用例集在不同机器上应能复现同一口径。
-
-### 已指定的评测仓库（TASK-014 必须覆盖）
-
-| repo_hint | 本地路径 | commit | 规模/特点 |
+| 靶场 | 用例 | commit | 索引来源 |
 |---|---|---|---|
-| `zace` | 本仓（`--repo .`） | `self` | dogfood；注意其 golden 文件自身会被索引（负例口径见下） |
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a322aff7d2d21939bc6d09b4cfa985671ea` | 451 个可索引文件（266 py + 152 md）；**文档密度极高**（memory 能力 146 个 md / 83 个 py），是 spec 检索的主靶场 |
-| （自选 1 个） | 使用者本机可得为准 | 记录实际 commit | 建议 C++（fmt）或 C（redis），补齐语言维度 |
+| `cockpit-agents-py` | 32（含 2 负例） | `febac6d2273bb` | **内部仓库**：索引由出题机 `scripts/bench-bundle.sh pack` 后走内网分发（公开仓库只放用例） |
+| `zace`（本仓，dogfood） | 24（`zace.jsonl` 20 + `sample.jsonl` 4） | `self` | 本仓自举：`zace-core ingest --repo .`（405 文件 ≈ 34s） |
+| `hello-agents` | 31（含 2 负例） | `4f7682ceafe5` | 公开仓库 `datawhalechina/hello-agents`：clone 后本地建索引 |
 
-- 种子用例：`benches/golden/aibox-seed.jsonl`（8 条，编排者已验证可落地）；TASK-014 在此基础上扩充并在报告中记录实际 commit。
-- 该仓库的 `.venv/` 已在 `DEFAULT_SKIP_DIRS` 中，无需手工排除；索引前确认 checkout 到上述 commit。
+- 外部靶场是**只读**的：不在其中建文件、不修改它、不把它的源码纳入本仓（索引数据根放 `~/.zace/...` 或 `/tmp`）。
+- `expected[].path` 是**仓库相对路径**，语义绑定各自的仓库；换靶场必须重新出题，不能复用。
+- 旧靶场 `aibox-super-sdk` / `linux-mtk-mw-cameraservice`（及其用例与报告）已于 2026-09-14 下线：
+  靶场在旧机器上不可得，且用例里的 `expected[].path` 暴露公司内部仓库结构。历史见 git。
 
 #### 负例口径（R17）
 
@@ -66,37 +65,59 @@ git clone https://github.com/psf/requests /tmp/repos/requests && git -C /tmp/rep
 
 ## 运行
 
-```bash
-# 全量（目录级，需要该仓库已索引；索引优先级见下文“索引可复用”）
-uv run zace-core eval --golden benches/golden --repo <本地仓库路径> --report benches/results/<name>.md
+### 一键跑分（推荐：靶场名 + 数据根）
 
-# 单仓库 + 复用预建索引（推荐：跑一次索引，之后每次改动几秒出分）
+```bash
+# zace（dogfood）：索引建一次，之后**任意 checkout** 都能复用（projectId 已记在清单里）
+uv run python benches/run.py --target zace --data ~/.zace/bench \
+  --report benches/results/<name>.md
+
+# 没有 key 的机器：带预热好的查询向量侧车 + --replay（指标与联网跑逐位一致）
+uv run python benches/run.py --target zace --data ~/.zace/bench \
+  --report benches/results/<name>.md \
+  --vector-cache ~/.zace/bench/query-vectors.json --replay
+
+# cockpit-agents-py（内部靶场：索引 + 侧车从内网来，本机无需 key、无需靶场代码）
+uv run python benches/run.py --target cockpit-agents-py --data ~/.zace/bench \
+  --report benches/results/<name>.md --vector-cache <侧车> --replay
+
+# hello-agents（公开靶场：先 clone 到清单里的 commit 建一次索引）
+uv run python benches/run.py --target hello-agents --repo /path/to/hello-agents \
+  --data ~/.zace/bench --report benches/results/<name>.md
+```
+
+> **索引根必须放持久目录（约定 `~/.zace/bench`），别放 `/tmp`。**
+> `--data` 下的索引是**长期资产**（zace 自举实测 57M / 5297 切片）：放 `/tmp` 会在重启后消失，
+> 下次跑分又得重新索引 + 重新嵌入（还要花 key 的额度）。`/tmp` 只适合"临时试一下"。
+>
+> **固定用例 + 固定索引 = 观察 core 改动的干净口径**：题目与期望答案不动、索引不动，只改 core，
+> 两次 `eval` 的差值就是改动的净效果。索引本身只在 core 的切片/嵌入指纹变化时才需要重建
+> （指纹不符时 `eval` 会直接报错，不会拿旧索引冒充同一口径）。
+
+`--target` 只做一件事：按 `benches/targets.json` 注入 `--golden` 与 `--project-id`，并把出处
+（commit / projectId / 索引来源）打到 stderr——报告要能回答"这份数字来自哪份索引"。命中判定与
+指标口径仍在 `zace-core eval`，这里**没有**第二套实现。
+
+### 直接调 CLI（等价的裸写法）
+
+```bash
+# 单仓库 + 复用预建索引
 uv run zace-core eval --repo <任意 checkout> --data <共享索引根> --project-id <projectId> \
   --golden benches/golden/<repo_hint> --report benches/results/<name>.md
 
-uv run python benches/bakeoff/embed_compare.py --help   # TASK-015 交付
+uv run python benches/bakeoff/embed_compare.py --help   # TASK-015A 交付
 ```
 
 > 单次 32 题 eval 实测约 10–15 秒（287 文件仓库 / 3416 切片）；开销几乎全在检索，
-> 不在索引——所以“复用索引”是跑分提速的关键。
+> 不在索引——所以"复用索引"是跑分提速的关键。
 
-### 当前靶场与快速回归（cockpit-agents-py）
+### 跑 benches 自己的测试
+
+`benches/` 不在根 `pyproject.toml` 的 `testpaths` 里（CI 不覆盖），要显式给路径：
 
 ```bash
-# 靶场（只读外部靶场：不在其中建文件、不修改它）
-#   /home/xuwenzheng/4_AIBOX/gitlab/minicpm/cockpit-agents-py @ febac6d
-# 索引根：~/.zace/cloud-demo（projectId 可从 `zace-core status` 读出）
-uv run zace-core eval --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/cockpit-agents-py \
-  --data ~/.zace/cloud-demo --project-id <projectId> \
-  --golden benches/golden/cockpit-agents-py --report benches/results/<name>.md
+uv run pytest -o addopts="" -q benches/test_targets.py benches/bakeoff/test_embed_compare.py
 ```
-
-| 靶场 | golden | 状态 |
-|---|---|---|
-| `cockpit-agents-py` @ `febac6d` | `benches/golden/cockpit-agents-py/cockpit.jsonl`（32 条，含 2 负例） | **主靶场**（车载 Agent Server：Runtime/LangGraph/HMI/SDK/MCP/上下文预算/日志） |
-| `zace`（本仓） | `benches/golden/zace/zace.jsonl`（20 条） | dogfood 回放；`benches/golden/**` 已由 `.zaceignore` 排除（见"出题规则"第 4 条） |
-| `hello-agents` | `benches/golden/hello-agents/helloagents.jsonl`（31 条） | 2026-09-13 靶场，需另行检出 |
-| `aibox-super-sdk` / `linux-mtk-mw-cameraservice` | 对应目录 | **旧机器靶场，本机不可得**，仅历史留存 |
 
 ## 用例编写指南（TASK-014 追加）
 
@@ -107,27 +128,23 @@ runner 的 `--golden` 接受**文件或目录**，目录模式会 `rglob` 收集
 
 ```text
 benches/golden/
+├── cockpit-agents-py/            # 主靶场（内部仓库，只放用例）
+│   └── cockpit.jsonl             # 32 条（含 2 负例）
 ├── zace/                         # dogfood（--repo .）
-│   ├── sample.jsonl              # 格式样例骨架（TASK-013 遗留，4 条，随 TASK-014 移入本目录，内容未改）
+│   ├── sample.jsonl              # 格式样例骨架（TASK-013 遗留，4 条）
 │   └── zace.jsonl                # TASK-014 新增 20 条
-├── aibox-super-sdk/
-│   ├── aibox-seed.jsonl          # 编排者种子 8 条（随 TASK-014 移入本目录，内容未改）
-│   └── aibox.jsonl               # TASK-014 新增 12 条
-└── linux-mtk-mw-cameraservice/   # 自选 C++ 仓库
-    └── cameraservice.jsonl       # TASK-014 新增 16 条
+└── hello-agents/                 # 公开靶场（datawhalechina/hello-agents）
+    └── helloagents.jsonl         # 31 条（含 2 负例）
 ```
 
-`benches/golden`（根）仍可整体跑通（id 全局唯一，跨仓库用例会对着单个仓库索引跑出必然失败，
-只用于 runner 冒烟/回归，不用于指标口径）。**出题时不要把用例堆回根目录**，否则无法按仓库取指标。
+**出题时不要把用例堆回根目录**：一次 eval 只对一个仓库取指标，混在一起会跑出必然失败。
+需要跨靶场冒烟时直接用 `benches/run.py --target <名字>` 逐个跑。
 
 ### 命令模板
 
 ```bash
-# 每个仓库一次（目录级）
-uv run zace-core eval --golden benches/golden/zace --repo . --data <data-root> --report benches/results/<name>.md
-# C++ 自选仓库
-uv run zace-core eval --golden benches/golden/linux-mtk-mw-cameraservice \
-  --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data /tmp/zace-cam \
+# 推荐走 --target（见"运行"）；下面是等价的裸 CLI 写法
+uv run zace-core eval --golden benches/golden/zace --repo . --data <data-root> \
   --report benches/results/<name>.md
 ```
 
@@ -246,35 +263,34 @@ uv run zace-core eval --repo <任意 checkout> --project-id <projectId> --data ~
    目标机的 `EmbeddingConfig.from_env()` 会回落到默认本地模型（实测 dim=384 vs 索引 1024），
    整轮跑分直接失败。
 
-## 靶场变更（2026-09-13）
+## 靶场变更（2026-09-13 换靶场；2026-09-14 清理旧靶场）
 
-### 为什么换靶场
+### 为什么换靶场，以及旧靶场为什么被删掉
 
-用户 2026-09-13 更换开发环境（家用 WSL2）。**旧靶场在本机全部不可得**，`benches/results/*` 的历史数字
-无法在本机复现（数字来自旧机器的工作区，路径与 commit 都已不在）：
+用户 2026-09-13 更换开发环境（家用 WSL2）。**旧靶场在新机器上全部不可得**，`benches/results/*` 的历史数字
+无法复现（数字来自旧机器的工作区，路径与 commit 都已不在）：
 
-| 旧靶场 | 原路径（旧机器） | 本机状态 |
+| 旧靶场 | 原路径（旧机器） | 现状 |
 |---|---|---|
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | **不存在** |
-| `linux-mtk-mw-cameraservice` | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | **不存在** |
-| `linux-mtk-hmi` | 同上系列 | **不存在** |
+| `aibox-super-sdk` | `<内部靶场>/aibox-super-sdk` | **已下线**：靶场不可得，且用例 `expected[].path` 暴露公司内部仓库结构 → 用例与旧报告于 2026-09-14 删除（历史见 git） |
+| `linux-mtk-mw-cameraservice` | `<内部靶场>/linux-mtk-mw-cameraservice` | 同上 |
+| `linux-mtk-hmi` | 同上系列 | 从未出题 |
 
-**旧 golden 文件原样保留**（`benches/golden/{aibox-super-sdk,linux-mtk-mw-cameraservice}/`，历史可追溯），
-但**不可复用于新靶场**：`expected[].path` 是**仓库相对路径**，语义绑定到各自的仓库；
-对另一个仓库跑只会得到必然失败。旧报告同理——它们是历史记录，不是当前基线。
+删掉而不是留档的理由：`expected[].path` 是**仓库相对路径**，语义绑定各自的仓库，换靶场不可复用；
+而它们躺在公开仓库里就等于把内部仓库的目录结构对外发布。旧报告同理——是历史记录，不是当前基线。
 
-### 新主靶场
+### 当前靶场
 
-```text
-/home/xuwenzheng/github/hello-agents        # datawhalechina/hello-agents（Python Agent 教程）
-commit: 4f7682ceafe573d07cd8a7d0b89908500e83227d
-remote: https://github.com/datawhalechina/hello-agents.git
-```
+| 靶场 | 用例 | 检查点 |
+|---|---|---|
+| `cockpit-agents-py` @ `febac6d` | 32 条（含 2 负例） | **主靶场**：车载 Agent Server（Runtime/LangGraph/HMI/SDK/MCP/上下文预算/日志）；内部仓库，索引只走内网 |
+| `hello-agents` @ `4f7682c` | 31 条（含 2 负例） | 公开教程仓（`datawhalechina/hello-agents`）；文档与代码一一对应，覆盖 spec 检索与中英对照（D-20） |
 
-> 该仓库是**只读外部靶场**：不在其中建文件、不修改它、不把它的任何文件纳入 zace 仓库；
-> 索引数据根放 `/tmp` 或 `~/.cache`。
+两个外部靶场都是**只读**的：不在其中建文件、不修改它、不把它的源码纳入 zace 仓库；
+checkout 路径由运行时给（`--repo` 或 `targets.json` 的提示），**不硬编码在本仓文档里**；
+索引数据根放 `~/.zace/...` 或 `/tmp`。
 
-选它的理由（编排者实测，见 `docs/plan/phase2-m2b-w6.md` §3.1）：**文档与代码一一对应**
+选 hello-agents 的理由（编排者实测，见 `docs/plan/phase2-m2b-w6.md` §3.1）：**文档与代码一一对应**
 （`docs/chapterN/` 中英双份 ↔ `code/chapterN/` 实现），天然覆盖 spec 检索、中英对照（D-20）
 与 code/docs 平衡（R21）；`Co-creation-projects/` 提供多语言小项目；同时它含大量大文件与二进制
 （272 个 >128KB、345 个 `.png`），是索引范围策略（TASK-037）的活标本。
@@ -307,5 +323,8 @@ trace.candidates  # ① 索引层：recall → expand → rerank 后的候选池
 
 | 报告 | 内容 |
 |---|---|
-| `results/phase2-helloagents-baseline.md` | 新靶场基线（recall/MRR，分 category 与语言；含索引范围实测） |
-| `results/phase1-baseline.md` 等旧报告 | 旧机器/旧靶场的历史记录，**与本靶场不可比** |
+| `results/raw-cockpit-baseline.md` / `raw-cockpit-t101-final.md` | 主靶场（cockpit 32 题）的原始 eval 报告：修复前 / TASK-101 修复后 |
+| `results/raw-zace-t101-final.md` | zace dogfood（20 题）TASK-101 修复后的原始报告 |
+| `results/phase2-helloagents-baseline.md` | hello-agents 靶场基线（recall/MRR，分 category 与语言；含索引范围实测） |
+| `results/phase1-baseline.md` / `phase2-bakeoff.md` / `index-performance-w6.md` / `robustness-scale.md` | 整理过的历史结论：Phase 1 基线、embedding 选型（D-44 依据）、索引性能、规模与健壮性。旧机器产出，**与当前靶场不可比**，仅作决策依据留档 |
+| 旧靶场的 `raw-*` 报告 | 已于 2026-09-14 删除（历史见 git） |

@@ -1,5 +1,7 @@
 # Phase 1 检索质量基线（TASK-014）
 
+> **历史报告（2026-09-14 归档）**：本文引用的 `aibox-super-sdk` / `linux-mtk-mw-cameraservice` 旧靶场及其用例已于 2026-09-14 清理（见 `benches/README.md`「靶场变更」），文中命令与路径不可再执行；数字仅作决策依据留档，**与当前靶场不可比**。
+
 > 生成：2026-09-10 ｜ 分支：`feature/task-014_xwz0910`（jump 自 `main` @ `086d24e`）
 > 原始报告：`benches/results/raw-*.md`（由 runner 直接产出，未加工）
 > 一句话结论：**M1 检索质量基线 = e2e recall@5 0.574 / recall@10 0.611 / MRR 0.451，负例通过率 2/6。**
@@ -11,8 +13,8 @@
 | repo_hint | 仓库路径 | commit | 索引文件数 | chunks | symbols | edges | 索引来源 |
 |---|---|---|---|---|---|---|---|
 | `zace` | 本仓（`--repo .`） | `self` = `086d24e`（main）+ 编排者既有 `benches/golden/{sample.jsonl,aibox-seed.jsonl}` | 217 | 2412 | 1467 | 7058 | `/tmp/zace-verify-main`（19:34 增量刷新，6s） |
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a322aff7d2d21939bc6d09b4cfa985671ea` | 451 扫描 / 434 解析 | 5760 | 2632 | 13269 | `/tmp/zace-aibox`（19:34 增量刷新，1.2s，仅 `internal/maintenance.py` 漂移） |
-| `linux-mtk-mw-cameraservice`（自选） | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | `3fb0b2d69d81850a630eb5b6ced5d78f5461257c` | 281（+1101 个二进制/不可解码被跳过） | 6257 | 4614 | 2760 | `/tmp/zace-cam`（全新全量索引，559.6s） |
+| `aibox-super-sdk` | `<内部靶场>/aibox-super-sdk` | `debf8a322aff7d2d21939bc6d09b4cfa985671ea` | 451 扫描 / 434 解析 | 5760 | 2632 | 13269 | `/tmp/zace-aibox`（19:34 增量刷新，1.2s，仅 `internal/maintenance.py` 漂移） |
+| `linux-mtk-mw-cameraservice`（自选） | `<内部靶场>/linux-mtk-mw-cameraservice` | `3fb0b2d69d81850a630eb5b6ced5d78f5461257c` | 281（+1101 个二进制/不可解码被跳过） | 6257 | 4614 | 2760 | `/tmp/zace-cam`（全新全量索引，559.6s） |
 
 自选仓库的理由：任务卡建议补齐 C/C++ 维度；本机可得的中型 C++17 工程（250 个源文件 + 111 头文件），
 含策略/状态机/DBus/Socket/共享内存/渲染多类结构，且**工作区里带 `.claude/skills/**`（50 份 md）与
@@ -255,17 +257,17 @@ TASK-015 校准前需要二选一（见 §6 未决问题 1）：runner 加 `--ex
 ```bash
 # 0) 索引（可复用，本报告使用的 data root 与 commit 见 §1）
 uv run zace-core ingest --repo . --data /tmp/zace-verify-main
-uv run zace-core ingest --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk --data /tmp/zace-aibox
-uv run zace-core ingest --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data /tmp/zace-cam
+uv run zace-core ingest --repo <内部靶场>/aibox-super-sdk --data /tmp/zace-aibox
+uv run zace-core ingest --repo <内部靶场>/linux-mtk-mw-cameraservice --data /tmp/zace-cam
 
 # 1) 端到端（②，runner 原生命令；逐仓库）
 uv run zace-core eval --golden benches/golden/zace --repo . --data /tmp/zace-verify-main \
   --report benches/results/raw-baseline-zace-e2e.md
 uv run zace-core eval --golden benches/golden/aibox-super-sdk \
-  --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk --data /tmp/zace-aibox \
+  --repo <内部靶场>/aibox-super-sdk --data /tmp/zace-aibox \
   --report benches/results/raw-baseline-aibox-e2e.md
 uv run zace-core eval --golden benches/golden/linux-mtk-mw-cameraservice \
-  --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice --data /tmp/zace-cam \
+  --repo <内部靶场>/linux-mtk-mw-cameraservice --data /tmp/zace-cam \
   --report benches/results/raw-baseline-cameraservice-e2e.md
 
 # 2) runner 冒烟（DoD 的全量命令：60 条一次性跑通，指标无意义，只验解析与不中断）

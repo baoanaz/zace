@@ -1,5 +1,7 @@
 # Phase 2 新靶场基线：hello-agents（TASK-047）
 
+> **历史报告（2026-09-14 归档）**：本文引用的 `aibox-super-sdk` / `linux-mtk-mw-cameraservice` 旧靶场及其用例已于 2026-09-14 清理（见 `benches/README.md`「靶场变更」），文中命令与路径不可再执行；数字仅作决策依据留档，**与当前靶场不可比**。
+
 > 本文件 = **手工元信息（§0-§4）** + **`zace-core eval` 的原始产物（§5 起）**。
 > §5 起的数字由 runner 生成、未手工改动；§0-§4 是重跑命令、索引范围与本报告的适用边界。
 > 注意：**重跑 eval 会覆盖整份文件**（runner 直接写本路径），届时需把 §0-§4 重新贴回。
@@ -8,7 +10,7 @@
 
 | 项 | 值 |
 |---|---|
-| 靶场路径 | `/home/xuwenzheng/github/hello-agents`（外部**只读**靶场，不属于 zace 仓库） |
+| 靶场路径 | `<本地检出>/hello-agents`（外部**只读**靶场，不属于 zace 仓库） |
 | 上游 | `https://github.com/datawhalechina/hello-agents.git`（datawhalechina/hello-agents，Python Agent 教程） |
 | commit | `4f7682ceafe573d07cd8a7d0b89908500e83227d`（`git rev-parse HEAD`） |
 | projectId | `e9ee9dd1d41a7d2c`（D-29 git remote 身份；同 remote 的不同工作区会共用这个目录） |
@@ -29,11 +31,11 @@ export EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_DIM=1024 \
        EMBED_BASE_URL=https://api.siliconflow.cn EMBED_API_KEY="$KEY"
 
 # 2) 索引靶场（数据根在 /tmp，不写进靶场仓库）
-uv run zace-core ingest --repo /home/xuwenzheng/github/hello-agents --data /tmp/zace-ha
+uv run zace-core ingest --repo <本地检出>/hello-agents --data /tmp/zace-ha
 
 # 3) 跑 golden 并写本报告
 uv run zace-core eval --golden benches/golden/hello-agents \
-  --repo /home/xuwenzheng/github/hello-agents --data /tmp/zace-ha \
+  --repo <本地检出>/hello-agents --data /tmp/zace-ha \
   --report benches/results/phase2-helloagents-baseline.md
 ```
 
@@ -51,7 +53,7 @@ uv run zace-core eval --golden benches/golden/hello-agents \
 
 ## 2. 索引范围实测
 
-`zace-core ingest --repo /home/xuwenzheng/github/hello-agents` 的真实输出（elapsed 364.1s）：
+`zace-core ingest --repo <本地检出>/hello-agents` 的真实输出（elapsed 364.1s）：
 
 ```text
 files: added=1482 modified=0 deleted=0 parsed=1482
@@ -125,7 +127,7 @@ elapsed: 364.1s
 # zace golden eval 报告（runner 原始产物）
 
 - golden：benches/golden/hello-agents（31 条用例）
-- repo：/home/xuwenzheng/github/hello-agents
+- repo：<本地检出>/hello-agents
 - project：e9ee9dd1d41a7d2c
 - 生成时间：2026-09-13 15:02:56
 - 预算：maxTokens=10000｜排名口径=ContextPack 装填序｜top-k=10

@@ -1,5 +1,7 @@
 # Phase 2 embedding bake-off（TASK-015A，只做模型选型）
 
+> **历史报告（2026-09-14 归档）**：本文引用的 `aibox-super-sdk` / `linux-mtk-mw-cameraservice` 旧靶场及其用例已于 2026-09-14 清理（见 `benches/README.md`「靶场变更」），文中命令与路径不可再执行；数字仅作决策依据留档，**与当前靶场不可比**。
+
 > 生成：2026-09-11 ｜ 分支：`feature/task-015a_xwz0910`（jump 自 `main` @ `ea4084d`）
 > 原始产物：`~/.cache/zace-bakeoff/results/*.json`（脚本落盘，含完整命令/数据根/commit）
 > 一句话结论：**沿用 `multilingual-e5-small`（384D / 512 token）作为默认模型**——
@@ -58,8 +60,8 @@ $ git diff main -- core/zace_core/retrieval/ core/zace_core/contextpack/ core/za
 | repo | 路径 | commit | 索引范围文件数 | chunks | golden 用例 |
 |---|---|---|---|---|---|
 | `zace`（dogfood） | 本仓 | `ea4084d9` | 279 | 3218 | 24（正例 22） |
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | 451 | 5760 | 20（正例 18） |
-| `linux-mtk-mw-cameraservice` | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | `3fb0b2d6` | 1382 | 6257 | 16（正例 14） |
+| `aibox-super-sdk` | `<内部靶场>/aibox-super-sdk` | `debf8a32` | 451 | 5760 | 20（正例 18） |
+| `linux-mtk-mw-cameraservice` | `<内部靶场>/linux-mtk-mw-cameraservice` | `3fb0b2d6` | 1382 | 6257 | 16（正例 14） |
 
 **索引范围一致性（证明"唯一变量是 provider"）**：三个模型对同一仓库记录的
 `scope.digest`（scan manifest 的 `路径:content_hash` 排序后 sha256）**逐字节相同**：
@@ -358,12 +360,12 @@ uv run python benches/bakeoff/embed_compare.py run \
 
 uv run python benches/bakeoff/embed_compare.py run \
   --model multilingual-e5-small \
-  --repo /home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk \
+  --repo <内部靶场>/aibox-super-sdk \
   --repo-name aibox --golden benches/golden/aibox-super-sdk
 
 uv run python benches/bakeoff/embed_compare.py run \
   --model multilingual-e5-small \
-  --repo /home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice \
+  --repo <内部靶场>/linux-mtk-mw-cameraservice \
   --repo-name cam --golden benches/golden/linux-mtk-mw-cameraservice
 
 # （把 --model 换成 bge-small-zh-v1.5 / arctic-embed-xs 重复三次即得对照行）

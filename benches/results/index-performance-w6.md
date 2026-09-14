@@ -1,8 +1,10 @@
 # 索引性能基准：冷启动 / 增量 / 瓶颈归因（2026-09-13）
 
+> **历史报告（2026-09-14 归档）**：本文引用的 `aibox-super-sdk` / `linux-mtk-mw-cameraservice` 旧靶场及其用例已于 2026-09-14 清理（见 `benches/README.md`「靶场变更」），文中命令与路径不可再执行；数字仅作决策依据留档，**与当前靶场不可比**。
+
 > 编制：编排者（本机实测，全部数字可追溯）。
 > 被测对象：合并 W6 三泳道后的 `main`（`01d9016`）。
-> 靶场：`/home/xuwenzheng/github/hello-agents` @ `4f7682c`（1436 索引文件 / 9389 chunks）。
+> 靶场：`<本地检出>/hello-agents` @ `4f7682c`（1436 索引文件 / 9389 chunks）。
 > embedding：硅基流动 `BAAI/bge-m3`（免费档，1024D）。
 > 机器：WSL2 / 12 逻辑核 / 15 GiB（**单线程嵌入，未并发**）。
 
@@ -122,10 +124,10 @@ export EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_BASE_URL=https://api.silicon
 export NO_PROXY=127.0.0.1,localhost
 
 # 冷启动（全量）
-uv run zace-core ingest --repo /home/xuwenzheng/github/hello-agents --data /tmp/zace-integ
+uv run zace-core ingest --repo <本地检出>/hello-agents --data /tmp/zace-integ
 
 # 稳态（无改动）
-uv run zace-core ingest --repo /home/xuwenzheng/github/hello-agents --data /tmp/zace-integ
+uv run zace-core ingest --repo <本地检出>/hello-agents --data /tmp/zace-integ
 
 # 增量（改一个文件后再跑）
 #   实测：files: added=0 modified=1 → chunks new=2 reused=7 → elapsed 2.8s

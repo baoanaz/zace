@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# TASK-015A：bake-off 全矩阵驱动（可断点续跑；每一步的产物落在 ~/.cache/zace-bakeoff/）
+# TASK-015A：embedding bake-off 全矩阵驱动（可断点续跑；产物落在 ~/.cache/zace-bakeoff/）
 #
-# 用法：
-#   bash benches/bakeoff/run_matrix.sh lane1      # e5-small 基线 + 截断 A/B + bge-m3
-#   bash benches/bakeoff/run_matrix.sh lane2      # bge-small-zh-v1.5 + arctic-embed-xs
+# 用法（靶场 checkout 用环境变量给；没给或路径不存在 → 跳过该靶场）：
+#   ZACE_REPO=$PWD \
+#   HELLO_AGENTS_REPO=<hello-agents 检出> \
+#   COCKPIT_REPO=<cockpit-agents-py 检出（内部仓库，需要权限）> \
+#     bash benches/bakeoff/run_matrix.sh lane1     # e5-small 基线 + 截断 A/B + bge-m3
+#   ... lane2                                       # bge-small-zh-v1.5 + arctic-embed-xs
 #
 # 纪律：**唯一变量是 embedding provider**；本脚本不传任何排序/装填参数
 # （`run` 子命令只用 --model / --repo / --golden / --max-input-tokens）。
+#
+# 2026-09-14：旧靶场 aibox-super-sdk / linux-mtk-mw-cameraservice 已下线（用例与报告一并清理，
+# 见 benches/README.md「靶场变更」），矩阵改为按环境变量选靶场，不再硬编码内部路径。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -15,10 +21,28 @@ SCRIPT="benches/bakeoff/embed_compare.py"
 LOGDIR="$HOME/.cache/zace-bakeoff/logs"
 mkdir -p "$LOGDIR"
 
-AIBOX=/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk
-CAM=/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice
+# 靶场表：name|repo_path|golden_dir。repo 为空或路径不存在 → 跳过（并说明原因）。
+TARGETS=()
+add_target() {  # name repo golden
+  if [ -z "$2" ]; then
+    echo "跳过 $1：未设置对应环境变量" >&2
+    return 0
+  fi
+  if [ ! -d "$2" ]; then
+    echo "跳过 $1：路径不存在（$2）" >&2
+    return 0
+  fi
+  TARGETS+=("$1|$2|$3")
+}
+add_target zace              "${ZACE_REPO:-$ROOT}"            benches/golden/zace
+add_target hello-agents      "${HELLO_AGENTS_REPO:-}"         benches/golden/hello-agents
+add_target cockpit-agents-py "${COCKPIT_REPO:-}"              benches/golden/cockpit-agents-py
 
-# 注意：三个仓库的 golden 目录与仓库一一对应（runner 一次只接受一个 --repo）
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+  echo "没有可用靶场：至少设置 ZACE_REPO / HELLO_AGENTS_REPO / COCKPIT_REPO 之一" >&2
+  exit 2
+fi
+
 run_one() {  # model repo_path repo_name golden [extra args...]
   local model="$1" repo="$2" name="$3" golden="$4"; shift 4
   echo "=== [$(date +%H:%M:%S)] $model @ $name $*"
@@ -27,32 +51,32 @@ run_one() {  # model repo_path repo_name golden [extra args...]
   echo "--- exit=$? [$(date +%H:%M:%S)]"
 }
 
+run_model() {  # model [extra args...]
+  local model="$1"; shift
+  local row name repo golden
+  for row in "${TARGETS[@]}"; do
+    IFS='|' read -r name repo golden <<< "$row"
+    run_one "$model" "$repo" "$name" "$golden" "$@"
+  done
+}
+
 case "${1:-}" in
   lane1)
     LANE=lane1
-    run_one multilingual-e5-small "$ROOT"                 zace  benches/golden/zace
-    run_one multilingual-e5-small "$AIBOX"                aibox benches/golden/aibox-super-sdk
-    run_one multilingual-e5-small "$CAM"                  cam   benches/golden/linux-mtk-mw-cameraservice
-    # A2 截断 A/B（仅对最终推荐模型；先跑 e5 的 2048 变体）
-    run_one multilingual-e5-small "$ROOT"  zace-t2048  benches/golden/zace                    --max-input-tokens 2048
-    run_one multilingual-e5-small "$AIBOX" aibox-t2048 benches/golden/aibox-super-sdk          --max-input-tokens 2048
-    run_one multilingual-e5-small "$CAM"   cam-t2048   benches/golden/linux-mtk-mw-cameraservice --max-input-tokens 2048
-    # 上界参考（多语言大模型，代价优先）：先主靶场 aibox，再 zace，最后 cam
-    run_one bge-m3-int8 "$AIBOX" aibox benches/golden/aibox-super-sdk
-    run_one bge-m3-int8 "$ROOT"  zace  benches/golden/zace
-    run_one bge-m3-int8 "$CAM"   cam   benches/golden/linux-mtk-mw-cameraservice
+    run_model multilingual-e5-small
+    # A2 截断 A/B（只对主模型做，验证 2048 截断是否伤召回）
+    run_model multilingual-e5-small --max-input-tokens 2048
+    # 上界参考（多语言大模型，代价优先）
+    run_model bge-m3-int8
     ;;
   lane2)
     LANE=lane2
-    run_one bge-small-zh-v1.5 "$ROOT"  zace  benches/golden/zace
-    run_one bge-small-zh-v1.5 "$AIBOX" aibox benches/golden/aibox-super-sdk
-    run_one bge-small-zh-v1.5 "$CAM"   cam   benches/golden/linux-mtk-mw-cameraservice
-    run_one arctic-embed-xs "$ROOT"  zace  benches/golden/zace
-    run_one arctic-embed-xs "$AIBOX" aibox benches/golden/aibox-super-sdk
-    run_one arctic-embed-xs "$CAM"   cam   benches/golden/linux-mtk-mw-cameraservice
+    run_model bge-small-zh-v1.5
+    run_model arctic-embed-xs
     ;;
   *)
     echo "usage: bash benches/bakeoff/run_matrix.sh {lane1|lane2}" >&2
+    echo "  靶场用环境变量给：ZACE_REPO / HELLO_AGENTS_REPO / COCKPIT_REPO" >&2
     exit 2
     ;;
 esac
