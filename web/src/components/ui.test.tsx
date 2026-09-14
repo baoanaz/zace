@@ -8,11 +8,13 @@
  *    ——错误可读是"不把后端故障伪装成空态"的最后一道防线。
  */
 
+import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api/client";
-import { EmptyState, ErrorBlock } from "./ui";
+import { EmptyState, ErrorBlock, Switch } from "./ui";
 
 describe("EmptyState", () => {
   it("只给 title 时渲染标题，不渲染 hint / action", () => {
@@ -86,5 +88,32 @@ describe("ErrorBlock", () => {
 
     expect(container.textContent).toContain("请求失败（错误对象没有可读的 message）");
     expect(container.textContent).not.toContain("[object Object]");
+  });
+});
+
+describe("Switch（TASK-099 前端收尾：滑动开关）", () => {
+  it("是 role=switch 的可访问控件，aria-checked 反映状态", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [on, setOn] = React.useState(false);
+      return <Switch checked={on} onChange={setOn} label="自动刷新" testId="sw" />;
+    }
+    render(<Harness />);
+
+    const sw = screen.getByRole("switch", { name: "自动刷新" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await user.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("disabled 时不可切换（刷新中不给重复触发）", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Switch checked={false} onChange={onChange} label="自动刷新" disabled />);
+
+    const sw = screen.getByRole("switch", { name: "自动刷新" });
+    expect(sw).toBeDisabled();
+    await user.click(sw);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

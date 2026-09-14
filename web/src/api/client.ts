@@ -235,9 +235,27 @@ export interface LlmConfigView {
   timeoutS?: number;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * 当前生效的是哪一份配置（TASK-099 §C-4）。
+   *
+   * `user` = 用户自己在设置页配的那份（`ask_project` 正在用它）；`server` = 环境变量默认。
+   * 设置页据此把"保存/清除"的语义说清楚，而不是让用户猜。
+   */
+  source?: "user" | "server";
+  /** 用户配置缺哪几项（字段名，不是环境变量名；TASK-099 §C）。 */
+  missingKeys?: string[];
   /** 厂商与上下文窗口（TASK-100 §需求9）。同样**后端尚未提供**，缺失时显示 `—`。 */
   provider?: string | null;
   maxContextTokens?: number | null;
+}
+
+/** `PUT /api/auth/llm-config` 的响应（TASK-099 §C-3；**不含 key 的任何部分**）。 */
+export interface LlmConfigSaved {
+  model: string;
+  baseUrl: string;
+  apiKeyConfigured: boolean;
+  updatedAt: number;
+  source: "user";
 }
 
 /** 当前身份（`GET /api/auth/me`）。 */
@@ -298,6 +316,33 @@ export function createApiKey(name: string): Promise<ApiKeyCreated> {
 
 export function revokeApiKey(id: string): Promise<void> {
   return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// --------------------------------------------------------------------------- 用户级 LLM 配置（TASK-099）
+
+/**
+ * 保存本用户的 LLM 配置（TASK-099 §C-3）。
+ *
+ * `apiKey` 传空串 = **保持不变**（key 从不回显，因此"留空不改"是唯一可用语义）；
+ * 首次保存必须给值，否则服务端返回 400 `invalid_llm_config`。
+ *
+ * 响应**不含 key 的任何部分**（连长度都没有），因此调用方拿不到它去回填输入框——
+ * 这是刻意的：输入框在提交后就该清空。
+ */
+export function saveUserLlmConfig(input: {
+  model: string;
+  baseUrl: string;
+  apiKey?: string;
+}): Promise<LlmConfigSaved> {
+  return request<LlmConfigSaved>("/api/auth/llm-config", {
+    method: "PUT",
+    body: { model: input.model, baseUrl: input.baseUrl, apiKey: input.apiKey ?? "" },
+  });
+}
+
+/** 删除本用户的 LLM 配置 → 回落服务端默认（幂等：本来就没配也返回 204）。 */
+export function deleteUserLlmConfig(): Promise<void> {
+  return request<void>("/api/auth/llm-config", { method: "DELETE" });
 }
 
 // --------------------------------------------------------------------------- 统计与历史（TASK-062/064）

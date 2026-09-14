@@ -27,9 +27,11 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "CALL_TIMELINE_LIMIT",
     "META_DB_FILENAME",
     "IndexRun",
     "IndexStats",
+    "LlmConfigRecord",
     "MetaDB",
     "QueryAuditRecord",
     "UsageSummary",
@@ -43,6 +45,8 @@ META_DB_FILENAME = "zace-meta.db"
 INDEX_RUN_KEEP = 500
 #: 每项目保留的查询审计条数（Module/04 §8 冻结值）。
 QUERY_AUDIT_KEEP = 1000
+#: 一次 Tool 调用的时间线上限（``GET /api/calls/{callId}``；防止极端情况下一次调用拖出巨量行）。
+CALL_TIMELINE_LIMIT = 500
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -113,21 +117,46 @@ CREATE TABLE IF NOT EXISTS query_audit (
   llm_latency_ms    INTEGER,
   answer_tokens     INTEGER,
   request_id        TEXT,
+  answer_text       TEXT,
+  answer_status     TEXT,
   evidence_json     TEXT NOT NULL DEFAULT '[]',
   created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_project ON query_audit(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS user_llm_config (
+  user_id     TEXT PRIMARY KEY,
+  model       TEXT NOT NULL,
+  base_url    TEXT NOT NULL,
+  api_key     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
 """
 
 #: 迁移后要确保存在的索引（**必须在 ALTER 之后建**：旧库里还没有该列，放在 ``_SCHEMA`` 里会在
-#: ``executescript`` 阶段以 ``no such column: request_id`` 直接失败——这正是本卡实施时实测踩到的）。
+#: ``executescript`` 阶段以 ``no such column: request_id`` 直接失败——这正是 TASK-094 §C 实测踩到的
+#: 同一类坑）。
 _AUDIT_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_audit_request ON query_audit(request_id)",
 )
 
 
+#: ``index_runs`` 的**增量列**（TASK-099 §B）：与 :data:`_AUDIT_COLUMNS` 同一套 ALTER 路径。
+#:
+#: 为什么不改上面的 ``CREATE TABLE``：旧库（TASK-062 起就已存在）打开新代码时
+#: ``CREATE TABLE IF NOT EXISTS`` 对既有表是空操作，缺列会在**第一次 SELECT/INSERT** 时
+#: 以 ``no such column: call_id`` 直接失败（TASK-094 §C 实测踩过同一坑）。
+_INDEX_RUN_COLUMNS: tuple[tuple[str, str], ...] = (
+    #: 同一次 Tool 调用的 id（TASK-099 §B-3）：客户端复用 ``X-Request-Id`` 头承载，
+    #: 因此它与同一次调用里 ``query_audit.request_id`` 的值**天然相等**。
+    #: ``NULL`` = 旧客户端未带头 / 旧版本写入的记录（不填编造的 id）。
+    ("call_id", "TEXT"),
+)
+
+
 #: ``query_audit`` 的**增量列**（TASK-088 §E 引入本模块的第一条 ALTER 路径；TASK-094 §C 追加
-#: ``request_id``）：``(列名, 列类型)``。
+#: ``request_id``；TASK-099 §A 追加 ``answer_text`` / ``answer_status``）：``(列名, 列类型)``。
 #:
 #: 为什么要迁移而不是只改 DDL：TASK-084 已经在用户机上建好了表，而 ``CREATE TABLE IF NOT
 #: EXISTS`` 对**既有库**毫无作用（表已存在）。本模块原先没有 ALTER 先例，因此这里建一条最小
@@ -143,6 +172,14 @@ _AUDIT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("answer_tokens", "INTEGER"),
     #: 请求 trace id（TASK-094 §C：与响应头 ``X-Request-Id`` / 日志的 ``requestId`` 同源）。
     ("request_id", "TEXT"),
+    #: LLM 答案正文（TASK-099 §A）；**没走 LLM** 时为 NULL（详见 ``record_query`` 的
+    #: ``answer_text`` 参数说明）。落库而非事后重算：LLM 输出不可复现（同输入可能不同答案，
+    #: 且 provider 可能已换），"事后补算"是幻觉。
+    ("answer_text", "TEXT"),
+    #: 答案状态（TASK-099 §A）：``answered`` / ``insufficient_evidence`` / ``degraded``。
+    #: 与 ``answer_text`` 分开存的原因：**"没调 LLM"（短路）与"调了但答案是空"是两件事**，
+    #: 只有状态列能把它们区分开（前者 ``insufficient_evidence`` + NULL）。
+    ("answer_status", "TEXT"),
 )
 
 
@@ -171,6 +208,8 @@ class IndexRun:
     chunks: int
     errors: int
     error_text: str | None
+    #: 同一次 Tool 调用的 id（TASK-099 §B）；``None`` = 旧客户端未带 ``X-Request-Id``。
+    call_id: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -185,6 +224,9 @@ class IndexRun:
             "chunks": self.chunks,
             "errors": self.errors,
             "error": self.error_text,
+            # TASK-099 §B：与 ``query_audit.requestId`` 同值，前端按它把一次调用的
+            # N 次初始化 + 1 次检索归成一组（NULL → 每行独立展示）。
+            "callId": self.call_id,
         }
 
 
@@ -237,6 +279,10 @@ class QueryAuditRecord:
     #: 请求 trace id（TASK-094 §C）；``None`` = 这条记录落库时没有 requestId（旧版本/未绑定）。
     request_id: str | None
     created_at: int
+    #: LLM 答案正文（TASK-099 §A）；``None`` = **没走 LLM**（证据不足短路 / 未配置 / 调用失败）。
+    answer_text: str | None = None
+    #: 答案状态（TASK-099 §A）：``answered`` / ``insufficient_evidence`` / ``degraded``。
+    answer_status: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -257,7 +303,37 @@ class QueryAuditRecord:
             "answerTokens": self.answer_tokens,
             # TASK-094 §C：历史页展示它，用户报错时拿它去查服务端日志（TASK-090 的端点）。
             "requestId": self.request_id,
+            # TASK-099 §A：历史页弹窗的「输出」列。answerStatus 与 answerText 分开给，
+            # 前端才能区分"没调 LLM"（insufficient_evidence + null）与"调了得到空答案"。
+            "answerText": self.answer_text,
+            "answerStatus": self.answer_status,
             "createdAt": self.created_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LlmConfigRecord:
+    """用户级 LLM 配置（TASK-099 §C-2）。
+
+    **``api_key`` 是明文**（卡内 §C-2 的裁定：单用户自部署下 DB 与 ``.env`` 同一信任域，
+    加密不增加实际安全性）。因此本对象**只在服务端内部流转**：
+    任何 HTTP 响应都不得包含它（连长度、前缀都不行），日志与错误走 ``redact_text``。
+    """
+
+    user_id: str
+    model: str
+    base_url: str
+    api_key: str
+    created_at: int
+    updated_at: int
+
+    def to_json(self) -> dict[str, Any]:
+        """对外形态：**只有 "key 已配置" 这个布尔**，不含 key 本身或其任何可测量属性。"""
+        return {
+            "model": self.model,
+            "baseUrl": self.base_url,
+            "apiKeyConfigured": bool(self.api_key),
+            "updatedAt": self.updated_at,
         }
 
 
@@ -588,14 +664,20 @@ class MetaDB:
         chunks: int = 0,
         errors: int = 0,
         error_text: str | None = None,
+        call_id: str | None = None,
     ) -> int:
-        """写一条索引记录并裁剪到 :data:`INDEX_RUN_KEEP` 条（返回 ``run_id``）。"""
+        """写一条索引记录并裁剪到 :data:`INDEX_RUN_KEEP` 条（返回 ``run_id``）。
+
+        ``call_id``（TASK-099 §B）：**同一次 Tool 调用**的 id，由客户端经 ``X-Request-Id``
+        携带（与服务端 ``current_request_id()`` 同源）。缺省 ``None`` = 旧客户端未带头或
+        离线写入——不填编造的 id，前端据此降级为"每行独立展示"。
+        """
         duration_ms = max(0, int(finished_at - started_at)) * 1000
         with self._write() as conn:
             cursor = conn.execute(
                 "INSERT INTO index_runs (project_id, state, started_at, finished_at,"
-                " duration_ms, files_total, files_processed, chunks, errors, error_text)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " duration_ms, files_total, files_processed, chunks, errors, error_text, call_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     project_id,
                     state,
@@ -607,6 +689,7 @@ class MetaDB:
                     int(chunks),
                     int(errors),
                     error_text,
+                    call_id,
                 ),
             )
             run_id = int(cursor.lastrowid or 0)
@@ -684,6 +767,113 @@ class MetaDB:
         ).fetchall()
         return [_index_run(row) for row in rows]
 
+    # ------------------------------------------------------------------ 用户级 LLM 配置（§C）
+
+    def get_llm_config(self, user_id: str) -> LlmConfigRecord | None:
+        """该用户的 LLM 配置（未配置 → ``None``，调用方回落服务端默认）。
+
+        **内部专用**：返回值含明文 key，严禁直接序列化进 HTTP 响应。
+        """
+        row = self._connect().execute(
+            "SELECT user_id, model, base_url, api_key, created_at, updated_at"
+            " FROM user_llm_config WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return None if row is None else _llm_config_record(row)
+
+    def save_llm_config(
+        self,
+        user_id: str,
+        *,
+        model: str,
+        base_url: str,
+        api_key: str | None = None,
+        now: int | None = None,
+    ) -> LlmConfigRecord:
+        """写入（或覆盖）该用户的 LLM 配置。
+
+        ``api_key=None`` 表示**保持不变**（"只改模型名不想重输 key"——卡内 §C-3 的
+        "``apiKey`` 传空串表示保持不变"）。首次写入时 key 不能为空（没有旧值可继承）→
+        :class:`ValueError`，由路由层转 400（这里是唯一能判断"是不是首次"的地方）。
+        """
+        current = int(now if now is not None else time.time())
+        existing = self.get_llm_config(user_id)
+        resolved_key = api_key if api_key is not None else (existing.api_key if existing else None)
+        if not resolved_key:
+            raise ValueError("首次保存必须提供 apiKey（之后可留空表示保持不变）")
+        created = existing.created_at if existing is not None else current
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO user_llm_config"
+                " (user_id, model, base_url, api_key, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(user_id) DO UPDATE SET"
+                " model = excluded.model, base_url = excluded.base_url,"
+                " api_key = excluded.api_key, updated_at = excluded.updated_at",
+                (user_id, model, base_url, resolved_key, created, current),
+            )
+        return LlmConfigRecord(
+            user_id=user_id,
+            model=model,
+            base_url=base_url,
+            api_key=resolved_key,
+            created_at=created,
+            updated_at=current,
+        )
+
+    def delete_llm_config(self, user_id: str) -> bool:
+        """删除该用户的 LLM 配置（→ 回落服务端默认）；不存在返回 ``False``。
+
+        幂等语义由调用方决定（§C-3：``DELETE`` 不报 404，删除本来就是"让它不在"）。
+        """
+        with self._write() as conn:
+            cursor = conn.execute("DELETE FROM user_llm_config WHERE user_id = ?", (user_id,))
+            return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------ 调用时间线（TASK-099 §B）
+
+    def index_runs_by_call(self, call_id: str) -> list[IndexRun]:
+        """该 callId 下的全部索引记录（**跨项目**：一次调用可能同时初始化多个仓库）。"""
+        rows = self._connect().execute(
+            "SELECT * FROM index_runs WHERE call_id = ? ORDER BY started_at ASC, id ASC",
+            (call_id,),
+        ).fetchall()
+        return [_index_run(row) for row in rows]
+
+    def queries_by_request_id(self, request_id: str) -> list[QueryAuditRecord]:
+        """该 trace id（= callId）下的全部查询审计。"""
+        rows = self._connect().execute(
+            "SELECT * FROM query_audit WHERE request_id = ? ORDER BY created_at ASC, id ASC",
+            (request_id,),
+        ).fetchall()
+        return [_audit_record(row) for row in rows]
+
+    def visible_call_ids(self, project_ids: Sequence[str], *, limit: int = 50) -> list[str]:
+        """当前可见项目下最近的 callId（去重、按最近活动倒序）。
+
+        只为**归属校验**服务（见 ``routers/ops.py`` 的 ``/api/calls/{callId}``）：云端形态下
+        不能让人拿别人的 callId 读到别人的时间线，而时间线本身是跨项目的，无法靠单个
+        projectId 判定。空列表 = 该用户没有任何带 callId 的记录。
+
+        **两个来源都要看**（``index_runs.call_id`` 与 ``query_audit.request_id``）：
+        一次调用可能只有检索而没有任何上传（索引早已就绪），只看 run 表会让这种调用
+        连自己都无法访问（实测踩到：Alice 查自己的 callId 得到 404）。
+        """
+        if not project_ids:
+            return []
+        placeholders = ",".join("?" for _ in project_ids)
+        rows = self._connect().execute(
+            f"SELECT call_id, MAX(at) AS at FROM ("
+            f"  SELECT call_id, finished_at AS at FROM index_runs"
+            f"   WHERE project_id IN ({placeholders}) AND call_id IS NOT NULL"
+            f"  UNION ALL"
+            f"  SELECT request_id AS call_id, created_at AS at FROM query_audit"
+            f"   WHERE project_id IN ({placeholders}) AND request_id IS NOT NULL"
+            f") GROUP BY call_id ORDER BY at DESC LIMIT ?",
+            [*project_ids, *project_ids, max(1, int(limit))],
+        ).fetchall()
+        return [str(row["call_id"]) for row in rows]
+
     # ------------------------------------------------------------------ 查询审计（TASK-064）
 
     def record_query(
@@ -703,6 +893,8 @@ class MetaDB:
         llm_latency_ms: int | None = None,
         answer_tokens: int | None = None,
         request_id: str | None = None,
+        answer_text: str | None = None,
+        answer_status: str | None = None,
         evidence: Sequence[Mapping[str, Any]] = (),
         user_id: str | None = None,
         now: int | None = None,
@@ -711,7 +903,18 @@ class MetaDB:
 
         ``request_id``（TASK-094 §C）是**当前请求的 trace id**（与响应头 ``X-Request-Id`` 同源）；
         缺省 ``None`` 表示调用方未绑定（旧调用方/离线写库）——旧行因此可以看出"这条没有 trace"，
-        而不是被填上一个编造的 id。
+        而不是被填上一个编造的 id。TASK-099 §B-3：客户端在同一次 Tool 调用里发**同一个**
+        ``X-Request-Id``，因此这个字段同时是那次调用的 callId（与 ``index_runs.call_id`` 同值）。
+
+        ``answer_text`` / ``answer_status``（TASK-099 §A）是**LLM 答案正文与状态**。三条分支：
+
+        - ``answerable=false`` 短路（D-24）→ ``answer_text=None`` + ``"insufficient_evidence"``；
+        - 未配置/调用失败（D-26 降级）→ ``answer_text=None`` + ``"degraded"``；
+        - 成功 → 正文 + ``"answered"``。
+
+        因此 **``answer_text`` 为 NULL 不等于"调了 LLM 但答案是空"**——区分靠 ``answer_status``
+        （把"没调"记成"调了空答案"是 TASK-099 明令禁止的失信）。长度上限由写入方
+        （``zace_service.audit.ANSWER_STORE_MAX_CHARS``）负责卡，本层不重复截断。
 
         **调用方必须自己 try/except**：审计是旁路，记不上账不影响检索（TASK-064 §C）。
         """
@@ -722,9 +925,9 @@ class MetaDB:
             cursor = conn.execute(
                 "INSERT INTO query_audit (project_id, user_id, mode, query, answerable,"
                 " confidence, degraded, latency_ms, evidence_count, docs_count, used_tokens,"
-                " citation_coverage, llm_latency_ms, answer_tokens, request_id, evidence_json,"
-                " created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " citation_coverage, llm_latency_ms, answer_tokens, request_id, answer_text,"
+                " answer_status, evidence_json, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     project_id,
                     user_id,
@@ -741,6 +944,8 @@ class MetaDB:
                     llm_latency_ms,
                     answer_tokens,
                     request_id,
+                    answer_text,
+                    answer_status,
                     json.dumps([dict(item) for item in evidence], ensure_ascii=False),
                     created,
                 ),
@@ -830,13 +1035,36 @@ def _migrate(conn: sqlite3.Connection) -> None:
     - 每条语句前用 ``PRAGMA table_info`` 判存在性，因此重复打开同一库不会报错；
     - 失败向上抛（schema 不完整时要及早暴露，而不是让审计静默写不进去）。
     """
-    existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(query_audit)")}
-    for name, sql_type in _AUDIT_COLUMNS:
-        if name not in existing:
-            conn.execute(f"ALTER TABLE query_audit ADD COLUMN {name} {sql_type}")
+    _add_columns(conn, "query_audit", _AUDIT_COLUMNS)
+    _add_columns(conn, "index_runs", _INDEX_RUN_COLUMNS)
     # 索引在列存在之后建（见 _AUDIT_INDEXES 的注释：放 _SCHEMA 里会让旧库打开直接失败）。
     for statement in _AUDIT_INDEXES:
         conn.execute(statement)
+
+
+def _llm_config_record(row: sqlite3.Row) -> LlmConfigRecord:
+    return LlmConfigRecord(
+        user_id=str(row["user_id"]),
+        model=str(row["model"]),
+        base_url=str(row["base_url"]),
+        api_key=str(row["api_key"]),
+        created_at=int(row["created_at"]),
+        updated_at=int(row["updated_at"]),
+    )
+
+
+def _add_columns(
+    conn: sqlite3.Connection, table: str, columns: Sequence[tuple[str, str]]
+) -> None:
+    """给 ``table`` 补齐 ``columns`` 里缺失的列（幂等：先查 ``PRAGMA table_info``）。
+
+    所有表共用这一条路径，纪律见 :func:`_migrate`：只加列、不改名/改类型/删列，
+    因此旧版本代码仍能读写同一张表。
+    """
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, sql_type in columns:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
 
 def _user(row: sqlite3.Row) -> User:
@@ -861,6 +1089,7 @@ def _index_run(row: sqlite3.Row) -> IndexRun:
         chunks=int(row["chunks"]),
         errors=int(row["errors"]),
         error_text=row["error_text"],
+        call_id=row["call_id"],
     )
 
 
@@ -882,4 +1111,6 @@ def _audit_record(row: sqlite3.Row) -> QueryAuditRecord:
         answer_tokens=row["answer_tokens"],
         request_id=row["request_id"],
         created_at=int(row["created_at"]),
+        answer_text=row["answer_text"],
+        answer_status=row["answer_status"],
     )

@@ -50,7 +50,8 @@ from zace_core.engine import (
     project_id_for as engine_project_id_for,
 )
 
-from zace_service.answer import AnswerError, answer_question, provider_for_app
+from zace_service.answer import AnswerError, answer_question
+from zace_service.auth import local_user
 from zace_service.config import Settings
 from zace_service.deps import project_not_found_message, require_ownership_of
 from zace_service.errors import (
@@ -58,6 +59,7 @@ from zace_service.errors import (
     ApiError,
     map_engine_error,
 )
+from zace_service.llmconfig import provider_for_request
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.packmeta import pack_meta
@@ -399,14 +401,50 @@ def _search_text(
 def _provider_resolver(
     app: FastAPI | None, settings: Settings
 ) -> Callable[[], Any]:
-    """``ask_project`` 的 provider 解析器（有 app 就复用其缓存，否则按 settings 现建）。
+    """``ask_project`` 的 provider 解析器（TASK-099 §C-4：**用户配置优先**）。
 
     为什么做成零参可调用而不是直接传 provider：MCP 工具可能在**很久以后**才被调用，
-    而 provider 的构造要读届时生效的配置；延迟到调用时解析就不会用到过期的配置快照。
+    而 provider 的构造要读届时生效的配置（用户配置会变）＋届时生效的身份——延迟到调用时
+    解析就不会用到过期的配置快照。
+
+    有 ``app`` 时复用 :func:`llmconfig.provider_for_request` 的缓存（与 REST 面**同一套**
+    解析与缓存口径，两面不会漂移）；不传（单测直接调 ``build_mcp``）时按 settings 现建。
+
+    身份取自 :func:`current_user`（与 ``_require_owned_project`` / ``_storage_warning``
+    同一通道）：配额按用户算，而**用户自定义的 LLM 也按用户算**——同一个 contextvar，
+    同一个口径。无身份（本地模式）→ 服务端默认。
     """
-    if app is not None:
-        return lambda: provider_for_app(app)
-    return lambda: build_answer_provider(settings)
+    def resolve() -> Any:
+        user_id = _llm_user_id(settings)
+        if app is not None:
+            return provider_for_request(
+                app, user_id=user_id, db=_meta_db_for_llm(app)
+            )
+        return build_answer_provider(settings, user_id=user_id)
+
+    return resolve
+
+
+def _llm_user_id(settings: Settings) -> str | None:
+    """MCP 面的 LLM 归属人（与 REST 面的 :func:`auth.llm_owner` **同口径**）。
+
+    ``current_user()`` 在云端来自 ``_IdentityBinding`` 注入的已认证用户；而**本地模式**下
+    ``app.py`` 的鉴权中间件把 ``request.state.zace_user`` 置为 ``None``（R34：无账户体系），
+    因此这里回落到隐式账户 ``local``——否则用户在设置页配好了 LLM，MCP 的 ``ask_project``
+    却仍然用服务端默认，而页面显示"已配置"（静默失灵，正是本卡要消灭的问题）。
+
+    云端未认证时返回 ``None``（该路径实际上被鉴权中间件拦住了，这里只是不给出错的可能）。
+    """
+    user_id = getattr(current_user(), "id", None)
+    if user_id:
+        return str(user_id)
+    return local_user().id if settings.local_mode else None
+
+
+def _meta_db_for_llm(app: FastAPI) -> MetaDB | None:
+    """app 级 ``MetaDB``（读用户 LLM 配置用；缺库 → ``None``，解析层自动回落默认）。"""
+    db = getattr(getattr(app, "state", None), "meta_db", None)
+    return db if isinstance(db, MetaDB) else None
 
 
 def _ask_text(
@@ -468,11 +506,25 @@ def _storage_warning(manager: EngineManager, settings: Settings, project_id: str
     )
 
 
-def build_answer_provider(settings: Settings) -> Any:
-    """无 app 时按配置现建 provider（未配置 → ``None``）；供 MCP 单测与内嵌用法。"""
-    from zace_service.answer import build_provider
+def build_answer_provider(settings: Settings, *, user_id: str | None = None) -> Any:
+    """按配置现建 provider（未配置 → ``None``）；供 MCP 单测与内嵌用法。
 
-    return build_provider(settings)
+    TASK-099 §C-4：``user_id`` 非空时按**该用户**的配置建（没有库可读，因此仅在调用方
+    已经知道"该用户没有单独配置"或走的是无 app 的测试路径时使用）；缺省回落服务端默认。
+    """
+    from zace_service.llmconfig import resolve_llm_config
+
+    resolved = resolve_llm_config(settings, user_id=user_id, db=None)
+    if not resolved.configured:
+        return None
+    from zace_service.answer import HttpAnswerProvider
+
+    return HttpAnswerProvider(
+        base_url=str(resolved.base_url),
+        api_key=str(resolved.api_key),
+        model=str(resolved.model),
+        timeout_s=settings.answer_timeout_s,
+    )
 
 
 def _status_line(meta: dict[str, Any]) -> str:

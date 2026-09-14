@@ -32,6 +32,74 @@ pub const SEARCH_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 /// 对外错误文本里的响应体截断（Module 05 §2.2：512 字节）。
 const MAX_ERROR_SNIPPET_BYTES: usize = 512;
+/// callId（= 服务端的 ``X-Request-Id``）的请求头名（TASK-099 §B-2）。
+///
+/// **为什么不新增一个头**：服务端 ``app.py`` 的 requestId 中间件早已支持客户端传入
+/// ``X-Request-Id`` 并把它回写响应头（TASK-090 §B），而请求头不在 CF-05 的冻结范围
+/// （契约只冻结 body 与响应字段集）。直接复用它就少一个契约面，也少一个概念。
+pub const CALL_ID_HEADER: &str = "X-Request-Id";
+
+/// 生成一次 Tool 调用的 callId：``{unix_millis}-{16 位十六进制}``。
+///
+/// 为什么不用 UUID crate：不新增依赖（卡内 §B-2 明确要求）。随机部分用
+/// ``std::collections::hash_map::RandomState` 的每进程随机种子 + 时间 + 原子计数器混合——
+/// 同进程内不可能重复，跨进程也不同种子；作为"一次调用的分组键"这已经足够
+/// （它不是安全凭据，不进入任何鉴权判定）。
+pub fn new_call_id(now_millis: u64, extra: u64) -> String {
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(now_millis);
+    hasher.write_u64(extra);
+    let mixed = hasher.finish();
+    format!("{now_millis}-{mixed:016x}")
+}
+
+/// 当前时间的毫秒表示（系统时钟异常时退化为 0：callId 仍可用，只是前缀不反映真实时间）。
+fn now_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 一次 Tool 调用一个实例（TASK-099 §B-2）。
+///
+/// 它的**唯一职责**是把同一个 callId 发给该次调用的**所有**请求：服务端据此把
+/// N 条 ``index_runs``（初始化）与 1 条 ``query_audit``（检索）串成一条时间线。
+/// 没有它，服务端看到的只是一堆互不相干的请求。
+#[derive(Debug, Clone)]
+pub struct CallContext {
+    id: String,
+}
+
+impl CallContext {
+    /// 开一次新调用（生成新 callId）。
+    pub fn new() -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self {
+            id: new_call_id(now_millis(), seq),
+        }
+    }
+
+    /// 用指定 id 构造（测试与"由调用方给定"的场景）。
+    pub fn with_id(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Default for CallContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// 一次上传的结果。
 #[derive(Debug, Default, Clone)]
@@ -42,16 +110,25 @@ pub struct UploadOutcome {
 }
 
 /// 远端客户端（一个服务端地址一个实例）。
+///
+/// ``call``（TASK-099 §B-2）是**本次调用**的上下文：所有请求都带上它的 callId。
+/// 字段是 ``Option`` 只为兼容手工构造（测试）；生产路径总是由 ``ToolLayer`` 给出。
 pub struct RemoteClient {
     base_url: String,
     token: Option<String>,
     upload: reqwest::Client,
     search: reqwest::Client,
     general: reqwest::Client,
+    call: CallContext,
 }
 
 impl RemoteClient {
     pub fn new(base_url: &str, token: Option<String>) -> Result<Self> {
+        Self::with_call(base_url, token, CallContext::new())
+    }
+
+    /// 用指定的调用上下文构造（一次 tool call 一个实例；见 ``ToolLayer``）。
+    pub fn with_call(base_url: &str, token: Option<String>, call: CallContext) -> Result<Self> {
         let base_url = normalize_base_url(base_url)?;
         let token = token
             .map(|value| value.trim().to_string())
@@ -62,7 +139,29 @@ impl RemoteClient {
             general: build_client(DEFAULT_TIMEOUT)?,
             base_url,
             token,
+            call,
         })
+    }
+
+    /// 本次调用的 callId（= 发给服务端的 ``X-Request-Id``）。
+    pub fn call_id(&self) -> &str {
+        self.call.id()
+    }
+
+    /// 派生一个"同配置、新调用"的客户端（HTTP 连接池共享，``reqwest::Client`` 内部是 Arc）。
+    ///
+    /// ``ToolLayer`` 在**每个 tool call 开始时**调它：callId 的粒度是"一次 Tool 调用"
+    /// （卡内 §B-1），而不是"一个进程"——否则同一会话里的第二次调用会被归到第一次的
+    /// 时间线上（错误分组比不分组更坏）。
+    pub fn for_call(&self, call: CallContext) -> Self {
+        Self {
+            base_url: self.base_url.clone(),
+            token: self.token.clone(),
+            upload: self.upload.clone(),
+            search: self.search.clone(),
+            general: self.general.clone(),
+            call,
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -212,13 +311,16 @@ impl RemoteClient {
         format!("{}{path}", self.base_url)
     }
 
-    /// 统一发请求：带上 Bearer（若有）并映射可读错误（含响应体截断 + 脱敏）。
+    /// 统一发请求：带上 Bearer（若有）、**callId**（TASK-099 §B-2）并映射可读错误。
+    ///
+    /// ``X-Request-Id`` 在这里**集中注入**（而不是每个方法各写一遍）：所有端点（resolve /
+    /// batch-upload / deletions / checkpoint / query）走的都是本函数，因此不可能漏。
     async fn request(
         &self,
         builder: reqwest::RequestBuilder,
         payload: &serde_json::Value,
     ) -> Result<reqwest::Response> {
-        let mut builder = builder.json(payload);
+        let mut builder = builder.header(CALL_ID_HEADER, self.call.id()).json(payload);
         if let Some(token) = &self.token {
             builder = builder.bearer_auth(token);
         }
@@ -341,6 +443,24 @@ pub fn validate_project_root(root: &str) -> Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_id_is_unique_and_time_prefixed() {
+        let a = CallContext::new();
+        let b = CallContext::new();
+        assert_ne!(a.id(), b.id(), "两次调用不能拿到同一个 callId");
+        let (prefix, random) = a.id().split_once('-').expect("形如 {millis}-{hex}");
+        assert!(prefix.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(random.len(), 16);
+        assert!(random.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(CallContext::with_id("fixed").id(), "fixed");
+    }
+
+    #[test]
+    fn new_call_id_mixes_inputs() {
+        assert_ne!(new_call_id(1, 1), new_call_id(1, 2));
+        assert!(new_call_id(1, 1).starts_with("1-"));
+    }
 
     #[test]
     fn base_url_requires_scheme_and_drops_trailing_slash() {

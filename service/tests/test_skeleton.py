@@ -36,6 +36,12 @@ from tests.conftest import make_app, make_client
 #:   首个用户初始化（``/api/auth/bootstrap``）；
 #: - TASK-062/064：账户概览、索引历史与统计、查询用量汇总。
 #: - TASK-090：按 trace id 查请求日志（只读；只查自己的）。
+#: - TASK-099 §B/§C：一次 Tool 调用的时间线（``/api/calls/{callId}``，客户端经
+#:   ``X-Request-Id`` 头承载 callId）与**用户级 LLM 配置**的写入/删除。
+#:
+#: TASK-099 的两个/三个新路径已列入任务卡 §D 的 **L2 契约申请**，等编排者把它写入
+#: ``docs/contracts/openapi.yaml``（实施 AI 不动契约文件）；本白名单与实现同步先行，
+#: 因此路径快照测试保持绿，但**契约文件与实现存在已声明的暂时差异**（已在执行记录里列明）。
 TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
     {
         "/api/projects/attach",
@@ -43,11 +49,13 @@ TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
         "/api/meta",
         "/api/auth/me",
         "/api/auth/bootstrap",
+        "/api/auth/llm-config",
         "/api/account/overview",
         "/api/projects/{id}/index-runs",
         "/api/projects/{id}/index-stats",
         "/api/index-stats",
         "/api/usage/summary",
+        "/api/calls/{callId}",
         "/api/request-log/{requestId}",
     }
 )

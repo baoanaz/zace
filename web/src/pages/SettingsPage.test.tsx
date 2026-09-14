@@ -13,9 +13,15 @@
  * | 展示 embedding 的模型/维度/厂商 | 移到控制台的 `ServiceModels` 测试 | embedding 信息按用户要求移出设置页 |
  * | 展示 timeout/maxTokens/temperature | **删除**（连同字段一起，页面不再展示调优细节） | 用户："精简展示"；安全类断言保留 |
  * | `llm-notice` 文案 | 保留为 `llm-save-notice` + 未配置提示 | 仍是"未配置时给可操作文案" |
+ *
+ * TASK-099 §C-5：后端已落地写入端点，因此：
+ * - 原来那条"保存能力未就绪时如实标注"的断言改写为"保存真的发请求且**只发光字段**"——
+ *   **不再有 `llm-save-notice`**（它描述的状态已经不成立，留着就是假话）；
+ * - 新增"清除后回落服务端默认"与"`source=user` 时页面如实标注"（§C-4 的可见性）。
  */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DeploymentMeta } from "../api/client";
@@ -35,6 +41,52 @@ function stubMeta(meta: Partial<DeploymentMeta> & { config: DeploymentMeta["conf
     "fetch",
     vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })),
   );
+}
+
+/**
+ * 踢入 `/api/meta` 响应 + 一个记录写入请求的 fetch 桩（TASK-099 §C-5）。
+ *
+ * 返回的 `calls` 让断言能看清
+ * “发了什么请求、请求体里有什么”——尤其是**key 只出现在 PUT 体里、不进任何其它字段**。
+ */
+function stubMetaAndWrites(
+  meta: Partial<DeploymentMeta> & { config: DeploymentMeta["config"] },
+  refresh?: Partial<DeploymentMeta> & { config: DeploymentMeta["config"] },
+) {
+  const body: DeploymentMeta = {
+    version: "0.0.1",
+    localMode: true,
+    authRequired: false,
+    registerOpen: false,
+    needsBootstrap: false,
+    userCount: null,
+    ...meta,
+  };
+  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  let metaCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({
+        url,
+        method,
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      if (method === "GET") {
+        metaCalls += 1;
+        const payload = metaCalls > 1 && refresh ? { ...body, ...refresh } : body;
+        return new Response(JSON.stringify(payload), { status: 200 });
+      }
+      if (method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(
+        JSON.stringify({ model: "m", baseUrl: "u", apiKeyConfigured: true, updatedAt: 1, source: "user" }),
+        { status: 200 },
+      );
+    }),
+  );
+  return calls;
 }
 
 afterEach(() => {
@@ -93,19 +145,113 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
     expect(screen.getAllByText("未配置").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("保存能力未就绪时如实标注（不做假按钮）", async () => {
-    stubMeta({
+  it("保存真的发请求（PUT），且请求体只含三个表单字段", async () => {
+    const calls = stubMetaAndWrites({
       config: {
         embedding: { mode: "local", configured: true, missingEnv: [] },
-        llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "m" },
+        llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "m", source: "server" },
       },
     });
 
     render(<SettingsPage />);
 
-    // 后端能力（TASK-099）尚未实施：页面必须说明，而不是给一个点了没反应的按钮。
-    expect(await screen.findByTestId("llm-save-notice")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    // TASK-099 §C-5：保存能力已落地，**不再有**"尚未开放"的提示（那个状态已不成立）。
+    await screen.findByLabelText(/模型名/);
+    expect(screen.queryByTestId("llm-save-notice")).not.toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "保存" });
+    expect(save).toBeEnabled();
+
+    await userEvent.clear(screen.getByLabelText(/模型名/));
+    await userEvent.type(screen.getByLabelText(/模型名/), "my-model");
+    await userEvent.clear(screen.getByLabelText(/接口地址/));
+    await userEvent.type(screen.getByLabelText(/接口地址/), "https://my.llm/v1");
+    await userEvent.type(screen.getByLabelText(/API Key/), "sk-my-secret");
+    await userEvent.click(save);
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === "PUT")).toBe(true),
+    );
+    const put = calls.find((call) => call.method === "PUT")!;
+    expect(put.url).toContain("/api/auth/llm-config");
+    expect(put.body).toEqual({
+      model: "my-model",
+      baseUrl: "https://my.llm/v1",
+      apiKey: "sk-my-secret",
+    });
+    // 保存后重新拉取生效值（否则顶部"当前"会停在旧值上）。
+    await waitFor(() => expect(calls.filter((call) => call.method === "GET").length).toBeGreaterThan(1));
+    // key 提交后从组件状态清除（安全口径：不在内存里多留）。
+    expect((screen.getByLabelText(/API Key/) as HTMLInputElement).value).toBe("");
+  });
+
+  it("清除调用 DELETE，并在 source=user 时如实标注生效来源", async () => {
+    const calls = stubMetaAndWrites(
+      {
+        config: {
+          embedding: { mode: "local", configured: true, missingEnv: [] },
+          llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "mine", source: "user" },
+        },
+      },
+      {
+        config: {
+          embedding: { mode: "local", configured: true, missingEnv: [] },
+          llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "srv", source: "server" },
+        },
+      },
+    );
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByTestId("llm-source-user")).toBeInTheDocument();
+    expect(screen.getByText(/（你的配置）/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "清除" }));
+
+    await waitFor(() => expect(calls.some((call) => call.method === "DELETE")).toBe(true));
+    // 删除后"当前生效"应回落到服务端默认（服务端返回什么就显示什么，不自己编）。
+    await waitFor(() => expect(screen.getByText(/（服务端默认）/)).toBeInTheDocument());
+  });
+
+  it("保存失败时给出可操作提示，且不回显 key", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if ((init?.method ?? "GET") === "GET") {
+          return new Response(
+            JSON.stringify({
+              version: "0.0.1",
+              localMode: true,
+              authRequired: false,
+              registerOpen: false,
+              needsBootstrap: false,
+              userCount: null,
+              config: {
+                embedding: { mode: "local", configured: true, missingEnv: [] },
+                llm: { configured: false, apiKeyConfigured: false, missingEnv: ["ANSWER_MODEL"], source: "server" },
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        seen.push(String(init?.body));
+        return new Response(
+          JSON.stringify({ error: { code: "invalid_llm_config", message: "model 不能为空" } }),
+          { status: 400 },
+        );
+      }),
+    );
+
+    render(<SettingsPage />);
+    await userEvent.type(await screen.findByLabelText(/API Key/), "sk-should-not-leak");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    const banner = await screen.findByTestId("llm-save-error");
+    // 服务端的 message 会展示（它由服务端控制，不含 key）；但**页面上不得出现 key 本身**。
+    expect(document.body.textContent).not.toContain("sk-should-not-leak");
+    // key 确实只出现在 PUT 请求体里（那是它唯一该去的地方）。
+    expect(seen.join(" ")).toContain("sk-should-not-leak");
+    expect(banner.textContent).not.toContain("sk-should-not-leak");
   });
 
   it("TASK-100 §需求10：设置页不再展示存储配额与部署形态", async () => {
