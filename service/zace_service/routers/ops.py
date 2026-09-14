@@ -10,6 +10,7 @@
 | ``GET /api/projects/{id}/index-stats`` | TASK-062 | 单项目索引统计（当前进度 + 落库聚合） |
 | ``GET /api/usage/projects/{id}`` | TASK-064 | 单项目查询用量（**替换 501 占位**） |
 | ``GET /api/usage/summary`` | TASK-064 | 跨项目用量汇总 |
+| ``GET /api/request-log/{requestId}`` | TASK-090 | 按 trace id 查请求日志（**只读**） |
 
 口径见 ``docs/design/Module/04-AI总结.md`` §8（审计存档）与 ``docs/tasks/TASK-062`` §C/§D。
 **诚实性**：无数据时一律 ``null``/``0``；``citationCoverageAvg`` 在 LLM 接入前恒为 ``null``
@@ -23,8 +24,10 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
+from zace_service.errors import ApiError
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
+from zace_service.requestlog import MAX_RELATED_LOGS, lookup_all
 from zace_service.stats import account_overview
 
 router = APIRouter(tags=["ops"])
@@ -175,6 +178,61 @@ def usage_summary(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     return summary
 
 
+# --------------------------------------------------------------------------- 请求日志（trace 查询）
+
+
+@router.get("/api/request-log/{requestId}")
+def request_log(requestId: str, request: Request) -> dict[str, Any]:
+    """按 ``requestId`` 查这次请求的结构化日志（TASK-090 §C；**只读**）。
+
+    鉴权与归属（§C，本卡裁定）：
+
+    - 路径**不在** ``app.PUBLIC_PATHS`` 内 → 云瑞形态必须带凭据（否则 401）：日志是信息泄露面，
+      不能公开；
+    - **只查自己的**：只有条目里的 ``userId`` 与调用者一致才返回；
+    - 查别人的 / 不存在的 / 没有 owner 的（如未认证的 401 请求、路径未匹配到路由）
+      一律 **404 ``request_log_not_found`` + 同一条文案**——与 Module/06 §2.2 的"不给探测面"一致
+      （403 会泄露"这个 id 存在"）。本地模式（无账户）按 R34 放行。
+
+    返回形状：主条目（``message == "request"`` 那一行，即 :func:`capture_request` 落的）+ 可选
+    ``relatedLogs``（同一 requestId 下的其余日志行，新的在前）——**已处理**的 5xx 堆栈在后者里
+    （见 :func:`zace_service.requestlog.lookup_all`），不带上它则"503 报错查日志"会看到空堆栈。
+
+    路径参数用 ``{requestId}`` 而非 ``{id}``：本路由**不**消费 projectId，走的是日志归属判定，
+    与 ``/api/projects/{id}`` 的 ``require_project_id`` 无关。
+    """
+    settings = get_settings(request)
+    user = getattr(request.state, "zace_user", None)
+    user_id = getattr(user, "id", None)
+    entries = lookup_all(settings.request_log_path, requestId, user_id=user_id)
+    primary = next((entry for entry in entries if entry.message == "request"), None)
+    if primary is None:
+        raise _request_log_not_found(requestId)
+    payload = primary.to_json()
+    payload["requestId"] = requestId
+    related = [entry.to_json() for entry in entries if entry is not primary]
+    payload["relatedLogs"] = related[:MAX_RELATED_LOGS]
+    payload["relatedLogCount"] = len(related)
+    return payload
+
+
+def _request_log_not_found(request_id: str) -> ApiError:
+    """统一的"查不到"错误（越权 / 不存在 / 无 owner 共用）。
+
+    文案里**不回显** ``request_id``（也不含任何随入参变化的部分）：越权与真不存在的响应因此
+    **逐字节一致**，调用方无法据此建立"这个 id 存在"的预言机（Module/06 §2.2）。
+    传参只为类型自洽（也确实需要这个入参来构造语义），保留它以便将来需要时不必改签名。
+    """
+    _ = request_id
+    return ApiError(
+        code="request_log_not_found",
+        message=(
+            "请求日志不存在，或不属于当前账户，或已被窗口清理（可用 X-Request-Id 重新请求复现）"
+        ),
+        status=404,
+    )
+
+
 # --------------------------------------------------------------------------- 辅助
 
 
@@ -187,8 +245,6 @@ def _require_meta_db(request: Request) -> MetaDB:
     """元数据库不可用 → 503（而不是返回空列表让人以为"从来没有索引过"）。"""
     db = _meta_db(request)
     if db is None:
-        from zace_service.errors import ApiError
-
         raise ApiError(
             code="meta_db_unavailable",
             message="元数据库未就绪（zace-meta.db）：请通过 create_app 启动服务",

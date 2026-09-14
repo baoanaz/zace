@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,7 @@ from zace_service.errors import error_envelope, install_error_handlers, internal
 from zace_service.logging import bind_request_id, configure_logging, get_logger, reset_request_id
 from zace_service.mcp import build_mcp, manager_for_app, mount, session_lifespan
 from zace_service.metadb import MetaDB
+from zace_service.requestlog import capture_request
 from zace_service.routers import all_routers
 
 __all__ = ["PUBLIC_PATHS", "REQUEST_ID_HEADER", "create_app"]
@@ -47,7 +49,15 @@ logger = get_logger("zace_service.app")
 def create_app(settings: Settings | None = None) -> FastAPI:
     """构造应用（唯一入口；同进程可创建多个实例，测试用临时 data_root 互不干扰）。"""
     resolved = settings if settings is not None else Settings.from_env()
-    configure_logging(resolved.log_level)
+    # TASK-090 §A：除了 stderr，再落一份轮转 JSONL（服务重启后仍可查）。
+    # 测试用 ``log_max_bytes=0`` 可关掉轮转，但文件本身照写（"落盘而非内存"是要被验证的）。
+    configure_logging(
+        resolved.log_level,
+        log_path=resolved.request_log_path,
+        max_bytes=resolved.log_max_bytes,
+        backup_count=resolved.log_backup_count,
+        retention_days=resolved.log_retention_days,
+    )
 
     app = FastAPI(
         title="zace-service",
@@ -60,8 +70,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.meta_db = MetaDB.open(resolved.meta_db_path) if resolved.auth_required else None
 
     install_error_handlers(app)
-    _install_request_context(app)
+    # 中间件**由内向外**装配：``@app.middleware`` 是「后注册者在外层」，因此下面两个调用的
+    # 顺序决定包裹关系。``_install_request_context`` 必须最后注册 = **最外层**（TASK-090 §B）：
+    # 否则鉴权中间件短路返回的 401 会绕过它——响应拿不到 ``X-Request-Id``、日志里也没有那次
+    # 失败请求（而"报错后按 trace id 查"正是本卡存在的理由；实测云瑞形态下 401 的
+    # ``X-Request-Id`` 曾为 ``None``）。
     _install_auth(app, resolved)
+    _install_request_context(app, resolved)
     for router in all_routers():
         app.include_router(router)
     _install_mcp(app, resolved)
@@ -133,8 +148,13 @@ def _install_mcp(app: FastAPI, settings: Settings) -> None:
     app.router.lifespan_context = session_lifespan(server)
 
 
-def _install_request_context(app: FastAPI) -> None:
-    """requestId + 访问日志 + 兜底 500（保证异常不会逃出应用，响应始终是 CF-05 信封）。"""
+def _install_request_context(app: FastAPI, settings: Settings) -> None:
+    """requestId + 请求日志落盘 + 兜底 500（保证异常不会逃出应用，响应始终是 CF-05 信封）。
+
+    TASK-090 §B：在原有的 method/path/status/耗时之上，再补 ``userId`` / ``projectId`` /
+    ``errorCode`` / ``errorMessage`` / ``traceback``，使"按 trace id 查日志"真的能定位问题。
+    字段来源全部是**服务端已有的真实值**，不读 headers/body（脱敏纪律见 requestlog 模块）。
+    """
 
     @app.middleware("http")
     async def _request_context(  # noqa: ANN202 - FastAPI middleware 的返回类型由框架决定
@@ -146,28 +166,107 @@ def _install_request_context(app: FastAPI) -> None:
         try:
             try:
                 response = await call_next(request)
-            except Exception:  # 兜底：日志留全量堆栈，响应只给通用文案（errors.py 同口径）
-                logger.exception(
-                    "unhandled request error",
-                    extra={
-                        "requestId": request_id,
-                        "method": request.method,
-                        "path": request.url.path,
-                    },
+            except Exception as exc:  # 兜底：日志留全量堆栈，响应只给通用文案（errors.py 同口径）
+                # 堆栈进 ``traceback`` 字段（§B：5xx 排除的核心价值）；响应里仍无堆栈。
+                _record(
+                    request,
+                    settings,
+                    request_id=request_id,
+                    status=500,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    error_code="internal_error",
+                    exc_info=exc,
                 )
                 response = internal_error_response()
-            duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            response.headers[REQUEST_ID_HEADER] = request_id
-            logger.info(
-                "request",
-                extra={
-                    "requestId": request_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
-                    "durationMs": duration_ms,
-                },
+                response.headers[REQUEST_ID_HEADER] = request_id
+                return response
+            duration_ms = (time.perf_counter() - started) * 1000
+            response, error_code, error_message = await _read_error(response, request_id)
+            _record(
+                request,
+                settings,
+                request_id=request_id,
+                status=response.status_code,
+                duration_ms=duration_ms,
+                error_code=error_code,
+                error_message=error_message,
             )
+            response.headers[REQUEST_ID_HEADER] = request_id
             return response
         finally:
             reset_request_id(token)
+
+
+async def _read_error(
+    response: Response, request_id: str
+) -> tuple[Response, str | None, str | None]:
+    """CF-05 信封的 ``error.code`` / ``error.message`` → 日志字段（§B）。
+
+    为什么要读响应体：异常处理器（``install_error_handlers``）在**本中间件内层**执行，因此
+    ``ApiError``（如 401 ``unauthorized``、404 ``project_not_found``）到这里已经是**普通响应**，
+    不能靠 ``except`` 抓到。只对 JSON 的 4xx/5xx 读体（错误体恒为小 JSON），读后原样重建响应，
+    对外行为逐字不变。非 JSON / 2xx / 3xx 一概不碰（不缓冲 SSE 与大响应）。
+    """
+    status = response.status_code
+    if status < 400 or not response.headers.get("content-type", "").startswith("application/json"):
+        return response, None, None
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:  # pragma: no cover - JSONResponse 恒有 body_iterator
+        return response, None, None
+    try:
+        body = getattr(response, "body", None)
+        if body is None:
+            chunks = [chunk async for chunk in iterator]
+            body = b"".join(chunks)
+        payload = json.loads(body)
+        error = payload.get("error") if isinstance(payload, dict) else None
+        code = str(error.get("code")) if isinstance(error, dict) and error.get("code") else None
+        message = (
+            str(error.get("message")) if isinstance(error, dict) and error.get("message") else None
+        )
+        rebuilt = Response(content=body, status_code=status)
+        rebuilt.raw_headers = response.raw_headers
+        return rebuilt, code, message
+    except Exception:  # noqa: BLE001 - 取错误码是旁路：解析失败也不能改变响应
+        return response, None, None
+
+
+def _record(
+    request: Request,
+    settings: Settings,
+    *,
+    request_id: str,
+    status: int,
+    duration_ms: float,
+    error_code: str | None,
+    error_message: str | None = None,
+    exc_info: BaseException | None = None,
+) -> None:
+    """写一条请求日志（字段装配；落盘/脱敏在 :func:`zace_service.requestlog.capture_request`）。"""
+    user = getattr(request.state, "zace_user", None)
+    capture_request(
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status=status,
+        duration_ms=duration_ms,
+        user_id=getattr(user, "id", None),
+        project_id=_project_id_from_path(request),
+        error_code=error_code,
+        error_message=error_message,
+        exc_info=exc_info,
+    )
+
+
+def _project_id_from_path(request: Request) -> str | None:
+    """从路径参数取 projectId（有则记，§B）。
+
+    只读 URL 路径参数（``{id}`` / ``{projectId}``）：它是**结构化**且不涉及读 body——
+    POST 体里的 projectId 不在日志面（日志不读请求体，见脱敏纪律）。
+    """
+    params = getattr(request, "path_params", None) or {}
+    for key in ("projectId", "project_id", "id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
