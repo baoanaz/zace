@@ -14,7 +14,8 @@
 1. 去重：`test_reserved_spec_chunk_merged_into_neighbor_is_not_placed_again`（真实复现路径，
    修复前失败）与 `test_reserved_spec_chunk_is_placed_only_once_when_greedy_takes_it_first`
    （朴素路径 + E 编号连续性）；
-2. 预算不变量：`test_used_tokens_equals_framework_overhead_plus_evidence_tokens`；
+2. 预算不变量：`test_used_tokens_equals_framework_overhead_plus_evidence_tokens`
+   （TASK-096 §A 起口径 = 框架开销 + 各条证据的**完整渲染开销**，不再是只算正文）；
 3. 保底仍在：`test_spec_floor_still_places_a_spec_when_code_candidates_fill_budget`（防修过头）；
 4. 回归：`test_reserved_capacity_is_returned_once_the_spec_is_placed`（预留预算归还，
    修复前失败）。
@@ -24,7 +25,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from zace_core.contextpack import BudgetConfig, assemble, estimate_tokens
+from zace_core.contextpack import (
+    BudgetConfig,
+    assemble,
+    estimate_render_tokens,
+)
 from zace_core.types import SpecBlockDef
 
 SPEC_PATH = "docs/design.md"
@@ -86,7 +91,7 @@ def test_reserved_spec_chunk_merged_into_neighbor_is_not_placed_again(
     ids = sorted((item.id for item in _placed(pack)), key=lambda value: int(value[1:]))
     assert ids == [f"E{index}" for index in range(1, len(ids) + 1)]  # E 编号连续唯一（D-21）
     assert pack.budget.used_tokens == config.framework_overhead + sum(
-        estimate_tokens(item.content) for item in _placed(pack)
+        estimate_render_tokens(item) for item in _placed(pack)
     )
 
 
@@ -105,7 +110,7 @@ def test_reserved_spec_chunk_is_placed_only_once_when_greedy_takes_it_first(
     candidates = [cand(SPEC_PATH, SPEC_HEADING, 10, score=1.0, kind="spec")] + [
         cand(f"src/f{i}.py", f"f{i}", 1, score=0.5 - i / 10) for i in range(4)
     ]
-    config = BudgetConfig(hard_cap=1_000, framework_overhead=0, single_file_ratio=1.0)
+    config = BudgetConfig(hard_cap=1_400, framework_overhead=0, single_file_ratio=1.0)
 
     # TASK-095：本用例验的是“同一 chunk 只装一次”的去重与 E 编号连续性；代码候选分数
     # 0.5/0.4/0.3/0.2 会被默认分数闸门（top1×0.50）截掉，故显式关掉闸门。
@@ -117,7 +122,7 @@ def test_reserved_spec_chunk_is_placed_only_once_when_greedy_takes_it_first(
     assert len(pack.evidence) == 4 and len(pack.docs) == 1
     assert pack.docs[0].id == "E1"  # 最高分 spec 先装（编号 = 装填顺序）
     assert pack.budget.used_tokens <= config.hard_cap
-    assert pack.budget.used_tokens == sum(estimate_tokens(item.content) for item in _placed(pack))
+    assert pack.budget.used_tokens == sum(estimate_render_tokens(item) for item in _placed(pack))
 
 
 def test_used_tokens_equals_framework_overhead_plus_evidence_tokens(
@@ -147,7 +152,7 @@ def test_used_tokens_equals_framework_overhead_plus_evidence_tokens(
     placed = _placed(pack)
     assert pack.budget.used_tokens <= config.hard_cap
     assert pack.budget.used_tokens == config.framework_overhead + sum(
-        estimate_tokens(item.content) for item in placed
+        estimate_render_tokens(item) for item in placed
     )
     assert len({item.id for item in placed}) == len(placed)  # E 编号唯一
     assert len({(item.path, item.lines) for item in placed}) == len(placed)  # 无重复块
@@ -168,7 +173,10 @@ def test_spec_floor_still_places_a_spec_when_code_candidates_fill_budget(
     candidates = [
         cand(f"src/f{i}.py", f"f{i}", 1, score=1.0 - i / 10) for i in range(4)
     ] + [cand(SPEC_PATH, SPEC_HEADING, 10, score=0.01, kind="spec")]
-    config = BudgetConfig(hard_cap=1_000, framework_overhead=0, single_file_ratio=1.0, spec_floor=1)
+    # TASK-096 §A 重标定：code(1000) 渲染约 262、spec(1000) 约 683。
+    # hard_cap=945：预留 spec 后硬顶=262 → 贪心恰好只装 1 块代码
+    # （第 2 块超顶 break，故 truncated）；保底补入 spec 后 262+683=945 ≤ hard_cap。
+    config = BudgetConfig(hard_cap=945, framework_overhead=0, single_file_ratio=1.0, spec_floor=1)
 
     pack = assemble(store, "为什么这样设计", candidates, config=config)
 
@@ -197,12 +205,13 @@ def test_reserved_capacity_is_returned_once_the_spec_is_placed(
         cand("src/a.py", "a", 1, score=0.9),
         cand("src/b.py", "b", 1, score=0.8),
     ]
-    config = BudgetConfig(hard_cap=1_000, framework_overhead=0, single_file_ratio=1.0)
+    # TASK-096 §A 重标定：spec 683 + a 262 + b 387 = 1332 ≤ 1400（旧口径同语料只需 1000）。
+    config = BudgetConfig(hard_cap=1_400, framework_overhead=0, single_file_ratio=1.0)
 
     pack = assemble(store, "为什么这样设计", candidates, config=config)
 
     assert [item.path for item in pack.evidence] == ["src/a.py", "src/b.py"]  # 未被预留额度挤掉
     assert len(pack.docs) == 1
     assert pack.budget.truncated is False
-    assert pack.budget.used_tokens == sum(estimate_tokens(item.content) for item in _placed(pack))
+    assert pack.budget.used_tokens == sum(estimate_render_tokens(item) for item in _placed(pack))
     assert pack.budget.used_tokens <= config.hard_cap

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import replace
 
@@ -14,7 +15,10 @@ from zace_core.contextpack import (
     assemble,
     budget_for,
     collect_index_signals,
+    estimate_render_tokens,
     estimate_tokens,
+    evidence_markdown_lines,
+    render_markdown,
 )
 from zace_core.types import Flow, FlowNode, Freshness, SpecBlockDef
 
@@ -59,12 +63,20 @@ def test_budget_truncates_and_counts_omitted(store, seed_file, sym, cand) -> Non
 
 
 def test_framework_overhead_is_counted(store, seed_file, sym, cand) -> None:
+    """预算账 = 框架开销 + 各条证据的**完整渲染开销**（TASK-096 §A-1）。
+
+    修复前这里断言的是 ``estimate_tokens(item.content)``（只算正文）；现在预算把 header +
+    reason + 行号缩进一并计入，所以对照口径必须换成 ``estimate_render_tokens``。
+    本用例的语料（``\"x\" * 40``）无 CJK → §A-2 的分类计价不影响它，差异 100% 来自 §A-1。
+    """
     _long(store, seed_file, sym, "src/a.py", "f", 1, 40)
     config = BudgetConfig(hard_cap=1_000, framework_overhead=500, single_file_ratio=1.0)
     pack = assemble(store, "q", [cand("src/a.py", "f", 1, score=1.0)], config=config)
     assert pack.budget is not None
-    item_tokens = sum(estimate_tokens(item.content) for item in pack.evidence)
+    item_tokens = sum(estimate_render_tokens(item) for item in pack.evidence)
     assert pack.budget.used_tokens == 500 + item_tokens
+    # 渲染开销 **严格大于** 正文开销（header + reason + 缩进至少十几 token）——修复前二者相等。
+    assert item_tokens > sum(estimate_tokens(item.content) for item in pack.evidence)
 
 
 def test_flow_tokens_count_but_do_not_compete(store, seed_file, sym, cand) -> None:
@@ -410,13 +422,16 @@ def test_missing_evidence_retrieval_truncated(store, seed_file, sym, cand) -> No
 
 
 def test_next_queries_are_deterministic_and_bounded(store, seed_file, sym, cand) -> None:
+    """无缺口 → 走路径兼底；确定性且 ≤3 条（TASK-096 §B：不再从 pool[:3] 取符号）。"""
     _long(store, seed_file, sym, "src/auth/token_service.py", "TokenService.refresh", 1, 40)
     candidates = [cand("src/auth/token_service.py", "TokenService.refresh", 1, score=1.0)]
     first = assemble(store, "q", candidates)
     second = assemble(store, "q", candidates)
     assert first.next_queries == second.next_queries
     assert 1 <= len(first.next_queries) <= 3
-    assert "refresh 的调用方有哪些" in first.next_queries
+    # 本用例无任何缺口（无 stale / unresolved / truncated）→ 退回"用路径构造"的兼底。
+    # 旧口径会取 pool top-1 的符号（"refresh 的调用方有哪些"）——那正是 §B 要修的行为。
+    assert first.next_queries == ["src/auth/token_service.py 里还有哪些与查询相关的符号"]
 
 
 def test_e_numbering_is_shared_between_evidence_and_docs(store, seed_file, sym, cand) -> None:
@@ -469,3 +484,206 @@ def test_assembly_under_200ms_for_200_candidates(store, seed_file, sym, cand) ->
     # 放宽到 200ms 仍保留性能下限回归保护（断言不删）。
     assert elapsed_ms < 200, f"组装耗时 {elapsed_ms:.1f}ms ≥ 200ms"
     assert pack.evidence
+
+
+def _placed(pack):
+    """包内全部证据（evidence + docs），按 E 编号顺序。"""
+    return sorted([*pack.evidence, *pack.docs], key=lambda item: int(item.id[1:]))
+
+
+# --------------------------------------------------------------------------- TASK-096 §A 预算计量
+
+
+def test_framework_render_overhead_is_inside_used_tokens(store, seed_file, sym, cand) -> None:
+    """§A-1 DoD：框架开销占比很高的 pack 里，``used_tokens`` 必须含 header/reason/行号开销。
+
+    构造方式：很多**极短** chunk（每条正文 8 字符）→ header+reason 的占比极高。
+    修复前 ``_Slot.tokens`` 只算 ``content``，``used_tokens`` 会等于正文之和（断言失败）。
+    """
+    for index in range(6):
+        _long(store, seed_file, sym, f"src/s{index}.py", f"s{index}", 1, 8)
+    candidates = [cand(f"src/s{i}.py", f"s{i}", 1, score=1.0 - i / 10) for i in range(6)]
+    config = BudgetConfig(hard_cap=10_000, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "q", candidates, config=config)
+    assert pack.budget is not None
+    rendered = sum(estimate_render_tokens(item) for item in _placed(pack))
+    content_only = sum(estimate_tokens(item.content) for item in _placed(pack))
+
+    assert pack.budget.used_tokens == rendered
+    # 短 chunk 下框架开销占大头：正文之外的 header/reason/缩进必须被记账
+    assert rendered > content_only * 2, (rendered, content_only)
+
+
+def test_render_accounting_matches_rendered_evidence(store, seed_file, sym, cand) -> None:
+    """§A-1 一致性锁：``evidence_markdown_lines`` 与 render.py 的真实输出**逐行一致**。
+
+    预算账用的格式副本若与渲染漂移，预算就又变成假账。本用例把两个口径钉在一起
+    （``render.py`` 属 TASK-095 领地，本卡不改它，靠本测试防漂移）。
+    """
+    seed_file(
+        store,
+        path="src/auth/token_service.py",
+        symbols=[sym("refresh", "TokenService.refresh", kind="method", start=45, end=46)],
+        bodies={"TokenService.refresh": "def refresh(self):\n    return self.store.rotate()"},
+    )
+    pack = assemble(
+        store,
+        "q",
+        [cand("src/auth/token_service.py", "TokenService.refresh", 45, score=1.0, end=46)],
+        freshness=Freshness(indexed_at=100),
+    )
+    rendered = render_markdown(pack)
+    for item in pack.evidence:
+        assert all(line in rendered.splitlines() for line in evidence_markdown_lines(item))
+
+
+def test_estimate_tokens_charges_cjk_higher_than_ascii() -> None:
+    """§A-2 DoD：中文文本的估算**显著高于** ``chars/4``（旧口径低估约 2.7 倍）。"""
+    chinese = "输入准入是运行时校验来源与绑定会话的第一道闸门" * 4
+    assert all("\u4e00" <= char <= "\u9fff" for char in chinese), "样本必须是纯汉字"
+    # 旧口径 chars/4 只会给 len/4；新口径至少翻倍（纯 CJK 按 1.5 字符/token）。
+    assert estimate_tokens(chinese) >= 2 * math.ceil(len(chinese) / 4)
+
+    # 纯 ASCII 结果与旧口径完全一致（英文代码不被误伤）
+    ascii_text = "def refresh(self):\n    return self.store.rotate()\n"
+    assert estimate_tokens(ascii_text) == max(1, math.ceil(len(ascii_text) / 4))
+    assert estimate_tokens("") == 0
+
+
+def test_cjk_budget_shrinks_the_pack(store, seed_file, sym, cand) -> None:
+    """§A-2 行为面：中文正文在旧口径下\"看起来很便宜\"，新口径应装得更少。"""
+    body = "中文注释与说明" * 100  # 800 字符，旧口径 200 token，新口径 ≥ 500
+    seed_file(store, path="src/zh.py", symbols=[sym("zh", "zh", start=1, end=1)],
+              bodies={"zh": body})
+    config = BudgetConfig(hard_cap=600, framework_overhead=0, single_file_ratio=1.0)
+    pack = assemble(store, "q", [cand("src/zh.py", "zh", 1, score=1.0)], config=config)
+    assert pack.budget is not None
+    assert pack.budget.used_tokens > 400
+    assert pack.budget.used_tokens <= config.hard_cap
+
+
+# --------------------------------------------------------------------------- TASK-096 §B 自愈查询
+
+def _unresolved_pack(store, seed_file, sym, cand, *, answerable: bool):
+    """构造“池顶是测试函数 + 缺口里有真符号”的 pack（§B-1 的真实场景缩影）。"""
+    _long(store, seed_file, sym, "tests/test_gateway.py", "test_user_input_reaches_runtime", 1, 40)
+    _long(store, seed_file, sym, "src/runtime.py", "Runtime.accept", 1, 40)
+    candidates = [
+        cand("tests/test_gateway.py", "test_user_input_reaches_runtime", 1, score=1.0),
+        cand("src/runtime.py", "Runtime.accept", 1, score=0.9),
+    ]
+    signals = IndexSignals(unresolved_count=3, unresolved_symbols=("runtime_input",))
+    return assemble(store, "输入准入", candidates, signals=signals)
+
+
+def test_next_queries_come_from_gaps_not_pool_top_symbols(store, seed_file, sym, cand) -> None:
+    """§B-1 DoD：生成源是 ``missing_evidence``，**不是** pool top-3 符号。
+
+    修复前：top-1 是测试函数 → 建议\"查这个测试函数的调用方\"（真实靶场实测的噪音）。
+    修复后：应给出缺口里的真符号（``runtime_input``），且不得出现测试函数名。
+    """
+    pack = _unresolved_pack(store, seed_file, sym, cand, answerable=False)
+    assert "unresolved_reference" in [item.code for item in pack.missing_evidence]
+    joined = " ".join(pack.next_queries)
+    assert "runtime_input" in joined
+    assert "test_user_input_reaches_runtime" not in joined, "不得再建议去查测试函数"
+    assert "Runtime.accept" not in joined, "也不得从 pool 取符号"
+    assert len(pack.next_queries) <= 3
+
+
+def test_next_queries_empty_when_answerable(store, seed_file, sym, cand) -> None:
+    """§B-2 DoD：``answerable=true`` → ``next_queries == []``（证据够了就不打扰）。"""
+    seed_file(
+        store,
+        path="src/auth/token_service.py",
+        symbols=[sym("refresh", "TokenService.refresh", kind="method", start=45, end=46)],
+    )
+    pack = assemble(
+        store,
+        "q",
+        [
+            cand(
+                "src/auth/token_service.py",
+                "TokenService.refresh",
+                45,
+                score=1.0,
+                reasons=["explicit symbol TokenService.refresh"],
+                channels={"exact": 1, "bm25": 1},
+                end=46,
+            )
+        ],
+    )
+    assert pack.answerable is True
+    assert pack.next_queries == []
+    assert "Suggested Next Queries" not in render_markdown(pack)
+
+
+def test_next_queries_still_generated_when_not_answerable(store, seed_file, sym, cand) -> None:
+    """防修过头：``answerable=false`` 时仍生成（走兜底路径也不能为空）。"""
+    pack = _unresolved_pack(store, seed_file, sym, cand, answerable=False)
+    assert pack.answerable is False
+    assert pack.next_queries
+
+
+def test_retrieval_truncated_generates_no_query(store, seed_file, sym, cand) -> None:
+    """§B-1 DoD：``retrieval_truncated`` 不生成查询（预算不够，改问帮不上）。"""
+    for index in range(3):
+        _long(store, seed_file, sym, f"src/f{index}.py", f"f{index}", 1, 400)
+    candidates = [cand(f"src/f{i}.py", f"f{i}", 1, score=1.0 - i / 10) for i in range(3)]
+    config = BudgetConfig(hard_cap=200, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "q", candidates, config=config)
+    codes = [item.code for item in pack.missing_evidence]
+    assert "retrieval_truncated" in codes
+    assert pack.next_queries == [], "只有 retrieval_truncated 时不得凭空造查询"
+    assert all("预算" not in query for query in pack.next_queries)
+
+
+def test_stale_doc_gap_asks_where_the_symbol_is_now(store, seed_file, sym, cand) -> None:
+    """§B-1 模板表：``stale_doc_reference`` → \"{symbol} 现在在哪里实现\"。"""
+    seed_file(
+        store,
+        path="src/auth/token_service.py",
+        symbols=[sym("refresh", "TokenService.refresh", kind="method", start=45)],
+    )
+    seed_file(
+        store,
+        path="docs/auth.md",
+        language="markdown",
+        spec_blocks=[_spec_block("docs/auth.md", "Token Refresh")],
+    )
+    store.add_spec_refs(
+        [
+            (
+                "docs/auth.md:架构 > Token Refresh:10",
+                "src/auth/token_service.py:TokenService.refresh:45",
+            )
+        ]
+    )
+    store.apply_deletions(["src/auth/token_service.py"])
+
+    spec = cand("docs/auth.md", "架构 > Token Refresh", 10, score=0.4, kind="spec")
+    pack = assemble(store, "q", [spec], signals=collect_index_signals(store, [spec]))
+
+    assert pack.answerable is False, "只有文档、无代码命中 → 不可回答"
+    stale = next(item for item in pack.missing_evidence if item.code == "stale_doc_reference")
+    assert f"{stale.symbol} 现在在哪里实现" in pack.next_queries
+
+
+def test_gap_message_lists_unresolved_symbol_names(store, seed_file, sym, cand) -> None:
+    """缺口 message 里的符号名来自 ``unresolved_symbols``（标识符形态过滤，不含表达式）。"""
+    _long(store, seed_file, sym, "src/a.py", "f", 1, 40)
+    pack = assemble(
+        store,
+        "q",
+        [cand("src/a.py", "f", 1, score=1.0)],
+        signals=IndexSignals(
+            unresolved_count=5,
+            unresolved_symbols=("getattr", "execute", "workflow_id", "extra_one"),
+        ),
+    )
+    message = next(m.message for m in pack.missing_evidence if m.code == "unresolved_reference")
+    # 最多列 3 个（余下用"等"带过），避免 message 自身膨胀；`symbol` 取首个。
+    assert "getattr, execute, workflow_id 等" in message
+    assert "5 个符号引用无法解析" in message

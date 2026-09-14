@@ -17,7 +17,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from zace_core.contextpack import BudgetConfig, assemble, estimate_tokens
+from zace_core.contextpack import (
+    BudgetConfig,
+    assemble,
+    estimate_render_tokens,
+)
 from zace_core.types import SpecBlockDef
 
 SPEC_PATH = "docs/design.md"
@@ -56,7 +60,12 @@ def _code(store, seed_file, sym, path: str, fqn: str, chars: int) -> None:
 
 
 def _docs_tokens(pack) -> int:
-    return sum(estimate_tokens(item.content) for item in pack.docs)
+    """spec 证据的**完整渲染开销**（TASK-096 §A-1：预算账=渲染账）。
+
+    修复前这里用 ``estimate_tokens(item.content)``：被断言的对象是 ``docs_ratio`` 的份额约束，
+    而份额约束现在按渲染开销计量，对照口径必须一致，否则断言会系统性偏松。
+    """
+    return sum(estimate_render_tokens(item) for item in pack.docs)
 
 
 def _placed(pack):
@@ -67,10 +76,10 @@ def test_code_floor_places_code_when_greedy_breaks_on_oversized_candidate(
     store, seed_file, sym, cand
 ):
     """代码保底：贪心在“单块过大”的代码候选上 break → 保底补入仍装 ≥code_floor 块较小代码证据。"""
-    anchors = _seed_specs(store, seed_file, 3, chars=800)  # 约 201 token/块
-    _code(store, seed_file, sym, "src/big.py", "big", 1_600)  # 约 401 token，装不下
+    anchors = _seed_specs(store, seed_file, 3, chars=800)  # 渲染开销约 550 token/块（TASK-096 §A）
+    _code(store, seed_file, sym, "src/big.py", "big", 1_600)  # 渲染约 412 token
     for index in range(2):
-        _code(store, seed_file, sym, f"src/s{index}.py", f"s{index}", 300)  # 约 76 token
+        _code(store, seed_file, sym, f"src/s{index}.py", f"s{index}", 300)  # 渲染约 88 token
 
     candidates = [
         cand(SPEC_PATH, heading, start, score=1.0 - index / 10, kind="spec")
@@ -80,8 +89,10 @@ def test_code_floor_places_code_when_greedy_breaks_on_oversized_candidate(
     candidates += [cand(f"src/s{i}.py", f"s{i}", 1, score=0.5 - i / 10) for i in range(2)]
     # docs_ratio=1.0：本用例只验**代码保底**这条腿（份额上限另有用例），
     # 让文档 + 超大代码块把贪心逼到 break，靠保底补入小代码块。
+    # hard_cap 按渲染口径重标定（TASK-096 §A）：一块 spec(550) 装下后，big(412) 装不下
+    # （550+412=962 > 800），而两块小代码（550+88+88=726）装得下——保持原用例的“保底才装得下”意图。
     config = BudgetConfig(
-        hard_cap=1_000,
+        hard_cap=800,
         framework_overhead=0,
         single_file_ratio=1.0,
         docs_ratio=1.0,
@@ -102,7 +113,7 @@ def test_code_floor_places_code_when_greedy_breaks_on_oversized_candidate(
 
 def test_docs_ratio_caps_spec_share_of_used_budget(store, seed_file, sym, cand):
     """spec 份额上限：超额 spec 计入 omittedCount 并置 truncated，缺口在 missingEvidence 里说明。"""
-    anchors = _seed_specs(store, seed_file, 6, chars=500)  # 约 126 token/块
+    anchors = _seed_specs(store, seed_file, 6, chars=500)  # 渲染开销约 350 token/块（TASK-096 §A）
     for index in range(2):
         _code(store, seed_file, sym, f"src/c{index}.py", f"c{index}", 300)
 
@@ -110,8 +121,10 @@ def test_docs_ratio_caps_spec_share_of_used_budget(store, seed_file, sym, cand):
         cand(SPEC_PATH, heading, start, score=1.0 - index / 10, kind="spec")
         for index, (heading, start) in enumerate(anchors)
     ] + [cand(f"src/c{i}.py", f"c{i}", 1, score=0.4 - i / 10) for i in range(2)]
+    # hard_cap 按渲染口径重标定（TASK-096 §A）：docs_cap = 0.25×2000 = 500，
+    # 恰好容得下一块 spec（350）、容不下第二块——份额上限的语义不变。
     config = BudgetConfig(
-        hard_cap=1_000,
+        hard_cap=2_000,
         framework_overhead=0,
         single_file_ratio=1.0,
         docs_ratio=0.25,
@@ -159,7 +172,7 @@ def test_pure_doc_pack_is_not_hurt_when_pool_has_no_code(store, seed_file, cand)
         for index, (heading, start) in enumerate(anchors)
     ]
     config = BudgetConfig(
-        hard_cap=1_000,
+        hard_cap=2_500,  # TASK-096 §A 重标定：6 块 spec 的渲染开销约 2100，旧口径只需 1000
         framework_overhead=0,
         single_file_ratio=1.0,
         docs_ratio=0.10,  # 若误生效：只能装 1 块 spec
@@ -198,6 +211,6 @@ def test_code_floor_does_not_duplicate_chunk_id_or_break_budget(store, seed_file
     assert len(spans) == len(placed)  # 无重复块
     assert len(pack.evidence) >= config.code_floor
     assert pack.budget.used_tokens == config.framework_overhead + sum(
-        estimate_tokens(item.content) for item in placed
+        estimate_render_tokens(item) for item in placed
     )
     assert pack.budget.used_tokens <= config.hard_cap
