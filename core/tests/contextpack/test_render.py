@@ -124,8 +124,14 @@ def _build_pack(store, seed_file, sym, cand):
 
 
 def test_render_section_order_and_details(store, seed_file, sym, cand) -> None:
-    """既有四节的标题与顺序逐字未变（TASK-087 回归保护：新节插在 Meta 之前）。"""
+    """既有四节的标题与顺序未变（TASK-087 回归保护：新节插在 Meta 之前）。
+
+    TASK-096 §B-2 起：``_build_pack`` 是 ``answerable=true`` 的包 → ``next_queries`` 为空、
+    该节不渲染。本节与顺序仍用**显式注入**的列表验证——渲染层与生成策略解耦。
+    """
     pack = _build_pack(store, seed_file, sym, cand)
+    assert pack.next_queries == [], "§B-2：answerable=true 不生成自愈查询"
+    pack.next_queries = ["refresh 的调用方有哪些", "认证 > Token Refresh 对应的实现代码在哪里"]
     text = render_markdown(pack, now=NOW)
 
     order = [
@@ -139,7 +145,6 @@ def test_render_section_order_and_details(store, seed_file, sym, cand) -> None:
     ]
     positions = [text.index(section) for section in order]
     assert positions == sorted(positions)
-    assert pack.next_queries, "语料前提：这个 pack 必然有 next_queries"
 
     assert "[E1] TokenService.refresh — src/auth/token_service.py:45-46" in text
     assert "45 | def refresh(self):" in text          # 行号（agent 可对齐 Edit）
@@ -162,7 +167,8 @@ def test_render_meta_budget_and_index_fresh(store, seed_file, sym, cand) -> None
     )
     text = render_markdown(pack, now=NOW)
     assert "index: fresh (5 min ago)" in text
-    assert "budget: 504/10.0K" in text   # <1000 用原值，≥1000 用 K（Module/03 §6 例）
+    # TASK-096 §A：预算账 = 框架开销 + 渲染开销（header+reason+行号），不再是只算正文 → 504 → 515。
+    assert "budget: 515/10.0K" in text   # <1000 用原值，≥1000 用 K（Module/03 §6 例）
     assert "confidence: low" in text
 
 
@@ -186,8 +192,13 @@ def test_render_evidence_for_prompt_has_no_meta_or_flow(store, seed_file, sym, c
 def test_next_queries_section_lists_each_query_without_numbering(
     store, seed_file, sym, cand
 ) -> None:
-    """``next_queries`` 非空 → 渲染 ``### Suggested Next Queries``，每行 ``- <query>``。"""
+    """``next_queries`` 非空 → 渲染 ``### Suggested Next Queries``，每行 ``- <query>``。
+
+    渲染层只认 ``pack.next_queries`` 的内容（生成策略由 assembly 的 §B 管），
+    故此处按既有惯例显式注入列表。
+    """
     pack = _build_pack(store, seed_file, sym, cand)
+    pack.next_queries = ["refresh 的调用方有哪些", "src/auth/token_service.py 里还有哪些符号"]
     text = render_markdown(pack, now=NOW)
 
     assert "### Suggested Next Queries" in text
@@ -196,6 +207,16 @@ def test_next_queries_section_lists_each_query_without_numbering(
     assert lines == [f"- {query}" for query in pack.next_queries]
     # 不加编号：正文里不应出现 ``- [N]`` 形态（会和 [E*] / [F*] 证据编号混淆）。
     assert "- [" not in section
+
+
+def test_answerable_pack_renders_no_suggested_queries_section(
+    store, seed_file, sym, cand
+) -> None:
+    """§B-2 端到端：``answerable=true`` → 无自愈查询 → 整节不渲染（不再建议"换个方式再问"）。"""
+    pack = _build_pack(store, seed_file, sym, cand)
+    assert pack.answerable is True
+    text = render_markdown(pack, now=NOW)
+    assert "Suggested Next Queries" not in text
 
 
 def test_next_queries_empty_omits_the_section(store, seed_file, sym, cand) -> None:
@@ -213,17 +234,21 @@ def test_next_queries_empty_omits_the_section(store, seed_file, sym, cand) -> No
 
 
 def test_existing_sections_are_byte_identical_to_the_snapshot(store, seed_file, sym, cand) -> None:
-    """快照式回归：除新增节外，渲染结果与快照**逐字一致**（旧节不能被本卡动到）。"""
+    """快照式回归：新节是**唯一**增量，其余节逐字不变（旧节不能被本卡动到）。
+
+    ``_build_pack`` 是 answerable 包 → 基线（快照）里**没有**该节（TASK-096 §B-2）；
+    注入 ``next_queries`` 后与快照相比应**只在 Meta 之前多一块**。
+    """
     pack = _build_pack(store, seed_file, sym, cand)
     expected = SNAPSHOT_PATH.read_text(encoding="utf-8").rstrip("\n")
-    text = render_markdown(pack, now=NOW)
+    baseline = render_markdown(pack, now=NOW)
+    assert baseline == expected, "answerable 包的渲染与快照逐字一致（无 Suggested Next Queries 节）"
 
-    before, marker, after = expected.partition("### Suggested Next Queries\n")
-    assert marker, "快照里必须含 TASK-087 的新节"
-    golden_next, _, tail = after.partition("### Meta")
-    assert text.startswith(before), "Meta 之前（含 Missing Evidence）的旧节逐字未变"
-    assert f"### Suggested Next Queries\n{golden_next}" in text
-    assert text.endswith(f"### Meta{tail}"), "Meta 与之前四节的顺序/内容未变"
+    pack.next_queries = ["refresh 的调用方有哪些"]
+    text = render_markdown(pack, now=NOW)
+    assert text == baseline.replace(
+        "### Meta", "### Suggested Next Queries\n- refresh 的调用方有哪些\n### Meta"
+    ), "其余节逐字未变，只有新节插在 Meta 之前"
 
 
 def test_render_empty_pack_keeps_missing_and_meta(store) -> None:
@@ -240,7 +265,11 @@ SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "rich_pack.md"
 
 
 def test_render_markdown_snapshot(store, seed_file, sym, cand) -> None:
-    """完整 pack 的 Markdown 与固定快照一致（行号、⚠、Meta 齐全）。"""
+    """完整 pack 的 Markdown 与固定快照一致（行号、⚠、Meta 齐全）。
+
+    TASK-096 起快照反映：① 预算账 = 渲染账（Meta 里的 budget 数值变大）；
+    ② ``answerable=true`` 无 Suggested Next Queries 节。
+    """
     pack = _build_pack(store, seed_file, sym, cand)
     expected = SNAPSHOT_PATH.read_text(encoding="utf-8").rstrip("\n")
     assert render_markdown(pack, now=NOW) == expected

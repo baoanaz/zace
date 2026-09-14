@@ -136,7 +136,7 @@
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
 | [TASK-095](TASK-095-返回分组与分数阈值.md) | **返回结构分组（Code 内分 Core/Related/Tests）+ 分数相对阈值截断** | 无 | `core/zace_core/contextpack/{render,assembly}.py`、`core/tests/contextpack/` | pending |
-| [TASK-096](TASK-096-预算计量与next_queries.md) | **预算计量修复（框架开销未计入 + 中文估算偏差）+ next_queries 从缺口出发** | 无（soft: TASK-095，同改 assembly.py） | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/` | pending |
+| [TASK-096](TASK-096-预算计量与next_queries.md) | **预算计量修复（框架开销未计入 + 中文估算偏差）+ next_queries 从缺口出发** | 无（soft: TASK-095，同改 assembly.py） | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/` | review |
 
 > **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
 > 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。

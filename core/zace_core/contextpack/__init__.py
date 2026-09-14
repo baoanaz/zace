@@ -6,7 +6,8 @@
 - ``render_markdown(pack)`` / ``render_evidence_for_prompt(pack)``：双层合同共用 formatter；
 - ``to_json(pack)``：CF-03 JSON（供 05-MCP / Phase 2 service 直接返回）；
 - ``BudgetConfig`` / ``budget_for(mode)``：Fast 10K / Deep 12K 预算配置（D-23）；
-- ``collect_index_signals(store, candidates)``：G4/stale 与 unresolved 信号收集。
+- ``collect_index_signals(store, candidates)``：G4/stale 与 unresolved 信号收集；
+- ``estimate_tokens`` / ``estimate_render_tokens``：token 估算（TASK-096 §A：预算账=渲染账）。
 """
 
 from __future__ import annotations
@@ -22,7 +23,11 @@ from zace_core.contextpack.assembly import (
     assemble,
     budget_for,
     collect_index_signals,
+    elision_note,
+    estimate_render_tokens,
     estimate_tokens,
+    evidence_markdown_lines,
+    has_elision_note,
     numbered_lines,
     to_json,
 )
@@ -39,7 +44,11 @@ __all__ = [
     "assemble",
     "budget_for",
     "collect_index_signals",
+    "elision_note",
+    "estimate_render_tokens",
     "estimate_tokens",
+    "evidence_markdown_lines",
+    "has_elision_note",
     "numbered_lines",
     "render_evidence_for_prompt",
     "render_markdown",

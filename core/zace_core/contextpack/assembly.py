@@ -32,7 +32,13 @@ tier 不作为排序键（D-17）：只做配额与资格线
 - **skeleton 降级**只在"超单文件上限或超硬预算"时触发（>300 行是前置条件）；
 - **"命中行"**：RRF 只给 chunk 粒度 → 取**切片起始行**（符号定义行，即该切片锚点行）起
   ``context_lines`` 行，其余计入 ``elidedLines``；
-- **token 估算** = ``ceil(chars/4)``（近似，不引入 tokenizer，Module/03 §2 要点 3）；
+- **token 估算** = 按字符类别加权（CJK 1.5 字符/token、其余 4 字符/token）；不引入 tokenizer
+  （Module/03 §2 要点 3）。TASK-096 §A-2 把旧的 ``ceil(chars/4)`` 改为分类计价——中文下旧口径
+  低估约 2.7 倍；纯 ASCII 文本结果不变。
+- **预算账 = 渲染账（TASK-096 §A-1）**：装填用 ``_Slot.tokens`` = :func:`estimate_render_tokens`
+  （header + reason + 行号缩进正文），不再只算 ``content``。修复前只算 content，而 header/reason
+  占渲染输出约 12%，导致 ``max_tokens`` 实测超出 27-32%。`evidence_markdown_lines` 与
+  ``render.py`` 同为一份格式（因循环 import 不能共用函数，由测试锁死一致性）。
 - **片段化存储（TASK-017 / R12）**：``_Slot`` 按 ``(start, end, 原文)`` 片段列表存正文，
   合并按行号**有序插入**并去重重叠行；出口按片段行号升序编号拼接，省略区间**就地标注**
   （``... （省略 N 行）``）；``elidedLines`` = 声明区间行数 − Σ片段行数（真实省略行数）。
@@ -41,6 +47,7 @@ tier 不作为排序键（D-17）：只做配额与资格线
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -71,7 +78,9 @@ __all__ = [
     "budget_for",
     "collect_index_signals",
     "elision_note",
+    "estimate_render_tokens",
     "estimate_tokens",
+    "evidence_markdown_lines",
     "has_elision_note",
     "numbered_lines",
     "to_json",
@@ -87,11 +96,42 @@ _AGGREGATION_NOTE = "同符号聚合"
 _MERGE_NOTE = "相邻区间合并"
 
 
+#: CJK 区段（汉字 / 假名 / CJK 标点 / 全角形式）——这些字符在 BPE 词表里通常 1-2 字符 1 token，
+#: 与英文的 ~4 字符/token 差距极大，必须分类计价（TASK-096 §A-2）。
+#: 用**编译好的字符类**而不是逐字符区间比较：后者在热路径上是 O(字符数×区间数)，
+#: 实测使全量套件从 62s 涨到 96s；C 实现的 ``findall`` 快约 40 倍。
+_CJK_CHARS_RE = re.compile(
+    "[\u3000-\u303f"   # CJK 标点（。、；：（）
+    "\u3040-\u30ff"    # 平假名 + 片假名
+    "\u3400-\u4dbf"    # CJK 扩展 A
+    "\u4e00-\u9fff"    # CJK 基本区（汉字）
+    "\uf900-\ufaff"    # CJK 兼容汉字
+    "\uff00-\uffef]"   # 全角 ASCII 形式（，！？＝）
+)
+
+#: CJK 字符的 chars/token 折算（TASK-096 §A-2 的标定值）。
+#: 卡内骨架给 1.5；实测项目自用的 e5 分词器下纯中文约 1.4-1.7 chars/token、cl100k 下约 1.0-1.2。
+#: 取 1.5 作为中位保守值：既让中文查询/注释的预算按真实量级收缩，又不至于把英文代码高估。
+_CJK_CHARS_PER_TOKEN = 1.5
+
+
 def estimate_tokens(text: str) -> int:
-    """chars/4 近似（Module/03 §2 要点 3：无 tokenizer 依赖，标注 approximate）。"""
+    """按字符类别加权的 token 估算（Module/03 §2 要点 3：无 tokenizer 依赖，标注 approximate）。
+
+    **TASK-096 §A-2 语义变更（既有调用方需知）**：旧实现是 ``ceil(len(text)/4)``，对 CJK 严重低估
+    （中文约 1.5 字符/token，旧口径按 4 算 → 低估约 2.7 倍）。新口径按类别加权：
+    CJK 字符按 :data:`_CJK_CHARS_PER_TOKEN`（1.5 字符/token），其余按 4 字符/token。
+    纯英文/纯 ASCII 文本的结果与旧口径**完全一致**（只是把 ``len`` 拆成 ``cjk + other``，
+    ``cjk=0`` 时退化为 ``ceil(len/4)``）；受影响的是**含中文**的文本。
+
+    仍然是估算不是计数：用途是预算控制与分布观察，不是计费。真要精确计数由 provider 侧
+    ``usage`` 返回（V1 不依赖它，Module/03 §2 要点 3 明确不引入 tokenizer 依赖）。
+    """
     if not text:
         return 0
-    return max(1, math.ceil(len(text) / 4))
+    cjk = len(_CJK_CHARS_RE.findall(text))
+    other = len(text) - cjk
+    return max(1, math.ceil(cjk / _CJK_CHARS_PER_TOKEN + other / 4))
 
 
 def numbered_lines(content: str, start_line: int) -> str:
@@ -113,6 +153,53 @@ def elision_note(count: int) -> str:
 def has_elision_note(content: str) -> bool:
     """正文里是否已**就地**标注了省略区间（合并区间的间隙 / 降级尾部）。"""
     return any(line.strip().startswith(_ELISION_PREFIX) for line in content.splitlines())
+
+
+#: 渲染层每条证据的缩进（与 ``render.py`` 的 ``_evidence_lines`` 一致：5 个空格）。
+_EVIDENCE_INDENT = "     "
+
+
+def evidence_markdown_lines(item: EvidenceItem) -> list[str]:
+    """一条证据的 Markdown 行（**与 ``render.py`` 的 ``_evidence_lines`` 同一口径**）。
+
+    本函数是预算计量的输入格式：TASK-096 §A-1 选定方案 A——``_Slot.tokens`` 必须等于该条证据
+    渲染后的**全部**开销（header + reason + 行号前缀 + 缩进），而不只是 ``content``。
+    修复前只算 ``content``（真实靶场占渲染输出的 86.8%），header（6.0%）+ reason（5.9%）+
+    节标题等（1.4%）全部不记账，导致 ``max_tokens`` 实测超出 27-32%。
+
+    为什么在 assembly 里再写一份而不是 import ``render._evidence_lines``：``render.py`` 已
+    ``from .assembly import ...``（同一层），反向 import 会成环。因此按同一格式本地实现，
+    并由 ``test_render_accounting_matches_rendered_evidence`` 断言与真实渲染输出逐字节一致
+    （防格式漂移）；本卡因此**不需要**改动 ``render.py``（TASK-095 的领地）。
+    """
+    if item.type == "spec":
+        doctype = f"（{item.doctype}）" if item.doctype else ""
+        heading = f" > {item.heading_path}" if item.heading_path else ""
+        header = f"[{item.id}] {item.path}{heading}{doctype}"
+    else:
+        target = item.symbol or item.path
+        span = ""
+        if item.lines is not None:
+            span = f":{item.lines[0]}-{item.lines[1]}"
+        header = f"[{item.id}] {target} — {item.path}{span}"
+    lines = [header, f"{_EVIDENCE_INDENT}reason: {item.reason}"]
+    lines.extend(f"{_EVIDENCE_INDENT}{line}" for line in item.content.splitlines())
+    if item.elided_lines > 0 and not has_elision_note(item.content):
+        lines.append(f"{_EVIDENCE_INDENT}{elision_note(item.elided_lines)}")
+    if item.stale_refs:
+        lines.append(
+            f"{_EVIDENCE_INDENT}⚠ 引用了已删除符号 {', '.join(item.stale_refs)}，文档可能过时"
+        )
+    return lines
+
+
+def estimate_render_tokens(item: EvidenceItem) -> int:
+    """一条证据的**完整渲染开销**（:func:`evidence_markdown_lines` 的 token 数）。
+
+    装填预算（``_Slot.tokens``）用本函数；``pack.budget.used_tokens`` 的不变量因此变成
+    ``framework_overhead + Σ estimate_render_tokens(item)``（不再只累加 ``content``）。
+    """
+    return estimate_tokens("\n".join(evidence_markdown_lines(item)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,10 +249,26 @@ def budget_for(mode: str) -> BudgetConfig:
 
 @dataclass(frozen=True, slots=True)
 class IndexSignals:
-    """组装需要的索引侧信号（缺失即如实不报，不猜不造；A5）。"""
+    """组装需要的索引侧信号（缺失即如实不报，不猜不造；A5）。
+
+    ``unresolved_symbols``（TASK-096 §B-1 新增，附加字段不破契约）：无法解析的引用名
+    （取 ``unresolved_refs.name_tail`` 中**标识符形态**的那些，按 id 序去重）。
+    它有两个用处：① ``unresolved_reference`` 的 message 里如实列出"哪些符号"；
+    ② ``next_queries`` 由缺口出发时从中取具体符号——旧口径从 ``pool[:3]`` 取符号，
+    会建议去查一个测试函数（真实靶场实测）。
+    """
 
     stale_doc_refs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     unresolved_count: int = 0
+    unresolved_symbols: tuple[str, ...] = ()
+
+
+#: 可作为"符号名"的标识符形态；unresolved 的 reference_name 常是表达式
+#: （``getattr(self._policy, name)``）而非符号，这类**不进** ``unresolved_symbols``。
+_PLAIN_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+#: message 里最多列出的未解析符号名（余下用计数带过，避免 message 自身膨胀）。
+_MAX_LISTED_UNRESOLVED = 3
 
 
 def collect_index_signals(store: Store, candidates: Sequence[Candidate]) -> IndexSignals:
@@ -178,9 +281,17 @@ def collect_index_signals(store: Store, candidates: Sequence[Candidate]) -> Inde
         names = tuple(_symbol_name_from_id(ref.symbol_id) for ref in refs if ref.stale)
         if names:
             stale[candidate.chunk_id] = names
+    unresolved = store.unresolved_refs(status="failed")
+    symbols: list[str] = []
+    for row in unresolved:
+        name = row.name_tail or row.reference_name
+        if not _PLAIN_IDENTIFIER_RE.fullmatch(name) or name in symbols:
+            continue
+        symbols.append(name)
     return IndexSignals(
         stale_doc_refs=stale,
-        unresolved_count=len(store.unresolved_refs(status="failed")),
+        unresolved_count=len(unresolved),
+        unresolved_symbols=tuple(symbols),
     )
 
 
@@ -234,7 +345,13 @@ class _Slot:
 
     @property
     def tokens(self) -> int:
-        return estimate_tokens(self.item.content)
+        """该条证据的**完整渲染开销**（header + reason + 行号正文，TASK-096 §A-1 方案 A）。
+
+        修复前只算 ``item.content``：header/reason 合计占渲染输出约 12%（真实靶场实测），
+        ``max_tokens`` 因此系统性超出。现在与 :func:`evidence_markdown_lines` 同一口径，
+        即"预算账 = 渲染输出"。
+        """
+        return estimate_render_tokens(self.item)
 
 
 def assemble(
@@ -326,9 +443,18 @@ def assemble(
         if existing is not None and existing is not slot:
             omitted += 1  # 同符号聚合：留最高分，其余计入 omittedCount 并在 reason 注明
             existing.aggregated += 1
+            # reason 文本变长（"+ 同符号聚合×N"）→ 渲染开销随之增加，必须补记进预算
+            # （TASK-096 §A-1：账目跟的是渲染输出，不是 content）。
+            before_tokens = existing.tokens
             existing.item.reason = (
                 f"{existing.base_reason} + {_AGGREGATION_NOTE}×{existing.aggregated}"
             )
+            delta = existing.tokens - before_tokens
+            used += delta
+            if existing.item.type == "spec":
+                spec_used += delta
+            key = existing.candidate.path or ""
+            file_usage[key] = file_usage.get(key, 0) + delta
             continue
 
         tokens = slot.tokens
@@ -466,7 +592,9 @@ def assemble(
         evidence_count=len(evidence) + len(docs),
         docs_capped=docs_capped,
     )
-    pack.next_queries = _next_queries(pool, evidence, docs)
+    pack.next_queries = _next_queries(
+        pack.missing_evidence, evidence, docs, answerable=pack.answerable
+    )
     return pack
 
 
@@ -756,14 +884,19 @@ def _missing_evidence(
             )
         )
     if signals.unresolved_count > 0:
+        subject = signals.unresolved_symbols[0] if signals.unresolved_symbols else None
         missing.append(
             MissingEvidence(
                 code="unresolved_reference",
                 message=(
                     f"{signals.unresolved_count} 个符号引用无法解析"
-                    "（unresolved_refs status=failed），"
+                    f"（unresolved_refs status=failed："
+                    f"{_listed_symbols(signals.unresolved_symbols)}），"
                     "涉及这些符号的调用关系可能缺失。"
                 ),
+                # symbol = 首个可用的未解析符号：既让 message 可读，也让 next_queries
+                # 能"从缺口出发"取具体主体（TASK-096 §B-1）。
+                symbol=subject,
             )
         )
     for item in pack.docs:
@@ -804,22 +937,119 @@ def _missing_evidence(
     return missing
 
 
+def _listed_symbols(symbols: Sequence[str]) -> str:
+    """message 里列出的未解析符号（``a, b, c 等``；无可用符号时退回计数说明）。"""
+    if not symbols:
+        return "引用名为表达式或变量，无稳定符号名"
+    listed = ", ".join(symbols[:_MAX_LISTED_UNRESOLVED])
+    if len(symbols) > _MAX_LISTED_UNRESOLVED:
+        return f"{listed} 等"
+    return listed
+
+
 def _next_queries(
-    pool: Sequence[Candidate],
+    missing: Sequence[MissingEvidence],
     evidence: Sequence[EvidenceItem],
     docs: Sequence[EvidenceItem],
+    *,
+    answerable: bool,
 ) -> list[str]:
-    """确定性生成 2-3 条自愈查询（禁止 LLM；Module/03 §5）。"""
+    """确定性生成 ≤3 条自愈查询（禁止 LLM；Module/03 §5）。
+
+    **TASK-096 §B 口径（用户拍板 2026-09-14）**：
+
+    1. **从缺口出发**，不再从 ``pool[:3]`` 取符号。旧口径的生成源是池内前 3 条符号，
+       于是 top-1 是测试函数时就会建议"查这个测试函数的调用方"（真实靶场实测）——
+       建议查询与**实际缺什么**无关，是噪音；
+    2. **只在 ``answerable=false`` 时生成**：证据已足够还建议"换个方式再问"同样是噪音，
+       空列表时 ``render_markdown`` 自动不渲染该节（TASK-087 已实现，无需改 ``render.py``）。
+
+    模板与缺口类型的对应见 :data:`_QUERY_TEMPLATES`；``retrieval_truncated`` 不生成
+    （那是预算不够，改问也帮不上，该做的是提高预算）——它也是**唯一**会抑制兜底的缺口：
+    只有预算裁剪时返回空列表（否则“又报 truncated、又建议查路径”就是旧行为的噪音）。
+    缺口里取不到可用符号时的兜底保留原有"文件名/路径"路径。
+    """
+    if not answerable:
+        queries: list[str] = []
+        for item in missing:
+            query = _query_for_gap(item)
+            if query is not None and query not in queries:
+                queries.append(query)
+        if queries:
+            return queries[:3]
+        # 包被预算裁剪时**不**给兜底：此时正确的动作是提高预算，而不是换个问法（§B-1）。
+        if any(item.code == "retrieval_truncated" for item in missing):
+            return []
+        # 缺口里构造不出具体符号（如只有 index_stale）：退回"用路径构造"的兜底。
+        return _fallback_queries(evidence, docs)
+    return []
+
+
+#: 目标形态：``query = template.format(subject=...)``（缺口类型 → 自愈问法，Module/03 §5）。
+_QUERY_TEMPLATES: Mapping[str, str] = {
+    "unresolved_reference": "{subject} 的调用方有哪些",
+    "stale_doc_reference": "{subject} 现在在哪里实现",
+    "graph_boundary": "{subject} 的调用链完整路径",
+    "symbol_ambiguous": "{subject} 到底指哪一个",
+    "no_context_match": "{subject} 的实现细节",
+}
+
+#: ``symbol_ambiguous`` 的候选分隔符（``A 还是 B``）。
+_AMBIGUOUS_SEPARATOR = " 还是 "
+
+#: 可作为"符号主体"的标识符形态（用于剔除 ``getattr(x, y)`` 这类表达式形态的引用名）。
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:[.:][A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def _query_for_gap(item: MissingEvidence) -> str | None:
+    """缺口 → 一条自愈查询；无法构造（或多个候选）时返回 ``None``。"""
+    template = _QUERY_TEMPLATES.get(item.code)
+    if template is None:  # 含 retrieval_truncated / index_stale / indexing_pending
+        return None
+    symbols = _gap_symbols(item)
+    if not symbols:
+        return None
+    if item.code == "symbol_ambiguous" and len(symbols) >= 2:
+        subject = f"{symbols[0]}{_AMBIGUOUS_SEPARATOR}{symbols[1]}"
+    else:
+        subject = symbols[0]
+    return template.format(subject=subject)
+
+
+def _gap_symbols(item: MissingEvidence) -> list[str]:
+    """从缺口里取出可用的符号名（确定、保序、去重）。
+
+    - ``MissingEvidence.symbol`` 是结构化字段，优先：``stale_doc_reference``（stale 引用名）与
+      ``unresolved_reference``（首个标识符形态的未解析引用）都走这条；
+    - 仅**多义缺口**（``symbol_ambiguous``，Phase 1 未产出，两符号塞不进单值 ``symbol``）从
+      message 的括号组里取 ``（A 还是 B）``——该格式由 :data:`_AMBIGUOUS_SEPARATOR` 定义；
+    - 其余缺口（含未带符号的 ``unresolved_reference``）返回空 → 由调用方走路径兼底。
+      不泛化解析 message：``unresolved_reference`` 的括号里还有 ``unresolved_refs`` 这类
+      噪音词，泛解析会生成"去查 unresolved_refs 的调用方"这种垃圾查询。
+    """
+    if item.symbol:
+        return [item.symbol]
+    if item.code != "symbol_ambiguous":
+        return []
+    names: list[str] = []
+    for group in re.findall(r"[\(（]([^\)）]*)[\)）]", item.message):
+        for part in group.split(_AMBIGUOUS_SEPARATOR.strip()):
+            for name in _IDENTIFIER_RE.findall(part):
+                if name not in names:
+                    names.append(name)
+    return names
+
+
+def _fallback_queries(
+    evidence: Sequence[EvidenceItem], docs: Sequence[EvidenceItem]
+) -> list[str]:
+    """兜底：缺口里拿不到符号时，用包里已有证据的路径/标题构造（保留 TASK-087 前的行为）。"""
     queries: list[str] = []
-    top = list(pool[:3])
-    named = next((c for c in top if c.symbol_fqn and c.kind != "spec"), None)
-    if named is not None:
-        queries.append(f"{named.symbol_fqn.rsplit('.', 1)[-1]} 的调用方有哪些")
-    pathed = next((c for c in top if c.path), None)
-    if pathed is not None:
-        queries.append(f"{pathed.path} 里还有哪些与查询相关的符号")
-    spec = next(iter(docs), None)
-    if spec is not None and spec.heading_path:
+    first_evidence = next(iter(evidence), None)
+    if first_evidence is not None:
+        queries.append(f"{first_evidence.path} 里还有哪些与查询相关的符号")
+    spec = next((item for item in docs if item.heading_path), None)
+    if spec is not None:
         queries.append(f"{spec.heading_path} 对应的实现代码在哪里")
     if not queries and evidence:
         queries.append(f"{evidence[0].path} 的实现细节")
@@ -830,7 +1060,12 @@ def _next_queries(
 
 
 def to_json(pack: ContextPack) -> dict:
-    """ContextPack → CF-03 JSON（键名与 ``docs/contracts/contextpack.schema.json`` 完全一致）。"""
+    """ContextPack → CF-03 JSON（键名与 ``docs/contracts/contextpack.schema.json`` 完全一致）。
+
+    ``budget.usedTokens`` 的口径：**渲染账**——框架开销 + 各条证据的完整渲染开销
+    （header + reason + 行号缩进正文，TASK-096 §A-1/§A-2）。它量的是"这个包实际占多少"，
+    而不是"正文有多少"。消费方若自行复算，用 ``estimate_render_tokens``。
+    """
     return {
         "query": pack.query,
         "mode": pack.mode,

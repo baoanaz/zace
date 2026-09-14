@@ -1,6 +1,6 @@
 # TASK-096：预算计量修复 + next_queries 生成口径修正
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-095（同改 assembly.py，建议串行）
+> 状态：review ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-095（同改 assembly.py，建议串行）
 > 建议分支：`feature/task-096-budget-nextq_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `core/zace_core/contextpack/assembly.py`（token 计量、next_queries 生成）
@@ -193,4 +193,150 @@ def estimate_tokens(text: str) -> int:
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+**2026-09-14 ｜ 分支 `feature/task-096-budget-nextq_xwz0914` ｜ 状态：review**
+
+### §A 修复方案选择与理由
+
+**选方案 A（``_Slot.tokens`` 直接返回完整渲染 token），并抽出共享的渲染行生成器。**
+
+| 方案 | 取舍 | 结论 |
+|---|---|---|
+| A. ``_Slot.tokens`` 直接用渲染格式算 | 最准；与渲染格式耦合 | **选它** |
+| B. 乘固定系数（如 ×1.20） | 简单；但实测单条 reason 从 40 到 150 字符不等，长 header 会低估 | 否——卡内已指出系数难论证 |
+| C. 抽共享函数、render 与 assembly 各调一次 | 最干净；但须知 **render.py 已 ``from .assembly import elision_note, has_elision_note``**，反向 import 会成环 | 改为 A 的变体（见下） |
+
+**实际实现（A + C 的合并，且不改 render.py）**：新增 ``evidence_markdown_lines(item)`` /
+``estimate_render_tokens(item)``（在 assembly 内，与 ``render._evidence_lines`` **同一格式**），
+``_Slot.tokens`` 改为 ``estimate_render_tokens(self.item)``。没有反向编辑 render.py——
+因为 import 成环，而“改 render.py 让 assembly 反向依赖它”超出本卡所有权（TASK-095 领地）。
+改为在 assembly 内按同一格式生成，并用新增测试
+``test_render_accounting_matches_rendered_evidence`` 把两处格式钉死（防漂移）。
+
+配套改动（同属“预算账=渲染账”）：
+- 同符号聚合使 ``reason`` 变长（``+ 同符号聚合×N``）→ 现在**补记增量**（修复前这段增长不记账）；
+- 缺口的 ``unresolved_reference`` message 补进符号名，并给 ``MissingEvidence.symbol`` 填首个可用符号。
+
+### §A-2 `estimate_tokens` 语义变更说明（**重要，含既有测试影响**）
+
+```python
+# 旧：ceil(len(text)/4)
+# 新：ceil(cjk/1.5 + other/4)   # CJK 区段见 _CJK_RANGES（含汉字/假名/CJK 标点/全角形式）
+```
+
+- **纯 ASCII 文本结果与旧口径完全一致**（``cjk=0`` 时退化）；受影响的是**含中文**的文本；
+- 卡内骨架给 ``1.5``；实测项目自用的 e5 分词器下纯中文约 1.4-1.7 chars/token、cl100k 下约
+  1.0-1.2，故 1.5 是中位保守值（不会把英文代码高估）；
+- **不引入 tokenizer 依赖**（Module/03 §2 要点 3），所以这是**估算口径修正**，不是精确计数；
+- **对既有测试的影响**：``core/tests/contextpack`` 与 ``service/tests`` 里以
+  ``estimate_tokens(item.content)`` 作预算不变量对照的断言**全部改为渲染账口径**
+  （``estimate_render_tokens``）；夹具预算（中文 spec 正文）按新口径重标定，
+  并在每处注明新旧数值与语义（不是简单改数字，见 diff 内注释）。
+  另有大量**行为断言**（装填顺序 / 配额 / 去重）保持不变，只调整了使其成立的 hard_cap。
+
+### 缺陷 1 修复前后实测对照
+
+口径说明：卡内引用的 12899 = **渲染后 Markdown 的 UTF-8 字节数 ÷ 4**（实测 51593 字节）。
+本卡沿用同一尺子以便对齐卡内数字。
+
+| `max_tokens` | 修复前（bytes/4） | 超出 | 修复后（bytes/4） | 超出 | 修复后 usedTokens |
+|---|---|---|---|---|---|
+| 3,000 | 3,959 | +32% | 2,155 | **−28%** | 2,518 |
+| 10,000 | 12,899 | +29% | 9,303 | **−7%** | 9,594 |
+| 20,000 | 25,382 | +27% | 19,664 | **−2%** | 19,863 |
+
+**验收口径达成**：``max_tokens=10000`` 实际返回 12,899 → **9,303**，远优于卡内“≤11000”的要求。
+
+**客观 tokenizer 复核**（同一输出，仅在验证脚本里用，不进交付代码）：
+
+| `max_tokens` | e5 词表（前 → 后） | cl100k（前 → 后） |
+|---|---|---|
+| 3,000 | 4,870 → 2,675 (89%) | 4,394 → 2,402 (80%) |
+| 10,000 | 15,249 → 11,221 (112%) | 13,378 → 9,852 (**99%**) |
+| 20,000 | 29,826 → 23,267 (116%) | 26,038 → 20,276 (101%) |
+
+残余缺口诚实说明：e5 对**英文标识符密集**的代码切片会比 cl100k 多切出 token（后者是项目
+实际 provider 更接近的形态，命中 ±10% 内）；``bytes/4`` 口径对中文偏保守。三种尺子都表明
+“超出 27-32%”已变成“落在预算内”，且 ``usedTokens``（内部账）与 cl100k 实测几乎重合。
+
+### 缺陷 2 修复前后实测对照（next_queries）
+
+同一查询「Runtime 的输入准入是怎么实现的？」（该查询 ``answerable=true``）：
+
+| | 内容 |
+|---|---|
+| 修复前 | `- test_user_input_reaches_runtime_without_voice_invocation_binding 的调用方有哪些`<br>`- docs/internal-design.md 里还有哪些与查询相关的符号`<br>`- 仓库内部设计与源码分层 > 五、一次输入如何执行 > 输入准入 对应的实现代码在哪里` |
+| 修复后 | `nextQueries: []`（§B-2：answerable=true 不生成）→ 该节整节不渲染 |
+
+§B-1（从缺口出发）在 `answerable=false` 时的对照（同一靶场，另一个查询）：
+
+| | 内容 |
+|---|---|
+| 修复前 | `- docs/internal-design.md 里还有哪些与查询相关的符号`<br>`- 仓库内部设计与源码分层 > 五、一次输入如何执行 > 输入准入 对应的实现代码在哪里`（与缺口无关；来自 pool 的文档符号与标题） |
+| 修复后 | `- workflow_id 的调用方有哪些`（来自 `missing_evidence.unresolved_reference` 的符号） |
+
+同时 ``unresolved_reference`` 的 message 现在如实列出符号：
+``unresolved_refs status=failed：workflow_id, version, _owner 等``（修复前只有计数）。
+
+### 验收命令与结果
+
+```text
+uv run pytest core/tests/contextpack -o addopts="" -q
+  → 73 passed（修复前 62；本卡新增 11 个用例）
+
+uv run ruff check .                              → All checks passed!
+uv run python scripts/check_dependency_direction.py → 依赖方向检查通过
+uv run pytest -o addopts="" -q                   → 889 passed, 2 skipped
+  （基线 878 passed, 2 skipped；+11 为本卡新增用例）
+```
+
+注：直接 ``source .env`` 后跑全量会在 ``test_default_is_local_onnx_provider`` 上失败
+（``EMBED_MODE=api`` 覆盖默认 provider，与本卡无关）——上表是**去除该环境变量**后的干净基线。
+
+新增/更新的 DoD 覆盖（均在 ``core/tests/contextpack/``）：
+
+- 预算：``test_framework_render_overhead_is_inside_used_tokens``（修复前必失败）、
+  ``test_render_accounting_matches_rendered_evidence``（锁死与 render.py 的一致性）、
+  ``test_cjk_budget_shrinks_the_pack``；
+- 中英混合估算：``test_estimate_tokens_charges_cjk_higher_than_ascii``；
+- 缺口出发：``test_next_queries_come_from_gaps_not_pool_top_symbols``、
+  ``test_stale_doc_gap_asks_where_the_symbol_is_now``、
+  ``test_gap_message_lists_unresolved_symbol_names``；
+- ``answerable=true`` → 空列表：``test_next_queries_empty_when_answerable``、
+  ``test_answerable_pack_renders_no_suggested_queries_section``；
+- ``answerable=false`` 仍生成：``test_next_queries_still_generated_when_not_answerable``；
+- ``retrieval_truncated`` 不生成：``test_retrieval_truncated_generates_no_query``。
+
+### 交付物
+
+- ``core/zace_core/contextpack/assembly.py``：``estimate_tokens`` 分类计价、
+  ``evidence_markdown_lines`` / ``estimate_render_tokens``（新公开导出）、``_Slot.tokens``、
+  聚合 reason 增量记账、``IndexSignals.unresolved_symbols``、``_next_queries`` 重写；
+- ``core/zace_core/contextpack/__init__.py``：导出新增两个函数；
+- ``core/tests/contextpack/``：新增 11 用例、更新受影响断言、重标定夹具预算、
+  更新快照 ``snapshots/rich_pack.md``。
+
+### 契约影响
+
+- **CF-03 字段集未变**（``nextQueries`` 保留，只是可能为空数组）；
+- ``usedTokens`` 的**语义收窄为“渲染账”**：同一 pack 下数值会比以前大（旧值只算正文）。
+  这是在 CF-03 ``integer`` 约束内的口径澄清，不改 schema；已在 ``to_json`` docstring 写明；
+- 新增 ``IndexSignals.unresolved_symbols`` 是**内部 dataclass 的附加字段**（带默认值），
+  不在 CF-03 内，也未改 ``types.py``；
+- ``estimate_tokens`` 是公开导出，语义变更已在 docstring 显著标注（§A-2）。
+
+### 与设计偏差 / 未决问题
+
+1. **未修改 ``render.py``**（TASK-095 领地）。卡内方案 C 原文设想“render 与 assembly 各调一次”，
+   但实测 ``render.py`` 已从 ``assembly`` 导入，反向依赖会成环。改为在 assembly 内按同一
+   格式生成 + 测试钉一致性。若编排者认为应把 ``evidence_markdown_lines`` 下沉到
+   ``render.py`` 再由 assembly 调用（真正的单一实现），属**跨卡重构**，建议留到 TASK-095 合并后
+   统一处理——已用测试保证当前不漂移。
+2. **Module/03 §5 的文字**写“nextQueries 从 top 候选符号/文件构造”，与本卡的用户拍板口径
+   （从缺口出发、仅 answerable=false）**不一致**。按 AGENTS.md §6 停在此处报编排者：
+   代码已按用户拍板实现，**未改设计文档**（``docs/design/**`` 不在本卡所有权内）。
+3. **TASK-095 并行冲突**：本卡与 095 同改 ``assembly.py``，本卡只动“token 计量 + ``_next_queries``
+   及其辅助函数”，未重构他处；若 095 也改了装填循环/缺口 message，合并冲突由编排者裁决。
+4. ``retrieval_truncated`` 抑制兜底：卡内只说“该缺口不生成查询”，实现时发现若同时存在
+   其他缺口会有歧义；取“**只要包被裁剪就不给兜底**”（预算不够时正确动作是提高预算），
+   已写入 docstring 与专门用例。若编排者希望“仍给其他缺口生成的查询”，一行可改。
+
