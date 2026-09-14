@@ -2,6 +2,14 @@
 
 TASK-087 追加：``answerable=false`` → ``status="insufficient_evidence"`` 的结构化证据不足包
 （D-24 短路）与它的审计落库；``answerable=true`` 的行为保持不变（降级包，TASK-088 接 LLM）。
+
+TASK-088 改动（本文件在 TASK-088 交付物清单之外，属最小必要同步，已在执行记录里登记）：
+``ask`` 已接 LLM，降级文案由旧文案（"Phase 3 尚未接入"——接入后就成了假话）改为两条
+按原因的诚实说明；因此 :func:`test_ask_returns_degraded_package_not_500` 的断言跟着改语义：
+**未配置**（本测试的夹具环境）→ 200 + ``status="degraded"`` + 未配置说明，绝不 500。
+
+两卡合并后（2026-09-14）的实际分支顺序：``answerable=false`` → 短路包（不调 LLM）；
+否则未配置 → 降级包；调用失败 → 降级包；成功 → ``status="answered"``。
 """
 
 from __future__ import annotations
@@ -183,7 +191,11 @@ def test_empty_index_returns_409_for_search_and_ask(client: TestClient) -> None:
 
 
 def test_ask_returns_degraded_package_not_500(client: TestClient, indexed: str) -> None:
-    """Phase 2 无 LLM：200 + ``status="degraded"`` + 非空 answer + 证据概览（绝不 500）。"""
+    """未配置 ``ANSWER_*``（L5）：200 + ``status="degraded"`` + 非空 answer + 证据概览。
+
+    **绝不 500**：没有 LLM 配置时也返回可直接用的检索包，并告诉管理员该配什么
+    （TASK-088 §D；路由/失败/证据不足三条降级分支的细节见 ``service/tests/test_answer.py``）。
+    """
     response = client.post(
         "/api/query/ask",
         json={"projectId": indexed, "question": "令牌过期后在哪里刷新"},
@@ -194,7 +206,7 @@ def test_ask_returns_degraded_package_not_500(client: TestClient, indexed: str) 
     assert body["status"] == "degraded"
     assert body["answer"].startswith(DEGRADED_NOTICE)
     assert "## Relevant Context" in body["answer"], "answer 必须含渲染好的上下文正文"
-    assert "Phase 3" in body["answer"]
+    assert "ANSWER_BASE_URL" in body["answer"], "未配置时要说清缺哪个环境变量"
     assert body["meta"]["degraded"] is True
     assert body["meta"]["degradedReason"] == DEGRADED_NOTICE
 

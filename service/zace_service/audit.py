@@ -102,13 +102,18 @@ def record_query(
     pack: Any,
     latency_ms: float,
     degraded: bool = False,
+    answerable: bool | None = None,
+    confidence: str | None = None,
+    citation_coverage: float | None = None,
+    llm_latency_ms: float | None = None,
+    answer_tokens: int | None = None,
     user_id: str | None = None,
 ) -> None:
     """把一次**成功返回**的查询落库（旁路：任何失败只记 WARN，不影响检索）。
 
-    字段全部取自 ``pack`` / 调用方给出的**真实值**，不编造；``citation_coverage`` 一律留
-    ``None``：Phase 3 之前 ``ask`` 走降级包（D-26），根本没有 citation 可言——
-    "尚未测量"不是 0（TASK-064 §A 的诚实性纪律）。
+    字段默认取自 ``pack`` / 调用方给出的**真实值**，不编造；新增的三个 LLM 观测值
+    （TASK-088 §E：``citation_coverage`` / ``llm_latency_ms`` / ``answer_tokens``）在
+    **没走 LLM** 时保持 ``None``——"尚未测量"不是 0（TASK-064 §A 的诚实性纪律）。
     """
     if db is None:
         return
@@ -119,13 +124,15 @@ def record_query(
             mode=mode,
             query=redact_query_text(query),
             latency_ms=_millis(latency_ms),
-            answerable=bool(pack.answerable),
-            confidence=pack.confidence,
+            answerable=bool(pack.answerable) if answerable is None else bool(answerable),
+            confidence=pack.confidence if confidence is None else confidence,
             degraded=bool(degraded),
             evidence_count=len(getattr(pack, "evidence", None) or ()),
             docs_count=len(getattr(pack, "docs", None) or ()),
             used_tokens=int(budget.used_tokens) if budget is not None else 0,
-            citation_coverage=None,
+            citation_coverage=citation_coverage,
+            llm_latency_ms=_millis_or_none(llm_latency_ms),
+            answer_tokens=answer_tokens,
             evidence=evidence_meta(pack),
             user_id=user_id,
         )
@@ -201,6 +208,11 @@ def _millis(latency_ms: float) -> int:
         return max(0, int(round(float(latency_ms))))
     except (TypeError, ValueError):  # pragma: no cover - 调用方恒传数字
         return 0
+
+
+def _millis_or_none(latency_ms: float | None) -> int | None:
+    """可选的毫秒耗时（``None`` 表示"没走 LLM"，与 0 毫秒是两件事）。"""
+    return None if latency_ms is None else _millis(latency_ms)
 
 
 def _evidence_order(item: Any) -> int:

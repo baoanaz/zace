@@ -11,7 +11,10 @@
 - ``local_rescan_interval_s``（TASK-034 §C）：本地模式下检索前的懒重扫间隔，默认 2.0 秒，
   **0 表示禁用**（测试与"只读演示"）；只影响本地模式（远端模式走客户端上传）；
 - 非法布尔值**显式报错**而不是静默取默认——``local_mode`` 决定是否要求鉴权，静默取真会让
-  配置写错的人以为安全策略生效（诚实性优先于启动便利）。
+  配置写错的人以为安全策略生效（诚实性优先于启动便利）；
+- LLM 总结配置（``ANSWER_*``，TASK-088 / Module/04 §2）：**用户只需给 URL/KEY/MODEL 三个**，
+  其余三项有内置默认值但同样允许环境变量覆盖。**未配置 = 未配置**（三个里的任一为空即视为
+  未配置），``ask`` 走 D-26 降级包而不是启动报错（L5：开源产品冷启动体验）。
 """
 
 from __future__ import annotations
@@ -24,8 +27,17 @@ from pathlib import Path
 from zace_service import __version__
 
 __all__ = [
+    "ANSWER_API_KEY_ENV",
+    "ANSWER_BASE_URL_ENV",
+    "ANSWER_MAX_TOKENS_ENV",
+    "ANSWER_MODEL_ENV",
+    "ANSWER_TEMPERATURE_ENV",
+    "ANSWER_TIMEOUT_S_ENV",
     "COOKIE_SECURE_ENV",
     "DATA_ROOT_ENV",
+    "DEFAULT_ANSWER_MAX_TOKENS",
+    "DEFAULT_ANSWER_TEMPERATURE",
+    "DEFAULT_ANSWER_TIMEOUT_S",
     "DEFAULT_DATA_ROOT",
     "DEFAULT_HOST",
     "DEFAULT_LOCAL_RESCAN_INTERVAL_S",
@@ -55,7 +67,7 @@ LOCAL_RESCAN_INTERVAL_ENV = "ZACE_LOCAL_RESCAN_INTERVAL"
 REGISTER_OPEN_ENV = "ZACE_REGISTER_OPEN"
 #: session cookie 的 Secure 属性（TASK-060；HTTPS 部署必须置 true）。
 COOKIE_SECURE_ENV = "ZACE_COOKIE_SECURE"
-#: 数据根子目录名（core 的 ``projects/``）与元数据库文件名（TASK-060）。
+#: 数据根子目录名（core 的 ``projects/``；元数据库文件名见 ``metadb.META_DB_FILENAME``）。
 PROJECTS_DIRNAME = "projects"
 #: 请求日志目录名（TASK-090 §A：落 ``{data_root}/logs/request.log``）。
 LOG_DIRNAME = "logs"
@@ -70,6 +82,25 @@ DEFAULT_LOG_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_LOG_BACKUP_COUNT = 9
 #: 默认保留 14 天（用户报错往往隔几天才反馈，太短查不到、太长无必要）。
 DEFAULT_LOG_RETENTION_DAYS = 14
+
+# ------------------------------------------------------------------ LLM 总结（TASK-088）
+# 用户只需给三个必填项；下面三项是内置默认值（可覆盖），口径见 Module/04 §2 参数表。
+#: LLM 的 OpenAI-compatible base URL（如 ``http://host:8080/v1``）。
+ANSWER_BASE_URL_ENV = "ANSWER_BASE_URL"
+#: LLM 的 API key（**绝不进日志/响应/仓库/设置页**）。
+ANSWER_API_KEY_ENV = "ANSWER_API_KEY"
+#: LLM 模型名（如 ``deepseek/deepseek-v4.1-flash``）。
+ANSWER_MODEL_ENV = "ANSWER_MODEL"
+#: 整体超时秒数（Module/04 §2：连接 10s / 整体 60s）。
+ANSWER_TIMEOUT_S_ENV = "ANSWER_TIMEOUT_S"
+#: 单次回答的 ``max_tokens``（Module/04 §2：3072）。
+ANSWER_MAX_TOKENS_ENV = "ANSWER_MAX_TOKENS"
+#: 采样温度（Module/04 §2：0.2——调查要事实不要创意）。
+ANSWER_TEMPERATURE_ENV = "ANSWER_TEMPERATURE"
+#: 三个必填项的默认值（未配置任一 → ``answer_configured`` 为 False，``ask`` 走降级包）。
+DEFAULT_ANSWER_TIMEOUT_S = 60.0
+DEFAULT_ANSWER_MAX_TOKENS = 3072
+DEFAULT_ANSWER_TEMPERATURE = 0.2
 #: 默认懒重扫间隔（秒）：本地模式下检索前最多每 2s 扫一次（Module/05 §3.6 的 freshness 语义）。
 DEFAULT_LOCAL_RESCAN_INTERVAL_S = 2.0
 #: 默认数据根（core 的 ``DEFAULT_DATA_ROOT`` 同值；service 只读 settings，不重复定义语义）。
@@ -100,12 +131,41 @@ class Settings:
     log_max_bytes: int = DEFAULT_LOG_MAX_BYTES
     log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
     log_retention_days: int = DEFAULT_LOG_RETENTION_DAYS
+
+    #: LLM 总结（TASK-088）：三个必填项＋三个可覆盖默认值。
+    answer_base_url: str | None = None
+    answer_api_key: str | None = None
+    answer_model: str | None = None
+    answer_timeout_s: float = DEFAULT_ANSWER_TIMEOUT_S
+    answer_max_tokens: int = DEFAULT_ANSWER_MAX_TOKENS
+    answer_temperature: float = DEFAULT_ANSWER_TEMPERATURE
     version: str = __version__
 
     @property
     def auth_required(self) -> bool:
         """是否要求凭据（= 非本地模式，Module/06 §2.2）；本地模式免鉴权（R34）。"""
         return not self.local_mode
+
+    @property
+    def answer_configured(self) -> bool:
+        """LLM 是否已配置（三个必填项都非空；Module/04 §6）。
+
+        **不是**“能连上”：未配置 → ``ask`` 走降级包并提示管理员去配；
+        配了但打不通 → 另一条降级路径（§6 故障矩阵）。
+        """
+        return bool(self.answer_base_url and self.answer_model and self.answer_api_key)
+
+    @property
+    def answer_missing_env(self) -> tuple[str, ...]:
+        """未配置时缺哪几个环境变量（只回**变量名**，不回值/不回长度）。"""
+        missing: list[str] = []
+        if not self.answer_base_url:
+            missing.append(ANSWER_BASE_URL_ENV)
+        if not self.answer_api_key:
+            missing.append(ANSWER_API_KEY_ENV)
+        if not self.answer_model:
+            missing.append(ANSWER_MODEL_ENV)
+        return tuple(missing)
 
     @property
     def meta_db_path(self) -> Path:
@@ -150,6 +210,24 @@ class Settings:
                 LOG_RETENTION_DAYS_ENV,
                 default=DEFAULT_LOG_RETENTION_DAYS,
             ),
+            answer_base_url=(source.get(ANSWER_BASE_URL_ENV) or "").strip() or None,
+            answer_api_key=(source.get(ANSWER_API_KEY_ENV) or "").strip() or None,
+            answer_model=(source.get(ANSWER_MODEL_ENV) or "").strip() or None,
+            answer_timeout_s=_as_float(
+                source.get(ANSWER_TIMEOUT_S_ENV),
+                ANSWER_TIMEOUT_S_ENV,
+                default=DEFAULT_ANSWER_TIMEOUT_S,
+            ),
+            answer_max_tokens=_as_int(
+                source.get(ANSWER_MAX_TOKENS_ENV),
+                ANSWER_MAX_TOKENS_ENV,
+                default=DEFAULT_ANSWER_MAX_TOKENS,
+            ),
+            answer_temperature=_as_float(
+                source.get(ANSWER_TEMPERATURE_ENV),
+                ANSWER_TEMPERATURE_ENV,
+                default=DEFAULT_ANSWER_TEMPERATURE,
+            ),
         )
 
 
@@ -186,4 +264,16 @@ def _as_float(raw: str | None, name: str, *, default: float) -> float:
         raise ValueError(f"环境变量 {name} 必须是数字，收到 {raw!r}") from None
     if value < 0:
         raise ValueError(f"环境变量 {name} 不能为负（0 表示禁用），收到 {raw!r}")
+    return value
+
+
+def _as_int(raw: str | None, name: str, *, default: int) -> int:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"环境变量 {name} 必须 ≥ 1，收到 {raw!r}")
     return value

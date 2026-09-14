@@ -9,7 +9,9 @@
   以为自己受保护（诚实性优先）；
 - **非本地模式**：``register`` 默认关闭（``ZACE_REGISTER_OPEN``），首次部署用
   ``POST /api/auth/bootstrap`` 建第一个账户（否则 ``register`` 关闭时**没有任何途径**产生用户）；
-- **401 不区分细节**；``GET /api/auth/tokens`` **绝不含明文或哈希**。
+- **401 不区分细节**；``GET /api/auth/tokens`` **绝不含明文或哈希**；
+- ``GET /api/meta``（TASK-088 §F）：免鉴权，因此**敏感面必须门禁**——
+  未鉴权的云端调用只拿得到"配置了没"与"缺哪些环境变量名"，拿不到模型名/地址/参数。
 """
 
 from __future__ import annotations
@@ -65,8 +67,16 @@ def meta(request: Request) -> dict[str, Any]:
     """部署形态（**免鉴权**：web 首屏据此决定显示登录/初始化/直接进入）。
 
     只透出 ``needsBootstrap`` 这个**布尔**，不透出用户数量——那是人员信息。
+
+    TASK-088 §F 追加 ``config``（设置页要展示生效中的 embedding / LLM 配置）：
+
+    - **key 的任何部分（含前缀、长度、是否存在之外的任何信息）绝不返回**——
+      LLM 侧只给 ``apiKeyConfigured`` 布尔；
+    - 云端**未鉴权**时只给 ``configured`` / ``missingEnv``（环境变量**名**是公开信息，
+      写文档里的就是它们），模型名与地址属内部拓扑，登录后才给。
     """
     settings = get_settings(request)
+    user = getattr(request.state, "zace_user", None)
     needs_bootstrap = False
     user_count = 0
     if not settings.local_mode:
@@ -80,7 +90,87 @@ def meta(request: Request) -> dict[str, Any]:
         "registerOpen": settings.register_open,
         "needsBootstrap": needs_bootstrap,
         "userCount": user_count if settings.local_mode else None,
+        "config": effective_config(settings, details=settings.local_mode or user is not None),
     }
+
+
+def effective_config(settings: Any, *, details: bool) -> dict[str, Any]:
+    """生效中的服务配置（设置页展示用；**不含任何 secret**）。
+
+    ``details=False``（云端未鉴权）：只回"配了没"与缺失的环境变量名；
+    ``details=True``（本地模式或已登录）：额外回模型名/地址/超时等只读展示值。
+    """
+    return {
+        "embedding": _embedding_config(details=details),
+        "llm": _llm_config(settings, details=details),
+    }
+
+
+def _llm_config(settings: Any, *, details: bool) -> dict[str, Any]:
+    """LLM（``ANSWER_*``）生效值。
+
+    ``apiKeyConfigured`` 是**布尔**：连"key 有几个字符"都不给（长度也是信息）。
+    """
+    payload: dict[str, Any] = {
+        "configured": bool(settings.answer_configured),
+        "apiKeyConfigured": bool(settings.answer_api_key),
+        "missingEnv": list(settings.answer_missing_env),
+    }
+    if not details:
+        return payload
+    payload.update(
+        {
+            "model": settings.answer_model,
+            "baseUrl": settings.answer_base_url,
+            "timeoutS": settings.answer_timeout_s,
+            "maxTokens": settings.answer_max_tokens,
+            "temperature": settings.answer_temperature,
+        }
+    )
+    return payload
+
+
+def _embedding_config(*, details: bool) -> dict[str, Any]:
+    """embedding（``EMBED_*``）生效值（读 core 的工厂配置；**不调优、不加载模型**）。
+
+    读不到（依赖缺失/配置非法）时如实回 ``error``——设置页宁可显示"读不到配置"，
+    也不能凭空编一个模型名。
+    """
+    try:
+        from zace_core.embedding import EmbeddingConfig
+
+        config = EmbeddingConfig.from_env()
+    except Exception as exc:  # noqa: BLE001 - 读配置失败不该让 /api/meta 挂掉
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    payload: dict[str, Any] = {
+        "mode": config.mode,
+        "configured": bool(config.model) if config.mode == "api" else True,
+        "missingEnv": _embedding_missing(config),
+    }
+    if details:
+        payload.update(
+            {
+                "model": config.model,
+                "provider": config.provider,
+                "baseUrl": config.base_url,
+                "dim": config.dim,
+                "maxInputTokens": config.max_input_tokens,
+                "offline": config.offline,
+            }
+        )
+    return payload
+
+
+def _embedding_missing(config: Any) -> list[str]:
+    """api 模式缺哪个环境变量（本地模式无必填项）。"""
+    if config.mode != "api":
+        return []
+    missing: list[str] = []
+    if not config.model:
+        missing.append("EMBED_MODEL")
+    if not config.base_url:
+        missing.append("EMBED_BASE_URL")
+    return missing
 
 
 @router.post("/api/auth/register", status_code=201)

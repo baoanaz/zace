@@ -1,6 +1,6 @@
 # TASK-088：ask_project 接入 LLM 总结（可配置 + Citation 回验 + 设置页展示）
 
-> 状态：pending ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-087（渲染补齐，可并行）
+> 状态：review ｜ 阶段：Phase 3（M2c）｜ 硬依赖：无 ｜ soft 依赖：TASK-087（渲染补齐，可并行）
 > 建议分支：`feature/task-088-llm-answer_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/answer.py`（**新建**：AnswerProvider + Grounded Prompt + Citation 回验）
@@ -148,4 +148,90 @@ User prompt 结构（文档 §4）：`<question>` + `<context_meta>`（confidenc
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-14 ｜ 分支：`feature/task-088-llm-answer_xwz0914` ｜ 泳道 B ｜ 状态：review
+
+**交付物（卡内清单内的全部完成）**
+
+| 文件 | 内容 |
+|---|---|
+| `service/zace_service/config.py` | §A：`ANSWER_*` 六个环境变量（三必填 + 三默认）＋ `answer_configured` / `answer_missing_env` |
+| `service/zace_service/answer.py`（新建） | §B `HttpAnswerProvider`（httpx，≤2 重试，退避 + Retry-After 上限）／§C Grounded Prompt（七条规则逐条）／§D `verify_citations` + `answer_question` |
+| `service/zace_service/routers/query.py` | `ask` 改为 `async def`：未配置／LLM 失败／成功三分支；三个分支都不 500；审计交接修跨线程 |
+| `service/zace_service/metadb.py` | §E：`query_audit` 加 `llm_latency_ms` / `answer_tokens`（`PRAGMA table_info` + `ALTER TABLE` 幂等迁移，本模块首条 ALTER 路径） |
+| `service/zace_service/audit.py` | §E：`record_query` 透传三字段（默认 None = 未测量，不是 0） |
+| `service/zace_service/routers/auth.py` | §F：扩展 `/api/meta` 的 `config`（embedding/LLM 生效值；key 任何部分不返回） |
+| `service/tests/test_answer.py`（新建） | 39 条：DoD 七条 + §4 prompt + §E 审计 + §F 门禁 + provider 细节 |
+| `.env.example` | 补 `ANSWER_*` 说明（含“未配置也不报错”） |
+| `web/src/pages/SettingsPage.tsx`（新建）+ `App.tsx` / `Layout.tsx` / `api/client.ts` | 真实 `/settings` 页 + 导航末位“设置” + `EffectiveConfig` 类型 |
+
+**清单外的最小必要改动（3 个文件，需编排者知悉并可与 TASK-087 合并时复核）**
+
+| 文件 | 改动 | 原因 |
+|---|---|---|
+| `service/zace_service/mcp.py` | `_ask_text` 接入 LLM（复用 `answer_question`）；`build_mcp` 新增可选 `app` 参数；**每次工具调用重读配置**（原来语义冻结为“每次调用读一次”，只是从 `resolved_settings` 换成 `_load_settings()`） | agent 实际入口是 `ask_project`；不改则 MCP 面继续声称“Phase 3 尚未接入”＝假话（用户 2026-09-14 已同意同卡接入） |
+| `service/tests/test_query_api.py` | 1 条断言按新语义改写 | 旧断言认 `Phase 3` 文案；旧文案在接入后成为假话（用户已同意） |
+| `service/tests/test_usage_api.py` | 1 条断言追加 `llmLatencyMs` / `answerTokens` 为 null | 同上（`citationCoverageAvg` 断言未动，未配置时仍恒为 null） |
+| `service/tests/test_mcp_endpoint.py`、`service/zace_service/app.py`、`web/src/app/Layout.test.tsx`、`web/src/pages/console.e2e.test.tsx` | 断言/装配随上述改动同步 | 同一组最小同步 |
+
+**降级文案（诚实性）**：旧 `DEGRADED_NOTICE` 声称“Deep 模式（LLM 总结）尚未接入（Phase 3）”；
+接入后该表述为假话，故拆为两条按原因的说明——`DEGRADED_NOTICE`（未配置，写出缺失的环境变量名）
+与 `LLM_FAILED_NOTICE`（已配置但超时/报错/密钥无效）。两条都保留“以下为检索结果，可直接使用”。
+
+**新增设计决定（理由）**
+
+1. **`ask` 改为 `async def`**：LLM 调用是秒级阻塞 I/O，与 core 的 CPU 型检索不同；
+   检索与 LLM 两次外呼都经 `run_in_threadpool`，事件循环不被拖住。
+2. **审计上下文跨线程交接**：本服务的 `@app.middleware("http")` 是 BaseHTTPMiddleware，
+   会把请求丢进 AnyIO 线程池，而 `_audited` 与 handler 可能落在**不同线程**、
+   `contextvars` 不跨线程——除 ContextVar 外再把 `ctx` 存到 `request.state`，
+   退出时按身份比较取回（否则 §E 的新字段会静默丢成 None）。
+3. **`provider_for_app` 先认注入的 provider 再判“是否已配置”**：否则测试/未来替换实现在
+   未配置环境下永远拿不到注入的实现（同一个接缝要能同时表达“替换实现”与“未配置”）。
+4. **§F 选择扩展 `/api/meta`**（用户已确认）：设置页信息与部署形态同源、都由 `Settings` 计算，
+   扩展它零新增路径、不动 CF-05 白名单；免鉴权风险用详尽度门禁化解——
+   **本地模式或已登录**才返回模型名/地址/参数，未鉴权只返回 `configured` / `apiKeyConfigured` /
+   `missingEnv`（环境变量名是公开文档信息）。`apiKeyConfigured` 恒为布尔，不含前缀与长度。
+5. **`citationCoverage` 的段落口径**：有效引用按**出现次数**计，段落数取“非空、非标题、非代码块”的行；
+   回验注记行本身算一行正文（`_count_paragraphs` 在注记追加之后统计）。这是刻意选择：
+   覆盖率只入审计、不惩罚输出，口径差异不会改变返回给用户的答案。
+
+**未决问题（交编排者）**
+
+1. **与 TASK-087 的 `ask` 分支合并**：本卡按约定只实现 `answerable=true` 的 LLM 分支与两条降级分支；
+   087 的 `answerable=false` 短路分支落在同一个 `with _audited(...)` 块内。两边的共同前提是
+   “`ctx["pack"]` / `ctx["degraded"]` 必写”与 `pack_meta(..., degraded=True, reason=...)` 的初始值，
+   合并时请保留本卡对 `status` 的取值集合 `answered` / `degraded` / `insufficient_evidence`。
+   另：087 会在 `render_markdown` 里新增 `### Suggested Next Queries` 节；本卡的 prompt 证据块只取
+   `### Code` / `### Docs` 两节，新增节**不会**被误当成证据塞进 prompt（`_split_sections` 保留未知节
+   但仅 Code/Docs 会被取用，且 TASK-087 的节渲染在 `render_markdown`，与 prompt 用的
+   `render_evidence_for_prompt` 无关）。
+2. **审计 `answerTokens` 是估算值**：本服务不引 tokenizer（无新依赖纪律），按“约 2 字符 1 token”折算，
+   只用于观察分布，不等于计费口径；若后续需要精确值，可改读 provider 响应的 `usage.completion_tokens`
+   （本卡未做：那会把“是否 reasoning 模型”的差异带进审计口径）。
+3. **`estimate_tokens` 与 `citationCoverage` 的阈值**：文档 §5/§8 只要求“先观察分布”，
+   本卡未设任何告警阈值；建议 TASK-093 拿到真实审计数据后再定。
+
+**验收命令与结果（本机实测）**
+
+```text
+uv run ruff check .                                    → All checks passed!
+uv run python scripts/check_dependency_direction.py     → 依赖方向检查通过（core 纯库 / service 不上探）
+uv run --extra dev python -m pytest -o addopts="" -q     → 844 passed, 2 skipped
+uv run --extra dev python -m pytest service/tests/test_answer.py -q → 39 passed
+cd web && npm run lint && npm test && npm run build      → lint 0 warning；41 passed, 3 skipped；构建成功
+```
+
+> 注：本机 `uv run pytest` 与 `uv run python -m pytest` 都因**当前 venv 缺 dev extra** 而报
+> `No module named pytest`；加 `--extra dev` 后正常（与卡内命令等价，仅补 dev 依赖）。
+> 基线数字对比卡内给出的 804 passed：本卡新增 39 条 + 其他已合并卡带来的增量，共 844。
+
+**行为验收（真实 LLM）**
+
+真实调用部分由**编排者/用户**执行（本会话只负责实现与自动化验收），报告模板中的
+“真实 LLM 回答全文 + citationCoverage + llmLatencyMs”与“改 env 即改模型”两次调用证明
+由用户侧补齐。实现侧已保证：模型名、base URL、超时、maxTokens、temperature**全部**来自
+`ANSWER_*`（`test_model_timeout_and_temperature_come_from_config` 断言模型名/上限/温度直接进
+请求体、超时进 `httpx.Timeout`；`test_build_provider_uses_configured_values` 断言默认值来源唯一）。
+
+**建议复核点**：① `query.py` ask 的三分支与审计交接；② `answer.py` 的 prompt 组装与回验口径；
+③ `/api/meta` 的门禁分支（未鉴权不泄露模型名/地址）；④ `metadb._migrate` 的幂等加列。

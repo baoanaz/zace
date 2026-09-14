@@ -50,6 +50,7 @@ from zace_core.engine import (
     project_id_for as engine_project_id_for,
 )
 
+from zace_service.answer import AnswerError, answer_question, provider_for_app
 from zace_service.config import Settings
 from zace_service.deps import project_not_found_message, require_ownership_of
 from zace_service.errors import (
@@ -63,6 +64,7 @@ from zace_service.packmeta import pack_meta
 from zace_service.routers.query import (
     DEFAULT_MAX_TOKENS,
     DEGRADED_NOTICE,
+    LLM_FAILED_NOTICE,
     MAX_MAX_TOKENS,
     MAX_QUERY_CHARS,
 )
@@ -197,6 +199,7 @@ def build_mcp(
     engine_manager: EngineManager | Callable[[], EngineManager],
     *,
     settings: Settings | None = None,
+    app: FastAPI | None = None,
 ) -> MCPServer:
     """装配 MCPServer + 两个工具（冻结入口：``build_mcp(engine_manager) -> MCPServer``）。
 
@@ -204,10 +207,18 @@ def build_mcp(
     可调用对象**（懒解析）：``create_app`` 不知道引擎何时建（TASK-030 的"起服务不加载模型 / 懒构造"
     纪律），因此应用侧传 ``lambda: manager_for_app(app)``，工具被调用时才真正拿管理器。
 
-    ``settings`` 只用于本地模式的懒重扫间隔（TASK-034 §C）；缺省从环境变量解析，便于单测直接
-    用冻结的一参形式。
+    ``settings`` 只用于本地模式的懒重扫间隔（TASK-034 §C）与 LLM 配置（TASK-088）；缺省从环境变量
+    解析，便于单测直接用冻结的一参形式。
+    ``app``（TASK-088）：传入时 ``ask_project`` 复用应用级 LLM provider（缓存 + 与 REST 面同一个
+    配置来源）；不传（例如直接单测本函数）时按 ``settings`` 现建一个不带缓存的 provider。
     """
-    resolved_settings = settings if settings is not None else Settings.from_env()
+    def _load_settings() -> Settings:
+        """取当前生效的配置（MCP 会话可能活很久，不吃启动那一刻的快照）。
+
+        显式传入 ``settings`` 时用它（测试与内嵌用法）；否则每次调用重读环境变量
+        （TASK-088：LLM 配置要能"改 env 即改行为"，包括运行中的进程）。
+        """
+        return settings if settings is not None else Settings.from_env()
     resolve = engine_manager if callable(engine_manager) else (lambda: engine_manager)
 
     async def search_context(
@@ -224,8 +235,9 @@ def build_mcp(
         manager = resolve()
         project_id = _project_id_for(manager, project_root)
         _require_index(manager, project_id)
+        current = _load_settings()
         return await run_in_threadpool(
-            _search_text, manager, resolved_settings, project_id, query.strip(), max_tokens
+            _search_text, manager, current, project_id, query.strip(), max_tokens
         )
 
     async def ask_project(
@@ -239,14 +251,21 @@ def build_mcp(
             int, Field(ge=1, description="answer 输出上限（token）")
         ] = DEFAULT_MAX_TOKENS,
     ) -> str:
-        """CF-06 的 ``ask_project``（Phase 2 一律走 D-26 降级包，不假装有 LLM 总结）。"""
+        """CF-06 的 ``ask_project``（Deep 模式：grounded LLM 总结；未配置/失败 → 降级包）。"""
         _require_query(question, field="question")
         _require_service_max_tokens(max_tokens)
         manager = resolve()
         project_id = _project_id_for(manager, project_root)
         _require_index(manager, project_id)
+        current = _load_settings()
         return await run_in_threadpool(
-            _ask_text, manager, resolved_settings, project_id, question.strip(), max_tokens
+            _ask_text,
+            manager,
+            current,
+            project_id,
+            question.strip(),
+            max_tokens,
+            _provider_resolver(app, current),
         )
 
     return MCPServer(
@@ -373,14 +392,28 @@ def _search_text(
     return f"{_status_line(meta)}\n\n{render_markdown(trace.pack)}"
 
 
+def _provider_resolver(
+    app: FastAPI | None, settings: Settings
+) -> Callable[[], Any]:
+    """``ask_project`` 的 provider 解析器（有 app 就复用其缓存，否则按 settings 现建）。
+
+    为什么做成零参可调用而不是直接传 provider：MCP 工具可能在**很久以后**才被调用，
+    而 provider 的构造要读届时生效的配置；延迟到调用时解析就不会用到过期的配置快照。
+    """
+    if app is not None:
+        return lambda: provider_for_app(app)
+    return lambda: build_answer_provider(settings)
+
+
 def _ask_text(
     manager: EngineManager,
     settings: Settings,
     project_id: str,
     question: str,
     max_tokens: int,
+    provider_resolver: Callable[[], Any],
 ) -> str:
-    """``ask_project`` 的正体：Phase 2 固定返回**降级包**（D-26），不假装有 LLM 总结。"""
+    """``ask_project`` 的正体：grounded LLM 总结；未配置/失败一律降级（D-26，绝不空手）。"""
     _rescan_if_due(manager, settings, project_id)
     trace = _call_engine(lambda: manager.search(project_id, question, max_tokens))
     meta = pack_meta(
@@ -391,7 +424,31 @@ def _ask_text(
         reason=DEGRADED_NOTICE,
         candidate_count=trace.candidate_count,
     )
-    return f"{DEGRADED_NOTICE}\n\n{_status_line(meta)}\n\n{render_markdown(trace.pack)}"
+    provider = provider_resolver()
+    status_line = _status_line(meta)
+    if provider is None:
+        return f"{DEGRADED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}"
+    try:
+        outcome = answer_question(
+            provider=provider, settings=settings, pack=trace.pack, question=question
+        )
+    except AnswerError as exc:
+        logger.warning(
+            "ask_project 降级（LLM %s）：%s → %s",
+            exc.kind,
+            project_id,
+            redact_text(f"{type(exc).__name__}: {exc}"),
+        )
+        return f"{LLM_FAILED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}"
+    degraded_line = _status_line({**meta, "degraded": False})
+    return f"{outcome.answer}\n\n{degraded_line}"
+
+
+def build_answer_provider(settings: Settings) -> Any:
+    """无 app 时按配置现建 provider（未配置 → ``None``）；供 MCP 单测与内嵌用法。"""
+    from zace_service.answer import build_provider
+
+    return build_provider(settings)
 
 
 def _status_line(meta: dict[str, Any]) -> str:

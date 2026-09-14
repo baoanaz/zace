@@ -5,13 +5,18 @@
 | 端点 | 语义 |
 |---|---|
 | ``POST /api/query/search`` | Fast 模式：检索 + 组装 + **服务端渲染 Markdown** |
-| ``POST /api/query/ask`` | Deep 模式：**一律 200，绝不 500**（D-26 降级 / D-24 短路） |
+| ``POST /api/query/ask`` | Deep 模式：**一律 200，绝不 500**（D-24 短路 / D-26 降级 / LLM） |
 
-``ask`` 的两条分支（TASK-087 §B）：
+``ask`` 的四条分支（TASK-087 §B + TASK-088 §C/§D），**证据优先**：
 
-- ``answerable=false`` → ``status="insufficient_evidence"``：结构化证据不足包
-  （``bestEffortContext`` / ``missingEvidence`` / ``nextQueries``，D-24，**不调 LLM**）；
-- ``answerable=true`` → ``status="degraded"``：Phase 2 降级包（接入 LLM 属 TASK-088）。
+| 情况 | ``status`` | ``answer`` |
+|---|---|---|
+| ``answerable=false`` | ``insufficient_evidence`` | 短路包（不调 LLM） |
+| 未配置 ``ANSWER_*`` | ``degraded`` | 前置说明 ＋ 渲染包 |
+| 已配置但调用失败/超时 | ``degraded`` | 故障说明 ＋ 渲染包 |
+| 成功 | ``answered`` | LLM 答案（已回验引用） |
+
+短路包含 ``bestEffortContext`` / ``missingEvidence`` / ``nextQueries`` 三个键（D-24）。
 
 薄壳纪律（D-34）：本文件不出现检索/组装/渲染逻辑——检索走 ``EngineManager.search``
 （转调 core ``search_with_trace``），渲染走 ``zace_core.contextpack.render_markdown``（D-21：
@@ -27,17 +32,17 @@
   2. 从未同步过（账本为空）→ 409 ``index_in_progress``，指引"先同步"；
   3. 有账本但索引为空（上次索引失败）→ 500 ``index_failed``，**不得**再说"请先同步"
      （用户会以为没上传过，从而陷入"同步→重试"的无限循环）；
-- ``ask`` **绝不 500**：Phase 2 没有 LLM，``Engine.ask()`` 抛 ``NotImplementedError``，
-  本实现不调用它，而是返回检索结果（D-26 诚实降级）。它分两条路（TASK-087 §B）：
-  ``pack.answerable == False`` → **不调 LLM**，直接返回 ``status="insufficient_evidence"``
-  的结构化包（``bestEffortContext`` / ``missingEvidence`` / ``nextQueries``，D-24 的
-  "有用的失败"）；``answerable == True`` → 保持 Phase 2 的 ``status="degraded"`` 降级包
-  （接入 LLM 是 TASK-088）。
+- ``ask`` **绝不 500**：四种情况各自返回可用的 200 响应（D-24 短路 + D-26 降级 + TASK-088 LLM）。
+  顺序是**证据优先**：``pack.answerable == False`` → **不调 LLM**，直接返回
+  ``status="insufficient_evidence"`` 的结构化包（``bestEffortContext`` / ``missingEvidence`` /
+  ``nextQueries``，D-24 的"有用的失败"）；否则未配置 LLM → 降级包；调用失败/超时 → 降级包；
+  成功 → ``status="answered"``（Module/04 §3/§6）。
 
 查询审计（TASK-084，旁路）：两个端点各自被 :func:`_audited` 包住，把本次查询落进
 ``query_audit``（``fast`` / ``deep``）。三条纪律：**记账失败不得让检索失败**、
 **不存源码内容**、**query 文本与失败摘要先脱敏再落库**——实现集中在
-``zace_service.audit``，本文件只负责"把真实值交出去"。
+``zace_service.audit``，本文件只负责"把真实值交出去"。TASK-088 §E 追加三个 LLM 观测值
+（``llmLatencyMs`` / ``answerTokens`` / ``citationCoverage``），未走 LLM 时一律 ``None``。
 """
 
 from __future__ import annotations
@@ -45,14 +50,17 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from zace_core.contextpack import render_markdown
 from zace_core.types import ContextPack
 
 from zace_service import audit
+from zace_service.answer import AnswerError, answer_question, provider_for_app
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import (
     CODE_EMBEDDING_UNAVAILABLE,
@@ -75,8 +83,17 @@ DEFAULT_MAX_TOKENS = 10_000
 MAX_MAX_TOKENS = 20_000
 
 #: ``ask`` 的降级说明（D-26 要求写清"为什么不是答案"与"包可以直接用"）。
+#:
+#: TASK-088 起 LLM 已接入，旧文案（"Phase 3 尚未接入"）会成为假话，因此拆成两条**按原因**的
+#: 诚实说明：未配置（管理员该做什么）与调用失败（模型暂时不可用）。两条都保留"包可直接用"。
 DEGRADED_NOTICE = (
-    "Deep 模式（LLM 总结）尚未接入（Phase 3）；以下为检索与组装结果，可直接作为上下文使用。"
+    "未配置总结模型（ANSWER_BASE_URL / ANSWER_API_KEY / ANSWER_MODEL）：管理员配置后重试。"
+    "以下为检索与组装结果，可直接作为上下文使用。"
+)
+#: 已配置但调用失败（超时/网络/5xx/密钥无效/响应形状不对）时的前置说明（Module/04 §6）。
+LLM_FAILED_NOTICE = (
+    "总结模型暂时不可用（已重试）；以下为检索与组装结果（含 Missing Evidence），"
+    "可直接作为上下文使用。"
 )
 
 #: ``ask`` 的**证据不足**说明（D-24 短路，TASK-087 §B）。
@@ -142,8 +159,21 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
 
 
 @router.post("/api/query/ask")
-def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
-    """Deep 模式：**绝不 500**。证据不足 → D-24 短路包；否则 Phase 2 降级包（D-26）。"""
+async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
+    """Deep 模式：LLM grounded 总结；未配置/失败/证据不足各自**不报错也不 500**。
+
+    分支顺序（Module/04 §3/§6；**证据优先**：弱证据上不调 LLM）：
+
+    | 情况 | status | answer |
+    |---|---|---|
+    | ``answerable=false`` | ``insufficient_evidence`` | 短路包（TASK-087，不调 LLM） |
+    | 未配置 ``ANSWER_*`` | ``degraded`` | 前置说明 ＋ 渲染包 |
+    | 已配置但调用失败/超时 | ``degraded`` | 故障说明 ＋ 渲染包 |
+    | 成功 | ``answered`` | LLM 答案（已回验引用） |
+
+    为什么是 ``async def``（TASK-088）：LLM 调用是**秒级阻塞 I/O**，与 core 的 CPU 型检索不同；
+    把两次外呼（检索 / LLM）都放进线程池，事件循环不因一次 ask 而卡住。
+    """
     manager = get_engine_manager(request)
     with _audited(request, mode=audit.MODE_ASK, query=payload.question) as ctx:
         project_id = require_project_id(request, payload.projectId)
@@ -153,8 +183,10 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
 
         with _timed() as elapsed:
             ctx["elapsed"] = elapsed
-            rescan = _rescan_before_query(manager, request, project_id)
-            trace = manager.search(project_id, question, DEFAULT_MAX_TOKENS)
+            rescan = await run_in_threadpool(_rescan_before_query, manager, request, project_id)
+            trace = await run_in_threadpool(
+                manager.search, project_id, question, DEFAULT_MAX_TOKENS
+            )
         pack = trace.pack
         # 两条路都如实记 ``degraded=True``（都不含 LLM 总结），但"为什么"不同：
         # 证据不足是 D-24，无 LLM 是 D-26。审计的 answerable 由 pack.answerable 出（TASK-084）。
@@ -170,15 +202,51 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         )
         meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
         ctx["pack"] = pack
-        # ``ask`` 恒为降级包（D-26 / D-24）：审计如实记 degraded=true。
-        ctx["degraded"] = True
+        # D-24 优先：证据不足时**不调 LLM**（省一次调用，也避免模型在弱证据上硬编）。
+        # 审计如实记 degraded=true（本路径不含 LLM 总结）。
         if insufficient:
-            # D-24：证据不足时**不调 LLM**（省一次调用，也避免模型在弱证据上硬编）。
-            # 这是 TASK-087 §B 的**唯一**分支；answerable=true 仍走下面的降级包（TASK-088 接 LLM）。
+            ctx["degraded"] = True
             return _insufficient_package(pack, meta)
+
+        provider = provider_for_app(request.app)
+        if provider is None:
+            # L5：未配置不报错（也不是 500）——降级包 + 告诉管理员该配什么。
+            ctx["degraded"] = True
+            return _degraded_response(
+                pack, meta, notice=DEGRADED_NOTICE, reason=DEGRADED_NOTICE
+            )
+
+        try:
+            outcome = await run_in_threadpool(
+                answer_question,
+                provider=provider,
+                settings=get_settings(request),
+                pack=pack,
+                question=question,
+            )
+        except AnswerError as exc:
+            # D-26 故障矩阵：超时/API 错误/密钥无效/形状不对 → 都是降级包，永不 500。
+            # 注意：**不向调用方回显 provider 原始报错**（可能含 endpoint/内部细节），
+            # 只记脱敏后的日志；用户侧看到的是同一句可操作说明。
+            logger.warning(
+                "ask 降级（LLM %s）：%s → %s",
+                exc.kind,
+                project_id,
+                redact_text(f"{type(exc).__name__}: {exc}"),
+            )
+            ctx["degraded"] = True
+            meta["degradedReason"] = LLM_FAILED_NOTICE
+            return _degraded_response(
+                pack, meta, notice=LLM_FAILED_NOTICE, reason=LLM_FAILED_NOTICE
+            )
+
+        ctx["degraded"] = False
+        meta["degraded"] = False
+        meta["degradedReason"] = None
+        _write_llm_observations(ctx, provider, outcome)
         return {
-            "status": "degraded",
-            "answer": f"{DEGRADED_NOTICE}\n\n{render_markdown(pack)}",
+            "status": "answered",
+            "answer": outcome.answer,
             "evidenceSummary": evidence_summary(pack),
             "meta": meta,
         }
@@ -206,11 +274,37 @@ def _insufficient_package(pack: ContextPack, meta: dict[str, Any]) -> dict[str, 
     }
 
 
+def _degraded_response(
+    pack: Any, meta: dict[str, Any], *, notice: str, reason: str
+) -> dict[str, Any]:
+    """D-26 降级包（未配置与调用失败共用；Promise.all 式复用避免两处文案漂移）。"""
+    meta["degraded"] = True
+    meta["degradedReason"] = reason
+    return {
+        "status": "degraded",
+        "answer": f"{notice}\n\n{render_markdown(pack)}",
+        "evidenceSummary": evidence_summary(pack),
+        "meta": meta,
+    }
+
+
+def _write_llm_observations(ctx: _AuditContext, provider: Any, outcome: Any) -> None:
+    """把 §E 的三个观测值交回审计（**真实值**，不编造）。"""
+    ctx["citationCoverage"] = outcome.citation_coverage
+    ctx["llmLatencyMs"] = outcome.latency_ms
+    ctx["answerTokens"] = outcome.answer_tokens
+    ctx["answerModel"] = getattr(provider, "model", None)
+
+
 # --------------------------------------------------------------------------- 查询审计（TASK-084）
 
 
 class _AuditContext(dict[str, Any]):
     """一次请求的审计暂存（handler 把真实值写进来，退出时由 :func:`_audited` 落库）。"""
+
+
+#: 当前请求的审计上下文（同步路径用它；async 路径见 :func:`_audited` 的跨线程交接）。
+_ACTIVE: ContextVar[_AuditContext | None] = ContextVar("zace_query_audit_ctx", default=None)
 
 
 @contextmanager
@@ -226,9 +320,17 @@ def _audited(request: Request, *, mode: str, query: str) -> Iterator[_AuditConte
 
     落库失败（``db`` 为 ``None``，或 ``db.record_query`` 抛异常）由 ``audit`` 模块内部吞掉，
     只有 **未预期的异常**（代码缺陷）会重新抛出——那本来就会变成 500，行为不变。
+
+    跨线程池的上下文交接（TASK-088）：``ask`` 是 async handler，而本服务的
+    ``@app.middleware("http")`` 是 **BaseHTTPMiddleware**，它把每个请求丢进 AnyIO 线程池执行——
+    ``contextvars`` 在**不同线程**里是分开的，于是 ``run_in_threadpool`` 里建的上下文不会回到外层。
+    因此除 ``contextvars`` 外，还额外把 ``ctx`` 存到 ``request.state``（对象共享，与线程无关），
+    退出时按**身份比较**取回。
     """
     ctx = _AuditContext()
     ctx["started"] = time.perf_counter()
+    token = _ACTIVE.set(ctx)
+    request.state.zace_audit_ctx = ctx
     try:
         yield ctx
     except ApiError as exc:
@@ -253,8 +355,22 @@ def _audited(request: Request, *, mode: str, query: str) -> Iterator[_AuditConte
             pack=pack,
             **_elapsed_kwargs(ctx),
             degraded=bool(ctx.get("degraded", False)),
+            answerable=ctx.get("answerable"),
+            confidence=ctx.get("confidence"),
+            citation_coverage=ctx.get("citationCoverage"),
+            llm_latency_ms=ctx.get("llmLatencyMs"),
+            answer_tokens=ctx.get("answerTokens"),
             user_id=_user_id(request),
         )
+    finally:
+        # 同步 handler 在同线程执行，此时 ctx 已在上面落库完毕；async handler 的跨线程副本
+        # 在这里取回（身份比较，避免误取别的请求的上下文）。
+        shared = getattr(request.state, "zace_audit_ctx", None)
+        if isinstance(shared, _AuditContext) and shared is not ctx:
+            for key, value in shared.items():
+                ctx.setdefault(key, value)
+        request.state.zace_audit_ctx = None
+        _ACTIVE.reset(token)
 
 
 @contextmanager
@@ -452,6 +568,7 @@ __all__ = [
     "AskRequest",
     "DEGRADED_NOTICE",
     "DEFAULT_MAX_TOKENS",
+    "LLM_FAILED_NOTICE",
     "MAX_MAX_TOKENS",
     "MAX_QUERY_CHARS",
     "SearchRequest",

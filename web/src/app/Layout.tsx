@@ -7,7 +7,8 @@ import { type Account, logout } from "../api/client";
 /**
  * 大页面导航（用户 2026-09-13 指定的信息架构，2026-09-14 TASK-086 §1 定序）。
  *
- * 顺序即用户要求的展示顺序：控制台 → 接入指南 → API Key → 历史记录。
+ * 顺序即用户要求的展示顺序：控制台 → 接入指南 → API Key → 历史记录 → 设置
+ * （TASK-088 §F 把设置页加在**最后一位**）。
  * **`to` 是路由契约**（外部链接与文档都指向它），本卡只改顺序与 label。
  */
 const NAV = [
@@ -15,6 +16,7 @@ const NAV = [
   { to: "/connect", label: "接入指南", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
+  { to: "/settings", label: "设置", end: false },
 ];
 
 export function Layout({
