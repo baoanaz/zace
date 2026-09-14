@@ -114,7 +114,7 @@
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
 | [TASK-087](TASK-087-ContextPack渲染补齐.md) | **ContextPack 渲染补齐**：`next_queries` 渲染进正文 + `answerable=false` 短路为结构化降级包（D-24） | 无 | `core/zace_core/contextpack/render.py`、`service/routers/query.py`(ask 分支) | pending |
-| [TASK-088](TASK-088-LLM总结接入.md) | **ask_project 接入 LLM 总结**（可配置 `ANSWER_*` + Grounded Prompt 七条 + Citation 回验 + 设置页展示） | 无 | `service/zace_service/{answer,config}.py`、`routers/{query,ops}.py`、`web/src/pages/SettingsPage.tsx` | pending |
+| [TASK-088](TASK-088-LLM总结接入.md) | **ask_project 接入 LLM 总结**（可配置 `ANSWER_*` + Grounded Prompt 七条 + Citation 回验 + 设置页展示） | 无 | `service/zace_service/{answer,config}.py`、`routers/{query,ops}.py`、`web/src/pages/SettingsPage.tsx` | **review**（2026-09-14；真实 LLM 调用验收由用户补） |
 
 ### Phase 5 — 上线与质量（2026-09-14 开卡，用户拍板）
 

@@ -97,13 +97,15 @@ describe.skipIf(!enabled)("端到端：账户console（真实服务）", () => {
       }
       // "平均耗时"在索引与用量两个面板各有一个（口径不同），因此按数量断言。
       expect(screen.getAllByText("平均耗时")).toHaveLength(2);
-      // 导航包含全部大页面，且顺序为 控制台 → 接入指南 → API Key → 历史记录（TASK-086 §1）。
+      // 导航包含全部大页面，顺序为 控制台 → 接入指南 → API Key → 历史记录 → 设置
+      // （前四项由 TASK-086 §1 定序；设置由 TASK-088 §F 加在最后一位）。
       const nav = screen.getByRole("navigation");
       expect([...nav.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
         "控制台",
         "接入指南",
         "API Key",
         "历史记录",
+        "设置",
       ]);
     } finally {
       restore();

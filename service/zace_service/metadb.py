@@ -110,11 +110,26 @@ CREATE TABLE IF NOT EXISTS query_audit (
   docs_count        INTEGER NOT NULL DEFAULT 0,
   used_tokens       INTEGER NOT NULL DEFAULT 0,
   citation_coverage REAL,
+  llm_latency_ms    INTEGER,
+  answer_tokens     INTEGER,
   evidence_json     TEXT NOT NULL DEFAULT '[]',
   created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_project ON query_audit(project_id, created_at DESC);
 """
+
+#: ``query_audit`` 的**增量列**（TASK-088 §E）：``(列名, 列类型)``。
+#:
+#: 为什么要迁移而不是只改 DDL：TASK-084 已经在用户机上建好了表，而 ``CREATE TABLE IF NOT
+#: EXISTS`` 对**既有库**毫无作用（表已存在）。本模块原先没有 ALTER 先例，因此这里建一条最小
+#: 安全路径：``PRAGMA table_info`` 检查后再 ``ALTER TABLE ADD COLUMN``——可重复执行、
+#: **只加列不改列**；新列全部可空，旧行留 ``NULL``（"没测过"就是 ``NULL``，不编造 0）。
+_AUDIT_COLUMNS: tuple[tuple[str, str], ...] = (
+    #: LLM 调用耗时（毫秒）；未接 LLM 的降级路径为 NULL。
+    ("llm_latency_ms", "INTEGER"),
+    #: 答案 token 估算；降级路径为 NULL。
+    ("answer_tokens", "INTEGER"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +218,8 @@ class QueryAuditRecord:
     docs_count: int
     used_tokens: int
     citation_coverage: float | None
+    llm_latency_ms: int | None
+    answer_tokens: int | None
     created_at: int
 
     def to_json(self) -> dict[str, Any]:
@@ -219,6 +236,9 @@ class QueryAuditRecord:
             "docsCount": self.docs_count,
             "usedTokens": self.used_tokens,
             "citationCoverage": self.citation_coverage,
+            # TASK-088 §E：LLM 耗时与答案 token（未走 LLM 的请求为 None，"没测过"不是 0）。
+            "llmLatencyMs": self.llm_latency_ms,
+            "answerTokens": self.answer_tokens,
             "createdAt": self.created_at,
         }
 
@@ -288,6 +308,7 @@ class MetaDB:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
                 conn.executescript(_SCHEMA)
+                _migrate(conn)
             self._initialized = True
 
     def _connect(self) -> sqlite3.Connection:
@@ -661,6 +682,8 @@ class MetaDB:
         docs_count: int = 0,
         used_tokens: int = 0,
         citation_coverage: float | None = None,
+        llm_latency_ms: int | None = None,
+        answer_tokens: int | None = None,
         evidence: Sequence[Mapping[str, Any]] = (),
         user_id: str | None = None,
         now: int | None = None,
@@ -676,8 +699,8 @@ class MetaDB:
             cursor = conn.execute(
                 "INSERT INTO query_audit (project_id, user_id, mode, query, answerable,"
                 " confidence, degraded, latency_ms, evidence_count, docs_count, used_tokens,"
-                " citation_coverage, evidence_json, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " citation_coverage, llm_latency_ms, answer_tokens, evidence_json, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     project_id,
                     user_id,
@@ -691,6 +714,8 @@ class MetaDB:
                     int(docs_count),
                     int(used_tokens),
                     citation_coverage,
+                    llm_latency_ms,
+                    answer_tokens,
                     json.dumps([dict(item) for item in evidence], ensure_ascii=False),
                     created,
                 ),
@@ -771,6 +796,21 @@ def _percentile(sorted_values: Sequence[int], ratio: float) -> int | None:
     return int(sorted_values[index])
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """幂等增量迁移（TASK-088 §E 引入本模块的第一条 ALTER 路径）。
+
+    纪律：
+
+    - **只加列**（``ADD COLUMN``），不改名/不改类型/不删列——旧版本代码仍能读写同一张表；
+    - 每条语句前用 ``PRAGMA table_info`` 判存在性，因此重复打开同一库不会报错；
+    - 失败向上抛（schema 不完整时要及早暴露，而不是让审计静默写不进去）。
+    """
+    existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(query_audit)")}
+    for name, sql_type in _AUDIT_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE query_audit ADD COLUMN {name} {sql_type}")
+
+
 def _user(row: sqlite3.Row) -> User:
     return User(
         id=str(row["id"]),
@@ -810,5 +850,7 @@ def _audit_record(row: sqlite3.Row) -> QueryAuditRecord:
         docs_count=int(row["docs_count"]),
         used_tokens=int(row["used_tokens"]),
         citation_coverage=row["citation_coverage"],
+        llm_latency_ms=row["llm_latency_ms"],
+        answer_tokens=row["answer_tokens"],
         created_at=int(row["created_at"]),
     )

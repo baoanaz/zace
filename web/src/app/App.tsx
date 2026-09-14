@@ -24,6 +24,7 @@ import { ConnectPage } from "../pages/ConnectPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { LoginPage } from "../pages/LoginPage";
+import { SettingsPage } from "../pages/SettingsPage";
 import { Layout } from "./Layout";
 
 type AuthState =
@@ -132,7 +133,7 @@ function buildRouter(options: {
         { path: "register", element: <Navigate to="/login" replace /> },
         { path: "tokens", element: <Navigate to="/keys" replace /> },
         { path: "usage", element: <Navigate to="/history" replace /> },
-        { path: "settings", element: <Navigate to="/" replace /> },
+        { path: "settings", element: <Guard><SettingsPage /></Guard> },
         { path: "login", element: <Navigate to={needsBootstrap ? "/login" : "/"} replace /> },
         { path: "*", element: <Navigate to={account === null ? "/login" : "/"} replace /> },
       ],

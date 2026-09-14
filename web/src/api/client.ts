@@ -188,6 +188,43 @@ export interface DeploymentMeta {
   registerOpen: boolean;
   needsBootstrap: boolean;
   userCount: number | null;
+  /** TASK-088 §F：设置页的只读配置（**绝不含 key 任何部分**）。 */
+  config: EffectiveConfig;
+}
+
+/**
+ * 生效中的服务配置（设置页展示）。
+ *
+ * 两种详细度（服务端按"本地模式或已登录"门禁）：未鉴权时只有 `configured` / `missingEnv` / `mode`，
+ * 模型名与地址等属内部拓扑，登录后才给；`apiKeyConfigured` 永远是布尔（连长度都不给）。
+ */
+export interface EffectiveConfig {
+  embedding: EmbeddingConfigView;
+  llm: LlmConfigView;
+}
+
+export interface EmbeddingConfigView {
+  mode?: string;
+  configured?: boolean;
+  missingEnv?: string[];
+  model?: string | null;
+  provider?: string | null;
+  baseUrl?: string | null;
+  dim?: number | null;
+  maxInputTokens?: number | null;
+  offline?: boolean;
+  error?: string;
+}
+
+export interface LlmConfigView {
+  configured: boolean;
+  apiKeyConfigured: boolean;
+  missingEnv: string[];
+  model?: string | null;
+  baseUrl?: string | null;
+  timeoutS?: number;
+  maxTokens?: number;
+  temperature?: number;
 }
 
 /** 当前身份（`GET /api/auth/me`）。 */

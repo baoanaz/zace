@@ -339,7 +339,11 @@ def test_search_context_uses_doc_evidence_too(mcp_env: SimpleNamespace) -> None:
 
 
 def test_ask_project_is_explicitly_degraded(mcp_env: SimpleNamespace) -> None:
-    """``ask_project``：Phase 2 必须写明"Deep 模式未接入"，不得让 agent 误以为是 LLM 总结。"""
+    """``ask_project`` **未配置 LLM**：如实写明原因，不得让 agent 误以为拿到了总结。
+
+    TASK-088 起：配置了 ``ANSWER_*`` 就走真 LLM；未配置时降级包必须说清"未配置"与
+    "缺哪个环境变量"（旧文案"Phase 3 尚未接入"在接入后就成了假话，已改）。
+    """
     session_id = _connected(mcp_env.client)
     result = _call_tool(
         mcp_env.client,
@@ -350,8 +354,44 @@ def test_ask_project_is_explicitly_degraded(mcp_env: SimpleNamespace) -> None:
 
     assert result.get("isError") is not True, _text(result)
     text = _text(result)
-    assert text.startswith("Deep 模式（LLM 总结）尚未接入（Phase 3）")
+    assert text.startswith("未配置总结模型")
+    assert "ANSWER_BASE_URL" in text, "要告诉管理员缺什么，不要只说没有"
     assert "## Relevant Context" in text
+    assert "[zace] answerable=true" in text, "降级包仍带状态行（TASK-032 的既有口径）"
+
+
+def test_ask_project_returns_llm_answer_when_configured(mcp_env: SimpleNamespace) -> None:
+    """配置了 provider 时，``ask_project`` 返回 **LLM 答案**（不再是降级包）。"""
+    class _FakeProvider:
+        model = "fake-model"
+
+        def complete(self, *, system: str, user: str, max_tokens: int, temperature: float) -> str:
+            assert "<evidence>" in user, "证据必须进 prompt（Module/04 §4）"
+            return "## Answer\n刷新由 refresh_token 负责 [E1]。\n"
+
+    mcp_env.app.state.settings = Settings(
+        data_root=mcp_env.app.state.settings.data_root,
+        local_mode=True,
+        local_rescan_interval_s=0.0,
+        answer_base_url="http://llm.invalid/v1",
+        answer_api_key="zace_fake",
+        answer_model="fake-model",
+    )
+    mcp_env.app.state.answer_provider = _FakeProvider()
+    mcp_env.app.state.answer_provider_settings = mcp_env.app.state.settings
+
+    session_id = _connected(mcp_env.client)
+    result = _call_tool(
+        mcp_env.client,
+        session_id,
+        ASK_TOOL,
+        {"question": TARGET_QUERY, "project_root": mcp_env.project_root},
+    )
+
+    text = _text(result)
+    assert result.get("isError") is not True, text
+    assert text.startswith("## Answer"), "有 LLM 时首个内容就是答案"
+    assert "degraded=false" in text, "状态行如实报不再降级"
 
 
 # --------------------------------------------------------------------------- 并发与新鲜度

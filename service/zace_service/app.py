@@ -128,7 +128,7 @@ def _install_mcp(app: FastAPI, settings: Settings) -> None:
     直接设 ``router.lifespan_context``；将来若有了别的 lifespan，改到 :func:`session_lifespan`
     里嵌套组合。
     """
-    server = build_mcp(lambda: manager_for_app(app), settings=settings)
+    server = build_mcp(lambda: manager_for_app(app), settings=settings, app=app)
     mount(app, server)
     app.router.lifespan_context = session_lifespan(server)
 

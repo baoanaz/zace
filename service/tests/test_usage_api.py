@@ -202,16 +202,23 @@ def test_insufficient_evidence_is_counted_separately(usage: SimpleNamespace) -> 
 
 
 def test_ask_records_deep_mode_with_null_citation_coverage(usage: SimpleNamespace) -> None:
-    """``ask`` 落 ``mode="deep"``、``degraded=true``，且 ``citationCoverage`` 是 ``null``。"""
+    """**未配置 LLM** 的 ``ask``：``mode="deep"``、``degraded=true``、``citationCoverage=null``。
+
+    TASK-088 起：配置了 ``ANSWER_*`` 才会走 LLM（那时三项观测值才有数）；本用例构造的应用
+    没有 LLM 配置，因此 ``citationCoverage`` / ``llmLatencyMs`` / ``answerTokens`` 均为 ``null``
+    ——"没测过"不许填 0 冒充（TASK-064 §A）。
+    """
     _ask(usage, ANSWERABLE_QUERY)
 
     summary = _summary(usage)
     assert summary["total"] == 1
-    assert summary["citationCoverageAvg"] is None, "Phase 3 之前恒为 null（不许填 0 冒充）"
+    assert summary["citationCoverageAvg"] is None, "没走 LLM 时恒为 null（不许填 0 冒充）"
     record = summary["recent"][0]
     assert record["mode"] == audit.MODE_ASK == "deep"
-    assert record["degraded"] is True, "Phase 2 的 ask 走 D-26 降级包，如实记 degraded"
+    assert record["degraded"] is True, "未配置 LLM → D-26 降级包，如实记 degraded"
     assert record["answerable"] is True, "降级的是\"没有 LLM 总结\"，检索本身仍有答案"
+    assert record["llmLatencyMs"] is None, "TASK-088 §E：未调 LLM 就没有耗时"
+    assert record["answerTokens"] is None
 
 
 # --------------------------------------------------------------------------- 失败路径

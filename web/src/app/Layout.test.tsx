@@ -1,8 +1,9 @@
 /**
- * 应用外壳导航（TASK-086 §1）。
+ * 应用外壳导航（TASK-086 §1；TASK-088 §F 追加“设置”）。
  *
  * 守两件事（本卡真正会退化、且用户直接看得见的地方）：
- * 1. **导航顺序 = 控制台 → 接入指南 → API Key → 历史记录**（用户 2026-09-14 要求）；
+ * 1. **导航顺序 = 控制台 → 接入指南 → API Key → 历史记录 → 设置**（设置由 TASK-088 §F
+ *    加在最后一位；前四项的顺序与文案由 TASK-086 定下，不得因新增而变动）；
  * 2. **`to` 是路由契约**——顺序变了，路径一个都不能变（外部链接与文档都指向它们）。
  *
  * 另外顺手钉住 §4 的一个易破点：header 必须保持 `bg-white` 实心，
@@ -35,8 +36,8 @@ function navLinkClass(label: string): string {
   return link.className;
 }
 
-describe("主导航（TASK-086 §1）", () => {
-  it("顺序为 控制台 → 接入指南 → API Key → 历史记录", () => {
+describe("主导航（TASK-086 §1 / TASK-088 §F）", () => {
+  it("顺序为 控制台 → 接入指南 → API Key → 历史记录 → 设置", () => {
     renderLayout();
 
     expect([...navLinks()].map((link) => link.textContent)).toEqual([
@@ -44,10 +45,11 @@ describe("主导航（TASK-086 §1）", () => {
       "接入指南",
       "API Key",
       "历史记录",
+      "设置",
     ]);
   });
 
-  it("顺序变了但路由路径一个都没变", () => {
+  it("新增设置项后排在最末位，且既有四项的路径一个都没变", () => {
     renderLayout();
 
     expect([...navLinks()].map((link) => link.getAttribute("href"))).toEqual([
@@ -55,6 +57,7 @@ describe("主导航（TASK-086 §1）", () => {
       "/connect",
       "/keys",
       "/history",
+      "/settings",
     ]);
   });
 
