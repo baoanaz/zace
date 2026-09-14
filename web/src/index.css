@@ -3,33 +3,94 @@
 @tailwind utilities;
 
 /*
- * 全局背景纹理（TASK-086 §4）：浅蓝灰底 + 淡网格。
+ * 全局主题与背景纹理（TASK-098 §A-1 / §A-3）。
  *
- * 为什么用 CSS 渐变而不是图片：不引入图片资源与依赖，且网格随主题色一起可调
- * （一条 `background-size` 控制间距，两条 `linear-gradient` 控制线色）。
- * 线色 token 见 tailwind.config.js 的 `colors.grid`（`grid-line` = 线色）。
+ * 主题从 TASK-086 的「浅蓝灰 + 网格」换成用户指定的**复古博物画 / 老纸**：
+ * 米黄牛皮纸底 + 深墨文字 + 朱砂强调，纹理用**斑驳旧纸感**（用户拍板）。
+ * 所有色值走 tailwind.config.js 的 token（paper / ink / accent），这里不写裸色值。
+ *
+ * 旧的 `grid` token（base / line）已被 `paper` 取代：网格是"工程感"，与老纸气质冲突，
+ * 故随本卡移除（旧 `colors.grid` 在仓库内无其他引用，迁移不影响别处）。
+ */
+
+/*
+ * ---------------------------------------------------------------------------
+ * 纹理参数（集中在这里，调参只改这一块）
+ * ---------------------------------------------------------------------------
+ * 手法：**多处极淡 radial-gradient 叠加**（斑驳褪色痕），不使用图片资源。
+ *
+ * - 斑点 14 处，圆半径 300-820px，坐标（%）互相错开 → 无规律感；
+ * - 斑点色：`--zace-stain`（暗棕，模拟纸张氧化/褪色）与 `--zace-bleach`（提亮，
+ *   模拟受光面泛白），单层 alpha 0.012-0.030，与卡片透明度同一量级（§A-3 要求）；
+ * - 叠加后最大偏移量远小于正文与底色的对比度余量（正文 12.2:1，见报告）；
+ * - `background-attachment: fixed`：滚动时纹理不跟着跑，整页像"一张纸";
+ * - 另叠一层**极淡大间距斜线**（120px 间距、alpha 0.012）做纸张纤维感，
+ *   间距刻意取大以避开高 DPI 屏的摩尔纹/色带（§A-3 的 banding 提醒）。
  *
  * 层次约定（不要互相覆盖）：
- * - `body` 铺底色与网格（**全局**：登录页、加载态也在这个底上）；
- * - 卡片/header 保持 `bg-white` 实心浮在网格之上——有对比才有层次。
+ * - `body` 铺底色与纹理（**全局**：登录页、加载态也在同一张纸上）；
+ * - 卡片保持 `bg-white` 实心浮在纸面之上——有对比才有层次（TASK-086 §4 的结论不变）。
  */
 @layer base {
+  :root {
+    /* 斑驳痕：暗棕（旧纸氧化处） */
+    --zace-stain: 92 70 38;
+    /* 泛白处：受光/摩擦变浅 */
+    --zace-bleach: 255 250 236;
+  }
+
   body {
     font-family:
       ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
       "PingFang SC", "Microsoft YaHei", sans-serif;
 
-    /* 底色：浅蓝灰（slate-100 偏蓝，不是纯白）。 */
-    background-color: theme("colors.grid.base");
+    /* 底色：米黄牛皮纸（token: paper.base = #f3e4c7）。 */
+    background-color: theme("colors.paper.base");
 
-    /*
-     * 网格：两条 1px 渐变线（横 / 纵）画在底色上。
-     * `background-size` 决定间距（24px）；线色透明度控制在 0.5 以下，
-     * 保证小屏与高 DPI 下也不出现可见噪点。
-     */
     background-image:
-      linear-gradient(to right, theme("colors.grid.line") 1px, transparent 1px),
-      linear-gradient(to bottom, theme("colors.grid.line") 1px, transparent 1px);
-    background-size: 24px 24px;
+      /* --- 斑驳褪色痕（暗）：14 处，圆半径 300-820px --- */
+      radial-gradient(circle 680px at 12% 18%, rgb(var(--zace-stain) / 0.022), transparent 100%),
+      radial-gradient(circle 520px at 78% 8%, rgb(var(--zace-stain) / 0.014), transparent 100%),
+      radial-gradient(circle 820px at 46% 34%, rgb(var(--zace-stain) / 0.016), transparent 100%),
+      radial-gradient(circle 380px at 88% 46%, rgb(var(--zace-stain) / 0.024), transparent 100%),
+      radial-gradient(circle 620px at 22% 62%, rgb(var(--zace-stain) / 0.018), transparent 100%),
+      radial-gradient(circle 460px at 64% 74%, rgb(var(--zace-stain) / 0.020), transparent 100%),
+      radial-gradient(circle 740px at 6% 88%, rgb(var(--zace-stain) / 0.015), transparent 100%),
+      radial-gradient(circle 300px at 92% 84%, rgb(var(--zace-stain) / 0.026), transparent 100%),
+      /* --- 泛白受光面（亮）：与暗斑交错 --- */
+      radial-gradient(circle 560px at 34% 6%, rgb(var(--zace-bleach) / 0.030), transparent 100%),
+      radial-gradient(circle 700px at 96% 26%, rgb(var(--zace-bleach) / 0.022), transparent 100%),
+      radial-gradient(circle 420px at 8% 42%, rgb(var(--zace-bleach) / 0.026), transparent 100%),
+      radial-gradient(circle 800px at 52% 58%, rgb(var(--zace-bleach) / 0.018), transparent 100%),
+      radial-gradient(circle 340px at 74% 92%, rgb(var(--zace-bleach) / 0.028), transparent 100%),
+      radial-gradient(circle 600px at 40% 96%, rgb(var(--zace-stain) / 0.013), transparent 100%),
+      /* --- 纸张纤维：大间距斜线（alpha 0.012，间距 120px 避开摩尔纹） --- */
+      repeating-linear-gradient(
+        118deg,
+        rgb(var(--zace-stain) / 0.012) 0px,
+        rgb(var(--zace-stain) / 0.012) 1px,
+        transparent 1px,
+        transparent 120px
+      );
+
+    /* 滚动时纹理固定在视口：整页读起来是"一张纸"而不是"跟着跑的背景"。 */
+    background-attachment: fixed;
+  }
+
+  /*
+   * 标题用衬线（§A-2）：复古博物画气质主要由此而来。
+   * 放在 base 层而不是逐页改 className——页面只改配色，不动结构（§D 的约束）。
+   * 正文仍是 sans（中文可读性优先），代码仍是 mono。
+   */
+  h1,
+  h2,
+  h3 {
+    font-family: theme("fontFamily.serif");
+    letter-spacing: 0.005em;
+  }
+
+  /* 选中态用朱砂色，与 accent token 同源。 */
+  ::selection {
+    background-color: theme("colors.accent.seal / 22%");
   }
 }

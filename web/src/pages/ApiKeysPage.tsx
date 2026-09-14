@@ -71,7 +71,7 @@ export function ApiKeysPage() {
     <div className="space-y-5">
       <div>
         <h1 className="text-lg font-semibold">API Key</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 text-sm text-ink-muted">
           供编辑器 / CLI / 客户端使用。明文只在创建时显示一次。
         </p>
       </div>
@@ -87,7 +87,7 @@ export function ApiKeysPage() {
             这是**唯一一次**能看到完整 Key 的机会，请立即复制到客户端配置里。
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="flex-1 break-all rounded bg-white px-2 py-1 font-mono text-xs">
+            <code className="flex-1 break-all rounded border border-ink-line bg-paper-card px-2 py-1 font-mono text-xs text-ink-primary">
               {created.token}
             </code>
             <CopyButton text={created.token} label="复制 Key" />
@@ -104,29 +104,29 @@ export function ApiKeysPage() {
 
       <form
         onSubmit={onCreate}
-        className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+        className="flex flex-wrap items-end gap-2 rounded-lg border border-ink-line bg-paper-card p-4 shadow-sm"
       >
         <label className="flex-1 text-sm">
-          <span className="mb-1 block text-xs text-slate-500">名称（便于分辨用途）</span>
+          <span className="mb-1 block text-xs text-ink-muted">名称（便于分辨用途）</span>
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="例如：家里的 Cursor"
-            className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+            className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 text-sm text-ink-primary"
           />
         </label>
         <button
           type="submit"
           disabled={busy}
-          className="rounded bg-slate-900 px-4 py-1.5 text-sm text-white disabled:opacity-40"
+          className="rounded bg-accent-seal px-4 py-1.5 text-sm text-white disabled:opacity-40"
         >
           {busy ? "创建中…" : "创建 Key"}
         </button>
       </form>
 
-      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-        <header className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-800">现有的 Key</h2>
+      <section className="rounded-lg border border-ink-line bg-paper-card shadow-sm">
+        <header className="border-b border-ink-line/70 px-4 py-3">
+          <h2 className="text-sm font-semibold text-ink-primary">现有的 Key</h2>
         </header>
         {keys === null ? (
           <LoadingBlock />
@@ -138,7 +138,7 @@ export function ApiKeysPage() {
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-500">
+              <tr className="text-left text-xs text-ink-muted">
                 <th className="px-4 py-2 font-normal">名称</th>
                 <th className="px-4 py-2 font-normal">前缀</th>
                 <th className="px-4 py-2 font-normal">创建时间</th>
@@ -148,11 +148,11 @@ export function ApiKeysPage() {
             </thead>
             <tbody>
               {keys.map((key) => (
-                <tr key={key.id} className="border-t border-slate-100">
-                  <td className="px-4 py-2">{key.name || <span className="text-slate-400">未命名</span>}</td>
+                <tr key={key.id} className="border-t border-ink-line/60">
+                  <td className="px-4 py-2">{key.name || <span className="text-ink-muted">未命名</span>}</td>
                   <td className="px-4 py-2 font-mono text-xs">{key.prefix}…</td>
-                  <td className="px-4 py-2 text-xs text-slate-500">{formatTime(key.createdAt)}</td>
-                  <td className="px-4 py-2 text-xs text-slate-500">
+                  <td className="px-4 py-2 text-xs text-ink-muted">{formatTime(key.createdAt)}</td>
+                  <td className="px-4 py-2 text-xs text-ink-muted">
                     {key.lastUsedAt === null ? "从未使用" : formatTime(key.lastUsedAt)}
                   </td>
                   <td className="px-4 py-2 text-right">

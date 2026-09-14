@@ -66,7 +66,7 @@ export function MetaPanel({ meta }: { meta: PackMeta }) {
           ["freshness.rescanError", meta.freshness.rescanError ?? "—"],
         ]}
       />
-      <p className="text-xs text-slate-500">{freshness}</p>
+      <p className="text-xs text-ink-muted">{freshness}</p>
 
       {meta.degraded && (
         <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -77,15 +77,15 @@ export function MetaPanel({ meta }: { meta: PackMeta }) {
 
       {meta.missingEvidence.length > 0 && (
         <div>
-          <h3 className="mb-1 text-xs font-semibold text-slate-600">
+          <h3 className="mb-1 text-xs font-semibold text-ink-muted">
             missingEvidence（{meta.missingEvidence.length}）
           </h3>
-          <ul className="space-y-1 text-xs text-slate-700">
+          <ul className="space-y-1 text-xs text-ink-primary">
             {meta.missingEvidence.map((item, index) => (
-              <li key={`${item.code}-${index}`} className="rounded bg-slate-50 px-2 py-1">
-                <code className="mr-2 text-slate-500">{item.code}</code>
+              <li key={`${item.code}-${index}`} className="rounded bg-paper-base px-2 py-1">
+                <code className="mr-2 text-ink-muted">{item.code}</code>
                 {item.message}
-                {item.symbol && <span className="ml-1 font-mono text-slate-500">{item.symbol}</span>}
+                {item.symbol && <span className="ml-1 font-mono text-ink-muted">{item.symbol}</span>}
               </li>
             ))}
           </ul>
@@ -121,24 +121,24 @@ export function EvidenceTable({ items }: { items: AskResponse["evidenceSummary"]
   return (
     <table className="w-full border-collapse text-xs">
       <thead>
-        <tr className="text-slate-500">
-          <th className="border-b border-slate-200 px-2 py-1 text-left">id</th>
-          <th className="border-b border-slate-200 px-2 py-1 text-left">path</th>
-          <th className="border-b border-slate-200 px-2 py-1 text-left">lines</th>
-          <th className="border-b border-slate-200 px-2 py-1 text-left">tier</th>
-          <th className="border-b border-slate-200 px-2 py-1 text-left">score</th>
+        <tr className="text-ink-muted">
+          <th className="border-b border-ink-line px-2 py-1 text-left">id</th>
+          <th className="border-b border-ink-line px-2 py-1 text-left">path</th>
+          <th className="border-b border-ink-line px-2 py-1 text-left">lines</th>
+          <th className="border-b border-ink-line px-2 py-1 text-left">tier</th>
+          <th className="border-b border-ink-line px-2 py-1 text-left">score</th>
         </tr>
       </thead>
       <tbody>
         {items.map((item) => (
           <tr key={item.id}>
-            <td className="border-b border-slate-100 px-2 py-1 font-mono">{item.id}</td>
-            <td className="border-b border-slate-100 px-2 py-1 font-mono">{item.path}</td>
-            <td className="border-b border-slate-100 px-2 py-1 font-mono">
+            <td className="border-b border-ink-line/60 px-2 py-1 font-mono">{item.id}</td>
+            <td className="border-b border-ink-line/60 px-2 py-1 font-mono">{item.path}</td>
+            <td className="border-b border-ink-line/60 px-2 py-1 font-mono">
               {item.lines ? `${item.lines[0]}-${item.lines[1]}` : "—"}
             </td>
-            <td className="border-b border-slate-100 px-2 py-1">{item.tier ?? "—"}</td>
-            <td className="border-b border-slate-100 px-2 py-1">
+            <td className="border-b border-ink-line/60 px-2 py-1">{item.tier ?? "—"}</td>
+            <td className="border-b border-ink-line/60 px-2 py-1">
               {item.score === null ? "—" : item.score.toFixed(4)}
             </td>
           </tr>

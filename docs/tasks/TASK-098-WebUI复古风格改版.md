@@ -1,6 +1,6 @@
 # TASK-098：WebUI 视觉改版（复古博物画风格 + 侧边栏布局）
 
-> 状态：pending ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：TASK-094（同改 Dashboard/History 两页，建议串行）
+> 状态：review ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：TASK-094（同改 Dashboard/History 两页，建议串行）
 > 建议分支：`feature/task-098-retro-theme_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `web/src/index.css`（全局主题：底色 / 纹理 / 字体）
@@ -230,4 +230,127 @@ expect(screen.getByRole("banner").className).toContain("bg-white");
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-14 ｜ 泳道 J ｜ 分支 `feature/task-098-retro-theme_xwz0914`
+
+**基线**：从 `main` 的 `cf2d4a4` 起（该提交即本卡的纹理/窄屏决策钉版；开工时本分支停在
+`e90ac11`，已用 `git merge --ff-only main` 快进到 `cf2d4a4`，无自有提交、无冲突）。
+
+**交付物（均已改）**：
+
+| 文件 | 改动 |
+|---|---|
+| `web/tailwind.config.js` | 新增 `paper` / `ink` / `accent` token；新增 `fontFamily.serif` 衬线栈 |
+| `web/src/index.css` | 老纸底 + 斑驳纹理（14 处 radial-gradient + 1 层纤维斜线）；标题用衬线；移除旧 `grid` 纹理 |
+| `web/src/app/Layout.tsx` | 顶栏 → 侧边栏；窄屏汉堡抽屉 |
+| `web/src/app/Layout.test.tsx` | **同步**样式断言到新 token，并新增 2 条（见 §E） |
+| `web/src/pages/LoginPage.tsx` | 左装饰区（老纸+衬线品牌字+细线几何图案）+ 右纯白浮卡片 |
+| `web/src/components/ui.tsx` | `Card` / `CopyButton` / `KeyValue` / `LoadingBlock` / `EmptyState` 配色迁移 |
+| `web/index.html` | `<body>` 去掉 `bg-slate-50 text-slate-900`（底色/纹理由 `index.css` 提供） |
+| `web/src/components/progress.ts` | `TONE_CLASS.idle` 迁移到 token |
+| `web/src/components/{Markdown,MetaPanel}.tsx` | 配色迁移（代码块底色改 `ink.primary`） |
+| `web/src/pages/{Dashboard,History,ApiKeys,Connect,Settings}Page.tsx` | **仅 className**：`slate-*`/`bg-white` → 新 token |
+| `docs/evidence/task-098/` | 截图对照 + 可复现脚本 + 对比度计算脚本（新增） |
+
+**§A 设计 token 全表**
+
+颜色（`tailwind.config.js`，组件内无裸色值）：
+
+| token | 值 | 用途 |
+|---|---|---|
+| `paper.base` | `#f3e4c7` | 主背景（用户指定） |
+| `paper.raised` | `#f7ecd8` | 侧边栏 / 窄屏顶栏 / hover |
+| `paper.card` | `#ffffff` | 卡片（保持纯白） |
+| `ink.primary` | `#2a2419` | 主文字（深墨，非纯黑） |
+| `ink.muted` | `#6b5d48` | 次级文字 |
+| `ink.line` | `#d9c9a8` | 边框线 |
+| `accent.seal` | `#8c3a2b` | 朱砂：active 导航 / 主按钮 |
+
+字体：`fontFamily.serif = ui-serif, Georgia, Cambria, "Songti SC", "SimSun", "Noto Serif CJK SC", serif`
+（系统栈，**零字体文件依赖**），只作用于 `h1/h2/h3` 与品牌字；正文保留原 sans，代码保留 mono。
+
+纹理参数（`index.css` 顶部集中注释块，变量 `--zace-stain: 92 70 38` / `--zace-bleach: 255 250 236`）：
+
+- **14 处 radial-gradient**（8 处暗斑 alpha 0.013-0.026 + 6 处泛白 alpha 0.018-0.030），
+  圆半径 300-820px、坐标互相错开；
+- 叠 1 层纤维斜线 `repeating-linear-gradient(118deg, … 1px, transparent 120px)`，alpha 0.012
+  （间距刻意取大以避开高 DPI 摩尔纹/色带）；
+- `background-attachment: fixed`；
+- 实测纸面亮度极差 ≈ 2%（见证据目录 README），不构成噪点。
+
+**选择理由**：用户拍板“斑驳旧纸感”，故用**多处径向渐变**而非细密斜线（斜线偏“亚麻布”，
+与老纸气质不符）；斜线只作为**极淡辅助层**保留纤维感（§A-3 的“可选增强”），
+因 alpha 0.012 且间距 120px，实测无可见摩尔纹。
+
+**§E 测试同步清单（无一条被删除）**
+
+| 原断言 | 现断言 | 守护的东西（未变） |
+|---|---|---|
+| `navLinkClass("控制台")` `.not.toContain("bg-slate-900")` | `.not.toContain("bg-accent-seal")` | 非 active 项不高亮（`end` 生效） |
+| `navLinkClass("接入指南")` `.toContain("bg-slate-900")` | `.toContain("bg-accent-seal")` | active 态可辨识 |
+| `getByRole("banner").className` 含 `bg-white` | `getByTestId("sidebar").className` 含 `bg-paper-raised` | 导航底色**不透明** |
+
+- 第 3 条换元素的原因（§E-3 允许并要求如实说明）：侧边栏是 `<aside>`，隐式 role 为
+  `complementary` 而非 `banner`（`banner` 只对应不在 section 内的 `<header>`）。改版后仍存在
+  `<header>`，但它只是**窄屏顶栏**（`md:hidden`），不再是承载导航的常驻面——继续用 `banner`
+  会**测错对象**。因此改为断言真正承载导航的侧边栏。
+- **覆盖面不缩小（反而扩大）**：`Layout.test.tsx` 由 4 条增至 **6 条**——新增
+  ①“窄屏顶栏也不透明”（另一个滚动遮挡面，同一 §4 教训）；
+  ②“账户名与登出仍在侧边栏底部”（§C 要求，原先无断言）。
+- `navLinks()` 改用 `getByRole("navigation", { name: "主导航" })`：语义未变，测试不依赖布局细节。
+- `App.test.tsx` / `ui.test.tsx` / `SettingsPage.test.tsx` / `client.test.ts` / `progress.test.ts`
+  **未改动即通过**（43 passed）——说明改版没有改变任何可观察行为。
+
+**验收命令与结果**
+
+```
+cd web && npm run lint    → 通过（eslint 无输出）
+npm test                  → 7 passed | 2 skipped (9 files)，43 passed | 3 skipped (46 tests)
+npm run build             → ✓ built in 3.70s（dist/assets/index-*.css 19.31 kB / *.js 247.97 kB）
+uv run ruff check .                        → All checks passed!
+uv run python scripts/check_dependency_direction.py → 依赖方向检查通过
+uv run pytest -o addopts="" -q             → 878 passed, 2 skipped（与 dispatch.md 记录的基线一致）
+```
+
+**真浏览器核验（Playwright chromium，29 项全 PASS，脚本见 `docs/evidence/task-098/verify.py`）**
+
+- 导航项顺序 `控制台→接入指南→API Key→历史记录→设置` 与 `to` 路径 `/ /connect /keys /history /settings` 全部不变；
+- 逐项点击后 URL 与 active 底色（`bg-accent-seal`）均正确；
+- 窄屏抽屉：初始关闭 → 汉堡打开 → **点导航后自动关闭** → 点遮罩关闭；
+- 登录页三模式（login / register / bootstrap，`modes.py`）+ 登录失败错误块 + 登出回登录页（`logout.py`）。
+
+**对比度自检（WCAG，`contrast.py` 实测）**
+
+- 正文 `ink.primary` on `paper.base` = **12.26:1**；次级文字 `ink.muted` on `paper.base` = **5.09:1**；
+- active 导航/主按钮（白字 on `accent.seal`）= **7.62:1**；
+- 均 ≥ AA 4.5:1。
+- **顺带发现并修复的真实问题**：老纸底替换原浅蓝灰后，页面里原有的 `slate-500`(3.79:1) 与
+  `slate-400`(2.04:1) 文字**不再满足 AA**。故对这些 className 的迁移是本卡“对比度自检”
+  验收项的**必要条件**，不是顺手美化。
+
+**与设计的偏差 / 需要编排者留意**
+
+1. **清单外文件改动（已尽量克制）**：本卡清单外实际改了 3 处，均属“配色统一”必需，理由如下，
+   若编排者认为越界可要求回退：
+   - `web/index.html`：`<body>` 的 `bg-slate-50 text-slate-900` 必须去掉，否则会**盖住** `index.css`
+     的纸底纹理（`bg-slate-50` 直接覆盖 `background-color`）；
+   - `web/src/components/{progress.ts,Markdown.tsx,MetaPanel.tsx}`：同 §D“卡片配色微调”性质，
+     且含上面 `slate-500/400` 的 AA 违规项；不迁移则对比度验收不通过；
+   - `web/src/pages/{ApiKeys,Connect,Settings}Page.tsx`：卡片内**直接**写着 `border-slate-200 bg-white`
+     等类名（不经 `ui.tsx` 的 `Card`），不迁则视觉不统一、且 `slate-500/400` 文字违反 AA。
+     **五个页面的逻辑一行未改**（可通过 `git diff` 核对：无新增/删除状态、副作用、事件处理）。
+2. **`colors.grid` 被移除**：任务卡 §A-1 提到“保留 `grid` 或合理迁移”。我选择**移除**并换为 `paper`
+   ——网格是“工程感”，与老纸气质冲突；且仓库内除 `index.css` 外**无任何引用**（已全仓 grep 确认
+   只有 `docs/tasks/TASK-086-*.md` 的设计说明里提及）。若需保留兼容名请告知。
+3. **`accent.sealsoft` 已删除**：初版加了 hover 变浅色，但**白字在 `#a8543f` 上只有 5.2:1、
+   且与 `seal` 区分度低**，收益不抵多一个 token 的维护成本，故删掉，hover 不做色变。
+
+**未决问题**
+
+1. **与 TASK-094 的冲突面**：094 也改 `DashboardPage.tsx` / `HistoryPage.tsx`。本卡在这两个文件里
+   只动 className（及其中的颜色 token），**未触碰任何逻辑**。若 094 已改同一区域，合并时
+   大概率是纯文本冲突（配色行 vs 逻辑行），按 §0 由编排者裁决——本卡**未顺手改任何 094 的功能**。
+2. **窄屏抽屉的键盘可达性**：当前 `Esc` 不能关抽屉（只有汉堡/遮罩/点导航三种关法）。
+   卡内说“不要做复杂交互”，故未加；如需可后续补一个 `keydown` 监听。
+3. **构建产物中的 `text-paper-base` 仅用于深色代码块**：`bg-ink-primary` + `text-paper-base`
+   的代码块**未做对比度断言**（`#f3e4c7` on `#2a2419` = 12.26:1，实际同样满足 AA）。
+

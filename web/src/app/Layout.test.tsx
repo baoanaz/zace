@@ -6,8 +6,24 @@
  *    加在最后一位；前四项的顺序与文案由 TASK-086 定下，不得因新增而变动）；
  * 2. **`to` 是路由契约**——顺序变了，路径一个都不能变（外部链接与文档都指向它们）。
  *
- * 另外顺手钉住 §4 的一个易破点：header 必须保持 `bg-white` 实心，
+ * 另外顺手钉住 §4 的一个易破点：侧边栏必须**不透明**，
  * 否则加了全局背景纹理后内容滚动会透过导航文字。
+ *
+ * --- TASK-098（复古主题 + 侧边栏改版）的同步说明 ---
+ *
+ * 改版把顶栏换成侧边栏，并把 `slate-*` / `bg-white` 换成 `paper` / `ink` / `accent` token。
+ * 本文件因此同步更新样式断言——**但没有删掉任何一条**：
+ *
+ * | 原断言 | 现断言 | 守护的东西（不变） |
+ * |---|---|---|
+ * | `expect(…控制台).not.toContain("bg-slate-900")` | `…not.toContain("bg-accent-seal")` | 非 active 项不高亮（`end` 生效） |
+ * | `expect(…接入指南).toContain("bg-slate-900")` | `…toContain("bg-accent-seal")` | active 态可辨识 |
+ * | `getByRole("banner")` 的 `bg-white` | `getByTestId("sidebar")` 的 `bg-paper-raised` | 导航底色不透明 |
+ *
+ * 为何最后一条换了元素与 role：侧边栏是 `<aside>`，其隐式 role 为 `complementary` 而不是
+ * `banner`（`banner` 只对应 `<header>` 且要求不在 section 内）。改版后仍存在 `<header>`，
+ * 但它只是**窄屏顶栏**（`md:hidden`），不再是承载导航的常驻面——用 `banner` 断言会测错对象。
+ * 因此改为断言真正承载导航的侧边栏，并**同时**断言窄屏顶栏的底色，覆盖面不缩小。
  */
 
 import { render, screen } from "@testing-library/react";
@@ -24,9 +40,14 @@ function renderLayout(initialPath = "/") {
   );
 }
 
-/** 只取主导航里的链接（排除 header 左侧的 "zace" 品牌链接）。 */
+/**
+ * 只取主导航里的链接（排除侧边栏顶部的 "zace" 品牌链接）。
+ *
+ * TASK-098：主导航从 `<header><nav>` 移到 `<aside>`，但仍带 `aria-label="主导航"`，
+ * 因此仍用 `getByRole("navigation")` 定位——语义没变，测试不必知道布局细节。
+ */
 function navLinks() {
-  return screen.getByRole("navigation").querySelectorAll("a");
+  return screen.getByRole("navigation", { name: "主导航" }).querySelectorAll("a");
 }
 
 /** 取某个导航项的高亮 class；找不到就抛出（而不是断言非空）。 */
@@ -65,13 +86,45 @@ describe("主导航（TASK-086 §1 / TASK-088 §F）", () => {
     renderLayout("/connect");
 
     // 若 "/" 丢了 `end`，它会在每个子路径上都保持高亮。
-    expect(navLinkClass("控制台")).not.toContain("bg-slate-900");
-    expect(navLinkClass("接入指南")).toContain("bg-slate-900");
+    // TASK-098：active 底色由 `bg-slate-900` 换成 `accent.seal`（朱砂）。
+    expect(navLinkClass("控制台")).not.toContain("bg-accent-seal");
+    expect(navLinkClass("接入指南")).toContain("bg-accent-seal");
   });
 
-  it("header 保持 bg-white 实心（TASK-086 §4：不能透过导航文字）", () => {
+  it("侧边栏保持不透明底色（TASK-086 §4：不能透过导航文字）", () => {
     renderLayout();
 
-    expect(screen.getByRole("banner").className).toContain("bg-white");
+    // TASK-098：导航从 `<header role=banner>` 移到 `<aside>`（隐式 role=complementary），
+    // 故改用 testid 定位。守护的东西不变：导航底色必须是不透明色，不能是透明/半透明。
+    expect(screen.getByTestId("sidebar").className).toContain("bg-paper-raised");
+  });
+
+  it("窄屏顶栏（汉堡按钮所在）同样不透明", () => {
+    renderLayout();
+
+    // 窄屏下侧边栏是抽屉，顶栏成为唯一常驻的滚动遮挡面——它也必须不透明。
+    const header = screen.getByRole("banner");
+    expect(header.className).toContain("bg-paper-raised");
+  });
+
+  it("账户名与登出仍在侧边栏底部（TASK-098 §C）", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Layout
+          account={{
+            userId: "u1",
+            name: "owner",
+            createdAt: 1789300000,
+            isLocal: false,
+            via: "session",
+          }}
+          onSignedOut={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    const sidebar = screen.getByTestId("sidebar");
+    expect(sidebar.textContent).toContain("owner");
+    expect(sidebar.textContent).toContain("登出");
   });
 });

@@ -60,7 +60,7 @@ export function SettingsPage() {
     <div className="space-y-5">
       <div>
         <h1 className="text-lg font-semibold">设置</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 text-sm text-ink-muted">
           当前实际生效的配置（只读）。改配置请设环境变量后重启服务——本页只做展示，
           不落任何密钥。
         </p>
@@ -83,7 +83,7 @@ export function SettingsPage() {
           </p>
         )}
         {llm.configured && (
-          <p className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <p className="mb-3 rounded border border-ink-line bg-paper-base px-3 py-2 text-xs text-ink-muted">
             启用外部 LLM 时，<strong>证据片段会发往该提供商</strong>（Module/06 §3）。
             key 不在此页展示，服务端也不返回它的任何片段。
           </p>
@@ -94,7 +94,7 @@ export function SettingsPage() {
             ["服务地址", llm.baseUrl ? <code>{llm.baseUrl}</code> : <span>—</span>],
             [
               "API Key",
-              llm.apiKeyConfigured ? <span>已配置</span> : <span className="text-slate-400">未配置</span>,
+              llm.apiKeyConfigured ? <span>已配置</span> : <span className="text-ink-muted">未配置</span>,
             ],
             ["超时（秒）", llm.timeoutS != null ? <span>{llm.timeoutS}</span> : <span>—</span>],
             ["maxTokens", llm.maxTokens != null ? <span>{llm.maxTokens}</span> : <span>—</span>],
@@ -102,7 +102,7 @@ export function SettingsPage() {
           ]}
         />
         {llm.model == null && llm.configured && (
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-ink-muted">
             已配置，但模型名与地址只对已登录用户展示（本端点是免鉴权端点）。
           </p>
         )}
@@ -127,7 +127,7 @@ export function SettingsPage() {
           />
         )}
         {embedding.mode === "api" && (
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-ink-muted">
             api 模式：索引文本会发往 embedding 服务商（EMBED_BASE_URL）。
           </p>
         )}
@@ -145,7 +145,7 @@ export function SettingsPage() {
 
       <Card title="存储配额（只读）">
         {storage === undefined ? (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-ink-muted">
             后端未提供配额配置（旧版本服务）——升级后此处会显示单项目/单用户上限。
           </p>
         ) : (
@@ -155,7 +155,7 @@ export function SettingsPage() {
                 [
                   "单项目上限",
                   storage.perProjectBytes === 0 ? (
-                    <span className="text-slate-400">不限</span>
+                    <span className="text-ink-muted">不限</span>
                   ) : (
                     <span>{formatBytes(storage.perProjectBytes)}</span>
                   ),
@@ -163,7 +163,7 @@ export function SettingsPage() {
                 [
                   "单用户上限",
                   storage.perUserBytes === 0 ? (
-                    <span className="text-slate-400">不限</span>
+                    <span className="text-ink-muted">不限</span>
                   ) : (
                     <span>{formatBytes(storage.perUserBytes)}</span>
                   ),
@@ -171,13 +171,13 @@ export function SettingsPage() {
                 ["告警阈值", <span>{Math.round(storage.warnRatio * 100)}%</span>],
               ]}
             />
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-ink-muted">
               达到阈值的 {Math.round(storage.warnRatio * 100)}% 时，检索工具会在**返回内容里**提醒
               Agent 转告用户去控制台删项目；**超限不阻断**（新索引与检索照常）。
               改这三项请设环境变量后重启：
-              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES</code>
-              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_LIMIT_PER_USER_BYTES</code>
-              <code className="mx-1 rounded bg-slate-100 px-1">ZACE_STORAGE_WARN_RATIO</code>
+              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES</code>
+              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_LIMIT_PER_USER_BYTES</code>
+              <code className="mx-1 rounded bg-paper-raised px-1">ZACE_STORAGE_WARN_RATIO</code>
               （置 0 = 不限）。
             </p>
           </>

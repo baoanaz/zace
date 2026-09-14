@@ -153,7 +153,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
             value={usage.p95LatencyMs === null ? "—" : `${usage.p95LatencyMs} ms`}
           />
         </div>
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-ink-muted">
           引用覆盖率：{usage.citationCoverageAvg === null ? "— 尚未测量（LLM 总结未接入）" : `${(usage.citationCoverageAvg * 100).toFixed(1)}%`}
         </p>
       </Panel>
@@ -177,42 +177,42 @@ export function DashboardPage({ account }: { account: Account | null }) {
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-500">
-                <th className="border-b border-slate-200 py-1">项目</th>
-                <th className="border-b border-slate-200 py-1">projectId</th>
-                <th className="border-b border-slate-200 py-1">文件</th>
-                <th className="border-b border-slate-200 py-1">chunks</th>
-                <th className="border-b border-slate-200 py-1">状态</th>
-                <th className="border-b border-slate-200 py-1" title="索引数据磁盘占用">
+              <tr className="text-left text-xs text-ink-muted">
+                <th className="border-b border-ink-line py-1">项目</th>
+                <th className="border-b border-ink-line py-1">projectId</th>
+                <th className="border-b border-ink-line py-1">文件</th>
+                <th className="border-b border-ink-line py-1">chunks</th>
+                <th className="border-b border-ink-line py-1">状态</th>
+                <th className="border-b border-ink-line py-1" title="索引数据磁盘占用">
                   占用
                 </th>
-                <th className="border-b border-slate-200 py-1">操作</th>
+                <th className="border-b border-ink-line py-1">操作</th>
               </tr>
             </thead>
             <tbody>
               {data.projects.map((project) => (
                 <tr key={project.projectId}>
-                  <td className="border-b border-slate-100 py-1">
+                  <td className="border-b border-ink-line/60 py-1">
                     {project.displayName || project.projectId}
                   </td>
-                  <td className="border-b border-slate-100 py-1 font-mono text-xs">
+                  <td className="border-b border-ink-line/60 py-1 font-mono text-xs">
                     {project.projectId}
                   </td>
-                  <td className="border-b border-slate-100 py-1">
+                  <td className="border-b border-ink-line/60 py-1">
                     {project.sync?.filesIndexed ?? "—"}
                   </td>
-                  <td className="border-b border-slate-100 py-1">{project.sync?.chunks ?? "—"}</td>
-                  <td className="border-b border-slate-100 py-1 text-xs">
+                  <td className="border-b border-ink-line/60 py-1">{project.sync?.chunks ?? "—"}</td>
+                  <td className="border-b border-ink-line/60 py-1 text-xs">
                     {project.indexProgress?.state ?? "—"}
                   </td>
                   {/* 占用：后端未提供时 `—`（不把"未测量"伪装成 0 B）。 */}
                   <td
-                    className="border-b border-slate-100 py-1"
+                    className="border-b border-ink-line/60 py-1"
                     data-testid={`disk-${project.projectId}`}
                   >
                     {project.diskBytes == null ? "—" : formatBytes(project.diskBytes)}
                   </td>
-                  <td className="border-b border-slate-100 py-1">
+                  <td className="border-b border-ink-line/60 py-1">
                     <button
                       type="button"
                       onClick={() =>
@@ -231,7 +231,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
             </tbody>
           </table>
         )}
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-ink-muted">
           「占用」是索引数据的磁盘占用（index.db + 向量 + 源码镜像），**不含源码仓库本身**；
           后端未提供时显示 —（不当作 0）。
         </p>
@@ -251,7 +251,7 @@ export function DashboardPage({ account }: { account: Account | null }) {
       >
         <p>将删除该项目的**全部索引数据**（含向量与同步账本）。</p>
         <p>源码文件不受影响；下次 Agent 提问时会重新上传并索引。</p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-muted">
           projectId：<code className="font-mono">{pending?.projectId ?? ""}</code>
         </p>
       </ConfirmDialog>
@@ -275,10 +275,10 @@ function StorageBar({ storage }: { storage: QuotaStatusView }) {
         : { bar: "bg-emerald-500", text: "text-emerald-700", label: "正常" };
 
   return (
-    <div className="mt-4 border-t border-slate-100 pt-3" data-testid="storage-quota">
+    <div className="mt-4 border-t border-ink-line/60 pt-3" data-testid="storage-quota">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-xs text-slate-500">存储配额（索引数据）</span>
-        <span className={`text-xs font-medium ${user.unlimited ? "text-slate-600" : tone.text}`}>
+        <span className="text-xs text-ink-muted">存储配额（索引数据）</span>
+        <span className={`text-xs font-medium ${user.unlimited ? "text-ink-muted" : tone.text}`}>
           {user.unlimited
             ? `已用 ${formatBytes(user.usedBytes)} · 未设上限`
             : `已用 ${formatBytes(user.usedBytes)} / 上限 ${formatBytes(user.limitBytes)}`}
@@ -286,7 +286,7 @@ function StorageBar({ storage }: { storage: QuotaStatusView }) {
         </span>
       </div>
       {!user.unlimited && (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-slate-100">
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-paper-raised">
           <div
             className={`h-full ${tone.bar}`}
             // 宽度封顶 100%：超限时进度条不能撑破容器（比例由文字如实给出）。
@@ -315,9 +315,9 @@ function Panel({
 }) {
   return (
     <section
-      className={`rounded-lg border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      className={`rounded-lg border border-ink-line bg-paper-card p-4 shadow-sm ${className}`}
     >
-      <h2 className="mb-3 text-sm font-semibold text-slate-800">{title}</h2>
+      <h2 className="mb-3 text-sm font-semibold text-ink-primary">{title}</h2>
       {children}
     </section>
   );
@@ -325,9 +325,9 @@ function Panel({
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-slate-100 py-1.5">
-      <span className="text-xs text-slate-500">{label}</span>
-      <span className="text-sm text-slate-800">{value}</span>
+    <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-ink-line/70 py-1.5">
+      <span className="text-xs text-ink-muted">{label}</span>
+      <span className="text-sm text-ink-primary">{value}</span>
     </div>
   );
 }
@@ -350,12 +350,12 @@ function Metric({
         ? "text-rose-700"
         : tone === "warn"
           ? "text-amber-700"
-          : "text-slate-900";
+          : "text-ink-primary";
   return (
     <div>
-      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-xs text-ink-muted">{label}</div>
       <div className={`text-xl font-semibold ${color}`}>{value}</div>
-      {hint && <div className="text-xs text-slate-400">{hint}</div>}
+      {hint && <div className="text-xs text-ink-muted">{hint}</div>}
     </div>
   );
 }
