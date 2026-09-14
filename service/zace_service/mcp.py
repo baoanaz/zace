@@ -28,9 +28,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import ContextVar, Token
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 
 from fastapi import FastAPI
 from mcp.server.mcpserver import MCPServer
@@ -39,6 +40,7 @@ from mcp.server.mcpserver.tools import Tool
 from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 from zace_core.contextpack import render_markdown
 from zace_core.engine import (
     EngineError,
@@ -49,8 +51,10 @@ from zace_core.engine import (
 )
 
 from zace_service.config import Settings
+from zace_service.deps import project_not_found_message, require_ownership_of
 from zace_service.errors import (
     PROVIDER_UNAVAILABLE_HINT,
+    ApiError,
     map_engine_error,
 )
 from zace_service.logging import get_logger, redact_text
@@ -70,9 +74,12 @@ __all__ = [
     "ASK_TOOL",
     "SEARCH_TOOL",
     "TOOL_NAMES",
+    "bind_user",
     "build_mcp",
+    "current_user",
     "manager_for_app",
     "mount",
+    "reset_user",
     "session_lifespan",
 ]
 
@@ -104,6 +111,83 @@ _ASK_DESCRIPTION = (
 
 #: 懒构造 EngineManager 的互斥（MCP 工具没有 ``Request``，不能直接用 ``deps.get_engine_manager``）。
 _manager_lock = Lock()
+
+
+# --------------------------------------------------------------------------- 身份通道
+
+
+class _Identified(Protocol):
+    """身份的最小形状（TASK-089 §A）：**只要求一个 ``id``**。
+
+    绑定进来的是 ``app.py`` 写入 ``request.state.zace_user`` 的那个对象，即 ``auth.Principal.user``
+    （``auth.User``）——不是 ``Principal`` 本身。用结构化 Protocol 表达"我需要的是能取到 id 的
+    东西"，既不用为一个字段多一条 ``mcp`` → ``auth`` 的耦合边，也不强绑到 ``User`` 这个具体类型
+    （测试可注入任何带 ``id`` 的对象）。
+    """
+
+    id: str
+
+
+#: 当前请求/会话的**已认证用户**（``None`` = 无账户口径，本地模式 R34）。
+#:
+#: **为什么用 contextvars**（卡内 §A 方案 A）：它与 :mod:`zace_service.logging` 的 ``requestId``
+#: **同构**，且 MCP 的 Streamable HTTP 会话模型下**实测**能正确传播——SDK 在写入消息时用
+#: ``ContextSendStream`` 快照 ``contextvars.copy_context()``，再以
+#: ``sender_ctx.run(start_soon, fn)`` 恢复，因此工具函数执行时看到的正是"那个 HTTP 请求"的
+#: 上下文（见任务卡执行记录的验证证据）。
+_user: ContextVar[Any | None] = ContextVar("zace_mcp_user", default=None)
+
+
+def bind_user(user: _Identified | None) -> Token[Any | None]:
+    """绑定当前上下文的用户（返回值交给 :func:`reset_user` 还原）。
+
+    ``user`` 是 ``auth.User | None``；``None`` 表示无账户（本地模式）。
+    """
+    return _user.set(user)
+
+
+def reset_user(token: Token[Any | None]) -> None:
+    _user.reset(token)
+
+
+def current_user() -> _Identified | None:
+    """当前上下文里的已认证用户（``None`` = 本地模式/未绑定）。"""
+    return _user.get()
+
+
+class _IdentityBinding:
+    """ASGI 包装（TASK-089 §A/B 的**接入点**）：把请求已认证用户存进 contextvar 再放行。
+
+    身份来源是 ``scope["state"]["zace_user"]``——即 ``app.py::_install_auth`` 的鉴权中间件在
+    每个 HTTP 请求上写入、并经 ``Mount`` 传给子应用的那一份（注意它存的是 ``Principal.user``，
+    不是 ``Principal``）。实测（本卡执行记录）在 MCP 挂载点与 ``/mcp`` 别名路由上都能读到，
+    因此**不改 ``app.py``** 即可完成接线。
+
+    这条"复用已认证结果"的窄路比两种替代都稳：
+
+    - 不比"在 MCP 子应用里手写 Bearer/Cookie 解析"更失败不安全（身份是同一个中间件算出来的）；
+    - 不会把未认证请求变成 401（鉴权中间件已经拦过：云端无凭据根本到不了这里）——
+      本包装的职责只是**把已算好的身份送进去**，不是第二道鉴权。
+
+    未认证传入（本地模式，或未挂鉴权中间件的裸 ``FastAPI``）→ 绑定 ``None``，工具侧按无账户处理。
+
+    纪律：``state`` 必须是映射，否则绑定 ``None``，绝不因缺键而异常（子应用要能处理裸 ASGI 请求）。
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":  # pragma: no cover - MCP 面只走 HTTP
+            await self._app(scope, receive, send)
+            return
+        state = scope.get("state")
+        user = state.get("zace_user") if hasattr(state, "get") else None
+        token = bind_user(user)
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            reset_user(token)
 
 
 # --------------------------------------------------------------------------- 装配
@@ -193,11 +277,16 @@ def mount(app: FastAPI, mcp: MCPServer, *, json_response: bool = False) -> None:
     跟随重定向与否取决于各编辑器的 HTTP 客户端，因此这里把 SDK 生成的内层 ASGI 端点直接注册到
     ``/mcp``（与挂载同一个 session manager / 同一个 Starlette 应用），使**两个 URL 都直接可用、
     行为一致**。
+
+    **身份接入点（TASK-089 §A/B）**：挂载的内层 app 与 ``/mcp`` 别名端点**外层各包一层
+    :class:`_IdentityBinding`**，把请求已认证身份（``scope["state"]["zace_user"]``，由 ``app.py``
+    的鉴权中间件写入）存进 contextvar。两条路径各自包装（而不是包一次）是因为它们持有的是**同一个
+    ASGI 应用的两个引用**：客户端走哪个 URL 都能拿到身份，不依赖是否经过 ``Mount``。
     """
     starlette_app = mcp.streamable_http_app(streamable_http_path="/", json_response=json_response)
-    app.mount(MCP_MOUNT_PATH, starlette_app)
+    app.mount(MCP_MOUNT_PATH, _IdentityBinding(starlette_app))
     app.router.routes.append(
-        Route(MCP_MOUNT_PATH, endpoint=starlette_app.routes[0].endpoint)
+        Route(MCP_MOUNT_PATH, endpoint=_IdentityBinding(starlette_app.routes[0].endpoint))
     )
 
 
@@ -370,10 +459,18 @@ def _require_service_max_tokens(max_tokens: int) -> None:
 
 
 def _project_id_for(manager: EngineManager, project_root: str) -> str:
-    """``project_root`` → projectId（D-29 身份），并确认该项目在本服务里存在。
+    """``project_root`` → projectId（D-29 身份），并确认项目**存在且归属当前身份**。
 
     CF-06 的参数是 ``project_root``（绝对路径），因此 MCP 面用**同一套身份规则**反解 projectId：
     与 ``POST /api/projects/resolve``/``attach`` 完全一致，不新增映射表、不落额外状态。
+
+    **归属校验（TASK-089）**：反解出 projectId 后过 :func:`deps.require_ownership_of`（与 REST 面
+    **同一份实现**）。未归属当前身份 → 与"项目不存在"**同一句文案**的 ``isError``（REST 面是
+    404 ``project_not_found``）：MCP 协议下工具执行错误走正常响应 + ``isError=true``
+    （Module/05 §2.2），故这里用文本而不是 HTTP 状态码承载 404 语义——但"不给探测面"的目的
+    一致：越权者与查错 id 者拿到的文本逐字相同。
+
+    ``zace_user`` 为 ``None``（本地模式，R34）时放行；云端元数据库缺失时 fail closed。
     """
     raw = project_root.strip()
     if "\\" in raw:
@@ -386,13 +483,48 @@ def _project_id_for(manager: EngineManager, project_root: str) -> str:
     except Exception as exc:  # 路径本身非法（如含空字节）：如实报参数问题
         raise ToolError(f"project_root 无法解析为路径：{redact_text(str(exc))}") from exc
     project_id = engine_project_id_for(identity.identity_key)
-    if not manager.project_exists(project_id):
-        raise ToolError(
-            f"未知项目：{raw} 对应的 projectId {project_id} 在本服务里没有索引记录（D-29 身份）。"
-            f"本地模式请用 `zace-service local --repo {raw}` 起服务，"
-            "或先 POST /api/projects/attach；远端模式请先同步（POST /api/sync/batch-upload）。"
-        )
+    _require_owned_project(manager, project_id, raw)
     return project_id
+
+
+def _require_owned_project(manager: EngineManager, project_id: str, raw: str) -> None:
+    """存在 + 归属（TASK-089 §B 的**唯一接入点**）。
+
+    分两种形态，这是本卡"不给探测面"的关键设计：
+
+    - **无账户（本地模式，R34）**：只判存在，失败给 TASK-040 已验收的**可操作**文案
+      （``未知项目：… 请用 zace-service local --repo …``）——本地单用户模式没有"别人的项目"
+      这个概念，保留该提示是 R34"与今天逐字一致"的要求；
+    - **有账户（云端）**：存在性与归属**合并为同一句拒绝**。若先报"未知项目"再报"项目不存在"，
+      攻击者就能用两个不同的文本区分"这个 projectId 存在"与"不存在"，归属校验就白做了。
+      因此两者都走 :func:`deps.project_not_found_message`（与 REST 的 404 同一句）。
+
+    代价（已知且接受）：云端首次同步前查询自己尚未创建的项目，得到的是"项目不存在"而不是
+    "怎么建"的提示。客户端流程总是先 resolve/上传再查询，故不影响正常路径；
+    见任务卡执行记录的"与设计偏差"。
+    """
+    user_id = getattr(current_user(), "id", None)
+    if user_id is None or user_id == "":
+        # 本地模式/无账户口径（R34）：保留原文案，逐字不变。
+        if not manager.project_exists(project_id):
+            raise ToolError(_unknown_project_message(raw, project_id))
+        return
+    # 云端："不存在"与"不是你的"必须是同一种响应，否则越权者能据此探测存在性。
+    if not manager.project_exists(project_id):
+        raise ToolError(project_not_found_message(project_id))
+    try:
+        require_ownership_of(user_id, manager.meta_db, project_id)
+    except ApiError:
+        raise ToolError(project_not_found_message(project_id)) from None
+
+
+def _unknown_project_message(raw: str, project_id: str) -> str:
+    """本地模式的"未知项目"可操作提示（TASK-040 冻结文案，本卡未改一字）。"""
+    return (
+        f"未知项目：{raw} 对应的 projectId {project_id} 在本服务里没有索引记录（D-29 身份）。"
+        f"本地模式请用 `zace-service local --repo {raw}` 起服务，"
+        "或先 POST /api/projects/attach；远端模式请先同步（POST /api/sync/batch-upload）。"
+    )
 
 
 def _require_index(manager: EngineManager, project_id: str) -> None:

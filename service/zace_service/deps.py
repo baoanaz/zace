@@ -19,7 +19,13 @@ from zace_service.errors import ApiError
 from zace_service.metadb import MetaDB
 from zace_service.runtime import EngineManager
 
-__all__ = ["get_engine_manager", "get_settings", "require_project_id"]
+__all__ = [
+    "get_engine_manager",
+    "get_settings",
+    "project_not_found_message",
+    "require_ownership_of",
+    "require_project_id",
+]
 
 #: 懒构造 EngineManager 的互斥（多线程首个请求可能同时到达）。
 _manager_lock = threading.Lock()
@@ -115,7 +121,24 @@ def _require_ownership(request: Request, project_id: str) -> None:
     user_id = getattr(getattr(request.state, "zace_user", None), "id", None)
     if user_id is None:
         return
-    db = _meta_db(request)
+    require_ownership_of(user_id, _meta_db(request), project_id)
+
+
+def require_ownership_of(user_id: object, db: MetaDB | None, project_id: str) -> None:
+    """归属校验的**形态无关核心**（TASK-089 提取；REST 与 MCP 共用一份）。
+
+    :func:`_require_ownership` 从 ``Request`` 取 ``zace_user`` 与 ``MetaDB``；MCP 工具没有
+    ``Request``（身份来自 ``mcp.py`` 的 contextvar 通道、元数据库来自 ``EngineManager.meta_db``），
+    因此把两者都收成入参——业务判断只有这一份，两条路径不会漂移。
+
+    纪律与 :func:`_require_ownership` 逐字一致：
+
+    - ``user_id`` 为 ``None``（本地模式无账户，R34）或空串 → 直接返回（完全放行）；
+    - ``db`` 缺失 → **fail closed**（按未归属处理，宁可拒绝也不放行越权）；
+    - 未归属 → :func:`_project_not_found`（404 语义：与"真不存在"共用 code 与文案）。
+    """
+    if user_id is None or user_id == "":
+        return
     if db is None or not db.owns_project(str(user_id), project_id):
         raise _project_not_found(project_id)
 
@@ -124,9 +147,19 @@ def _project_not_found(project_id: str) -> ApiError:
     """统一的"项目不存在"错误（越权与真不存在共用，不给探测面）。"""
     return ApiError(
         code="project_not_found",
-        message=f"项目不存在：{project_id}",
+        message=project_not_found_message(project_id),
         status=404,
     )
+
+
+def project_not_found_message(project_id: str) -> str:
+    """"项目不存在"的**唯一文案**（TASK-089 提取：MCP 面无 HTTP 404，但要给出逐字相同的话术）。
+
+    REST 的 404 信封与 MCP 的 ``isError`` 文本同源，确保两条路径对外**不可区分**：
+    无论走哪一面，越权用户看到的都是同一句"项目不存在：<id>"，因而都无法据此探测
+    "这个 projectId 到底存不存在"（Module/06 §2.2 的不给探测面纪律）。
+    """
+    return f"项目不存在：{project_id}"
 
 
 def _meta_db(request: Request) -> MetaDB | None:
