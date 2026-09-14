@@ -5,7 +5,13 @@ import react from "@vitejs/plugin-react";
 // 因此**不要求 service 提供 CORS**（service 目前也没有 CORS 中间件）。
 const target = process.env["ZACE_WEB_API"] ?? "http://127.0.0.1:8787";
 
+// 部署（TASK-092）：SPA 挂在反向代理的子路径下（如 https://host/zace-web/）时，产物里的
+// 资源 URL 与 router basename 必须同时带前缀——两者都来自这里的 `base`，缺一不可。
+// 不设 `ZACE_WEB_BASE` 时仍是 `"/"`（本地开发与根路径部署行为不变）。
+const base = process.env["ZACE_WEB_BASE"] ?? "/";
+
 export default defineConfig({
+  base,
   plugins: [react()],
   server: {
     port: 5173,

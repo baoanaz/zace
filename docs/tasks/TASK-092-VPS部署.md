@@ -114,4 +114,21 @@ services:
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-14 · VPS 原生部署阶段记录（非 DoD 完成）
+
+- **分支/提交基线**：按用户明确授权直接在 VPS `main @ ce2b42d` 操作。
+- **实际部署**：因本机已有 nginx 占用 80/443，且 VPS 仅 2 vCPU / 1.9GB RAM，本阶段采用
+  systemd (`zace-service`) + 既有 nginx + 静态 SPA，而非卡内设计的 Docker Compose + Caddy。
+- **公开路径**：Web 为 `https://154.12.34.214/zace-web/`；service base URL 为
+  `https://154.12.34.214/zace-service`。未保留旧 `/zace/`、`/zace-api/` 路径。
+- **代码改动**：Vite `base` 读取 `ZACE_WEB_BASE`，React Router `basename` 使用
+  `import.meta.env.BASE_URL`；生产构建同时设置
+  `ZACE_WEB_BASE=/zace-web/` 与 `VITE_ZACE_API_BASE=/zace-service`。
+- **真实验证**：`npm run lint`、`npm run typecheck`、生产 `npm run build`、`nginx -t` 通过；
+  公网 Web 入口、hash 静态资源、SPA 深层路由、`/healthz`、`/api/meta` 均返回 200；nginx 与
+  zace-service 均为 active + enabled。
+- **已知基线失败**：`npm test -- src/app/App.test.tsx` 为 4 passed / 3 failed，失败与改动前交接
+  一致，报错为 Node/jsdom `AbortSignal` 实例不匹配。
+- **未决/未完成**：卡内 `deploy/`、Dockerfiles、部署手册及 compose/Caddy 验收尚未交付；
+  `npx zace-client` 鉴权 E2E、MCP stdio、服务重启后的账户/索引持久化仍待验证。因此本卡继续
+  保持 `pending`，不得据此声明 TASK-092 DoD 完成。

@@ -111,6 +111,7 @@ function buildRouter(options: {
     return <>{children}</>;
   }
 
+  // basename 取 Vite 的 BASE_URL（TASK-092）：子路径部署时路由才能与资源前缀一致。
   return createBrowserRouter([
     {
       path: "/login",
@@ -141,5 +142,5 @@ function buildRouter(options: {
         { path: "*", element: <Navigate to={account === null ? "/login" : "/"} replace /> },
       ],
     },
-  ]);
+  ], { basename: import.meta.env.BASE_URL });
 }
