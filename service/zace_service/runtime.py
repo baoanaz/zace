@@ -51,7 +51,7 @@ from zace_service.indexer import (
     ProjectIndexer,
     validate_local_root,
 )
-from zace_service.logging import redact_text
+from zace_service.logging import current_request_id, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.stats import dir_size_bytes
 from zace_service.sync_state import SyncState
@@ -569,6 +569,11 @@ class EngineManager:
                 chunks=self._project_chunk_count(project_id),
                 errors=len(report.errors),
                 error_text=errors or None,
+                # TASK-099 §B：把**当前请求**的 trace id 当作 callId 落库。客户端在同一次
+                # Tool 调用里给所有请求（含 N 次 batch-upload）发同一个 ``X-Request-Id``，
+                # 因此这几条 run 的 call_id 相同，与同一次调用的 ``query_audit.request_id``
+                # 也相同——分组靠这一个值，不需要额外的映射表（卡内 §B-3）。
+                call_id=current_request_id(),
             )
         except Exception:  # 记不上账不能把已经成功的索引变成失败（TASK-062 §C 的既有纪律）
             logger.exception("索引记录落库失败（不影响索引结果）：%s", project_id)
@@ -603,6 +608,9 @@ class EngineManager:
                 files_total=len(changes.added) + len(changes.modified),
                 errors=1,
                 error_text=_persist_error_text(exc),
+                # TASK-099 §B：失败的上传同样属于这次调用（否则时间线上会缺一块，
+                # 而"哪一步慢了/挂了"恰恰是用户最想看的）。
+                call_id=current_request_id(),
             )
         except Exception:  # 同上：记帐失败不改变索引结果（原异常仍在向上传播）
             logger.exception("索引失败记录落库失败（不影响错误上报）：%s", project_id)
@@ -614,6 +622,11 @@ class EngineManager:
     def _record_index_run(self, project_id: str, progress: IndexProgress) -> None:
         """把一次索引的结束态写进 ``index_runs``（``running`` 不落库：服务被杀不留幽灵行）。
 
+        ``call_id``（TASK-099 §B）取 :func:`zace_service.logging.current_request_id`：本回调在
+        **触发它的那次请求的线程内**执行（懒重扫路径）或后台线程内执行（``attach_local`` 的
+        启动索引），后者拿到 ``None``——即"不是某次 HTTP 调用的一部分"。该区分是**故意的**：
+        启动索引不该被挂在碰巧同刻发生的那次检索的 callId 下（那是两件事）。
+
         口径（TASK-062 §C/§D）：
         - **成功与失败都落**（只记成功会让"失败次数"恒为 0）；
         - ``state="done"`` 且 ``error`` 非空仍算 **succeeded**（那只是部分文件有解析问题），
@@ -622,8 +635,9 @@ class EngineManager:
 
         与上传路径（:meth:`ingest`）的关系：``duration_ms`` 沿用本路径（整秒精度，
         ``finished_at - started_at``），``chunks`` 用同一个 :meth:`_project_chunk_count`。
-        两条路径的**共同语义**是 ``state`` / ``errors`` / ``error_text`` / ``chunks``：
-        web 的"成功/失败"、"有解析问题"、"chunks"三列因此一致；
+        两条路径的**共同语义**是 ``state`` / ``errors`` / ``error_text`` / ``chunks`` /
+        ``call_id``：
+        web 的"成功/失败"、"有解析问题"、"chunks"与"属于哪次调用"四列因此一致；
         耗时绝对值的精度差异见 TASK-062 的「补做记录（TASK-085）」节。
         """
         db = self._meta_db
@@ -641,6 +655,7 @@ class EngineManager:
             chunks=self._project_chunk_count(project_id),
             errors=_count_errors(progress.error),
             error_text=progress.error,
+            call_id=current_request_id(),
         )
 
     def index_stats(

@@ -18,6 +18,11 @@
 
 短路包含 ``bestEffortContext`` / ``missingEvidence`` / ``nextQueries`` 三个键（D-24）。
 
+TASK-099 §A：上面四个 **``status`` 逐一落进 ``query_audit.answer_status``**，答案正文落
+``answer_text``（仅 ``answered`` 分支非空）——历史页弹窗的「输出」列取它。
+``search``（fast 模式）**不落正文**：它没有 LLM 答案，而 ``render_markdown`` 的结果含源码正文，
+落库会破 Module/04 §8 的"审计不存源码内容"纪律。
+
 薄壳纪律（D-34）：本文件不出现检索/组装/渲染逻辑——检索走 ``EngineManager.search``
 （转调 core ``search_with_trace``），渲染走 ``zace_core.contextpack.render_markdown``（D-21：
 渲染规则与合同强耦合，只此一份）。
@@ -60,13 +65,15 @@ from zace_core.contextpack import render_markdown
 from zace_core.types import ContextPack
 
 from zace_service import audit
-from zace_service.answer import AnswerError, answer_question, provider_for_app
+from zace_service.answer import AnswerError, answer_question
+from zace_service.auth import llm_owner
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import (
     CODE_EMBEDDING_UNAVAILABLE,
     PROVIDER_UNAVAILABLE_HINT,
     ApiError,
 )
+from zace_service.llmconfig import provider_for_request
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
 from zace_service.packmeta import evidence_summary, pack_meta
@@ -175,7 +182,7 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
     | ``answerable=false`` | ``insufficient_evidence`` | 短路包（TASK-087，不调 LLM） |
     | 未配置 ``ANSWER_*`` | ``degraded`` | 前置说明 ＋ 渲染包 |
     | 已配置但调用失败/超时 | ``degraded`` | 故障说明 ＋ 渲染包 |
-    | 成功 | ``answered`` | LLM 答案（已回验引用） |
+    | 成功 | ``answered`` | LLM 答案（已回验引用），``meta.llmModel`` 报实际模型 |
 
     为什么是 ``async def``（TASK-088）：LLM 调用是**秒级阻塞 I/O**，与 core 的 CPU 型检索不同；
     把两次外呼（检索 / LLM）都放进线程池，事件循环不因一次 ask 而卡住。
@@ -208,6 +215,10 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         )
         meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
         ctx["pack"] = pack
+        # TASK-099 §A：把判定与置信度交回审计（此前靠 audit 内部默认值取 pack 的同一个值，
+        # 现在集中由 handler 给出，与 answer_status 同一处定义，不两处各推一遍）。
+        ctx["answerable"] = pack.answerable
+        ctx["confidence"] = pack.confidence
         # TASK-094 §B3：四条分支（证据不足 / 未配置 / 调用失败 / 成功）都带告警——
         # 用户报"内存满了"时不该因为恰好走了降级分支而看不到提醒。
         warning = _storage_warning(request, manager, project_id)
@@ -215,12 +226,16 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         # 审计如实记 degraded=true（本路径不含 LLM 总结）。
         if insufficient:
             ctx["degraded"] = True
+            # TASK-099 §A：**没调 LLM** → 正文留 NULL，但状态必须记下来
+            # （把"没调"记成"调了但空答案"是本卡明令禁止的失信）。
+            ctx["answerStatus"] = audit.STATUS_INSUFFICIENT
             return _insufficient_package(pack, meta, warning=warning)
 
-        provider = provider_for_app(request.app)
+        provider = _ask_provider(request)
         if provider is None:
             # L5：未配置不报错（也不是 500）——降级包 + 告诉管理员该配什么。
             ctx["degraded"] = True
+            ctx["answerStatus"] = audit.STATUS_DEGRADED
             return _degraded_response(
                 pack, meta, notice=DEGRADED_NOTICE, reason=DEGRADED_NOTICE, warning=warning
             )
@@ -245,6 +260,7 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
             )
             ctx["degraded"] = True
             meta["degradedReason"] = LLM_FAILED_NOTICE
+            ctx["answerStatus"] = audit.STATUS_DEGRADED
             return _degraded_response(
                 pack, meta, notice=LLM_FAILED_NOTICE, reason=LLM_FAILED_NOTICE, warning=warning
             )
@@ -253,12 +269,43 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         meta["degraded"] = False
         meta["degradedReason"] = None
         _write_llm_observations(ctx, provider, outcome)
+        # TASK-099 §C-4：把**实际用来回答的模型名**放进 meta——用户级 LLM 配置生效后，
+        # 调用方（设置页/Agent/验收）需要能确认"现在用的到底是谁的模型"，
+        # 而不是靠"配过就相信它生效了"。必须在 :func:`_write_llm_observations` **之后**取
+        # （模型名是那个函数写的；本次实施先写反了顺序，``llmModel`` 一直是 None）。
+        # 模型名不是 secret（key 仍只有 ``apiKeyConfigured``）。
+        meta["llmModel"] = ctx.get("answerModel")
+        # TASK-099 §A：成功分支才落正文。落的是 ``outcome.answer``——即**已回验引用后的**
+        # 最终答案（与返回体 ``answer`` 同一份，未叠存储告警节）：用户回看的应当就是当时
+        # 模型给出的东西，而不是 audit 层另做一遍加工。
+        ctx["answerText"] = outcome.answer
+        ctx["answerStatus"] = audit.STATUS_ANSWERED
         return {
             "status": "answered",
             "answer": append_warning(outcome.answer, warning),
             "evidenceSummary": evidence_summary(pack),
             "meta": meta,
         }
+
+
+def _ask_provider(request: Request) -> Any:
+    """本次 ask 该用的 provider（TASK-099 §C-4）：**用户配置优先，否则服务端默认**。
+
+    为什么不再直接调 ``answer.provider_for_app``：那个缓存只有全局配置一个维度，
+    拿不到"这个用户配了什么"。本函数走 :mod:`zace_service.llmconfig` 的同一套解析逻辑
+    （MCP 面也用它），并把缓存键扩到 ``(settings, user_id, 配置 updated_at)``：
+    用户刚改完配置就能立即生效，不必重启服务。
+
+    身份用 :func:`zace_service.auth.llm_owner`——与**保存**端点同一个口径（本地模式 → 隐式
+    账户）：两处算出不同的 user_id 就会造成"设置页说已配置、实际没用上"。
+
+    返回 ``None`` = 未配置（用户与服务端都没配）→ 调用方走 D-26 降级包。
+    """
+    return provider_for_request(
+        request.app,
+        user_id=llm_owner(request).id,
+        db=_meta_db(request),
+    )
 
 
 def _storage_warning(
@@ -322,7 +369,12 @@ def _degraded_response(
 
 
 def _write_llm_observations(ctx: _AuditContext, provider: Any, outcome: Any) -> None:
-    """把 §E 的三个观测值交回审计（**真实值**，不编造）。"""
+    """把 §E 的三个观测值交回审计（**真实值**，不编造）。
+
+    TASK-099 §A 追加 ``answerModel``：**当前用哪个模型答的**。它进日志/审计暂存而不进
+    ``query_audit`` 表（表结构属卡内冻结面，加列要走单独的评估）；本卡用它来验证
+    §C 的"用户配置真的生效了"（§G-4 的证据）。
+    """
     ctx["citationCoverage"] = outcome.citation_coverage
     ctx["llmLatencyMs"] = outcome.latency_ms
     ctx["answerTokens"] = outcome.answer_tokens
@@ -394,6 +446,10 @@ def _audited(request: Request, *, mode: str, query: str) -> Iterator[_AuditConte
             llm_latency_ms=ctx.get("llmLatencyMs"),
             answer_tokens=ctx.get("answerTokens"),
             user_id=_user_id(request),
+            # TASK-099 §A：答案正文与状态（``answer_text`` 为 NULL 时状态仍必须落，
+            # 见 :func:`_write_llm_observations` 与三分支的注释）。
+            answer_text=ctx.get("answerText"),
+            answer_status=ctx.get("answerStatus"),
         )
     finally:
         # 同步 handler 在同线程执行，此时 ctx 已在上面落库完毕；async handler 的跨线程副本
@@ -456,6 +512,9 @@ def _record_failure(
         **_elapsed_kwargs(ctx),
         reason=reason,
         user_id=_user_id(request),
+        # TASK-099 §A：handler 若已判定分支（如检索链自己抛错前进过 ``provider is None``），
+        # 就把那个状态带过去；没有判定就留 ``None``（不替调用方编结论）。
+        answer_status=ctx.get("answerStatus"),
     )
 
 

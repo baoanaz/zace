@@ -39,6 +39,8 @@ __all__ = [
     "hash_api_token",
     "hash_password",
     "issue_session",
+    "llm_owner",
+    "llm_owner_optional",
     "local_user",
     "require_user",
     "revoke_session",
@@ -167,6 +169,40 @@ def require_user(request: Request) -> Principal:
             status=401,
         )
     return principal
+
+
+def llm_owner(request: Request) -> User:
+    """\"这个请求该把用户级 LLM 配置算在谁头上\"的**唯一口径**（TASK-099 §C）。
+
+    - 本地模式：**总是**有一个隐式账户（``authenticate`` 已返回它，但鉴权中间件在本地模式把
+      ``zace_user`` 置为 ``None``）——因此这里回落到 :func:`local_user`，否则本地模式下的
+      设置页保存成功了、``ask`` 却找不到那份配置；
+    - 云端：走 :func:`require_user`（无凭据 → 401），与其余账户级端点一致。
+
+    为什么必须集中：保存（``PUT /api/auth/llm-config``）、展示（``GET /api/meta``）与消费
+    （``POST /api/query/ask`` / MCP ``ask_project``）**三处必须算出同一个 user_id**，
+    否则会出现"设置页显示已配置、实际没用上"这类静默失灵——那正是本卡要消灭的问题。
+    """
+    settings = get_settings(request)
+    if settings.local_mode:
+        user = getattr(request.state, "zace_user", None)
+        return user if isinstance(user, User) else local_user()
+    return require_user(request).user
+
+
+def llm_owner_optional(request: Request) -> User | None:
+    """**免鉴权路径**上的 LLM 归属人（``GET /api/meta``）：无凭据时返回 ``None``。
+
+    为什么不能直接用 :func:`llm_owner`：``/api/meta`` 是公开端点（web 首屏就知道该显示登录
+    还是控制台），在那里要求鉴权会把它变成 401。未鉴权的云端调用回 ``None`` → 解析层
+    回落服务端默认，与 TASK-088 §F 的"未鉴权只看得到配了没"逐字一致。
+    """
+    settings = get_settings(request)
+    if settings.local_mode:
+        user = getattr(request.state, "zace_user", None)
+        return user if isinstance(user, User) else local_user()
+    user = getattr(request.state, "zace_user", None)
+    return user if isinstance(user, User) else None
 
 
 def get_meta_db(request: Request) -> MetaDB:

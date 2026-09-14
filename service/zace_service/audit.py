@@ -33,13 +33,18 @@ from zace_service.logging import current_request_id, get_logger, redact_text
 from zace_service.metadb import MetaDB
 
 __all__ = [
+    "ANSWER_STORE_MAX_CHARS",
     "EVIDENCE_FIELDS",
     "MODE_ASK",
     "MODE_SEARCH",
+    "STATUS_ANSWERED",
+    "STATUS_DEGRADED",
+    "STATUS_INSUFFICIENT",
     "evidence_meta",
     "redact_query_text",
     "record_query",
     "record_query_error",
+    "truncate_answer",
 ]
 
 logger = get_logger("zace_service.audit")
@@ -47,6 +52,25 @@ logger = get_logger("zace_service.audit")
 #: 两个端点的审计 ``mode``（DDL 注释冻结：``fast | deep``）。
 MODE_SEARCH = "fast"
 MODE_ASK = "deep"
+
+# --------------------------------------------------------------------------- TASK-099 §A
+
+#: ``answer_text`` 的长度上限（字符）。超过就截断并追加 :data:`ANSWER_TRUNCATION_SUFFIX`。
+#:
+#: 为什么必须卡：一条审计就能把库撑起来——LLM 在大 ``max_tokens`` 下可以输出数万字，而
+#: ``query_audit`` 每项目保留 :data:`zace_service.metadb.QUERY_AUDIT_KEEP` 条。20000 字符 ≈
+#: 40 KB/条，× 1000 条 ≈ 40 MB 上界（与项目索引同一个量级，可接受）。
+ANSWER_STORE_MAX_CHARS = 20_000
+#: 截断标记（用户要能看出"这里被截了"，而不是以为模型只说了这些）。
+ANSWER_TRUNCATION_SUFFIX = "…（已截断）"
+
+#: ``answer_status`` 的三个取值（TASK-099 §A；与 ``routers/query.py`` 的 ``status`` 逐一对应）。
+#:
+#: 为什么单独存这一列而不是"有正文就是成功"：``answerable=false`` 短路时**根本不调 LLM**，
+#: 与"调了 LLM 但答案是空"是两件事，只有状态列能把它们区分开。
+STATUS_ANSWERED = "answered"
+STATUS_INSUFFICIENT = "insufficient_evidence"
+STATUS_DEGRADED = "degraded"
 
 #: ``evidence_json`` 的允许字段（Module/04 §8：**不含源码内容**）。
 EVIDENCE_FIELDS: tuple[str, ...] = ("id", "path", "lines", "tier", "score")
@@ -93,6 +117,19 @@ def evidence_meta(pack: Any, *, limit: int | None = None) -> list[dict[str, Any]
     ]
 
 
+def truncate_answer(text: str | None) -> str | None:
+    """卡住答案正文的长度（``None`` 原样返回："没走 LLM"不该变成一个空串）。
+
+    只截断不脱敏：LLM 输出不含用户凭据（provider 的 key 只在出站 ``Authorization`` 头里），
+    而证据正文里的代码片段本来就来自用户自己的仓库，没有新高敏信息。
+    """
+    if text is None:
+        return None
+    if len(text) <= ANSWER_STORE_MAX_CHARS:
+        return text
+    return text[:ANSWER_STORE_MAX_CHARS] + ANSWER_TRUNCATION_SUFFIX
+
+
 def record_query(
     db: MetaDB | None,
     *,
@@ -108,6 +145,8 @@ def record_query(
     llm_latency_ms: float | None = None,
     answer_tokens: int | None = None,
     user_id: str | None = None,
+    answer_text: str | None = None,
+    answer_status: str | None = None,
 ) -> None:
     """把一次**成功返回**的查询落库（旁路：任何失败只记 WARN，不影响检索）。
 
@@ -119,6 +158,10 @@ def record_query(
     ``X-Request-Id``、日志的 ``requestId`` **同一个 contextvar**，因此历史页看到的 id 与用户
     在报错时拿到的头、以及 TASK-090 的日志端点能查到的记录**必然一致**（这就是本卡要的接缝）。
     取不到（未绑定）时落 ``None``，不编造。
+
+    ``answer_text`` / ``answer_status``（TASK-099 §A）：**同生共死**——有正文就必须有状态
+    （否则前端不知道那段文本是什么），没正文也必须留下状态（否则"没调 LLM"等于没记录）。
+    正文走 :func:`truncate_answer` 卡长度。
     """
     if db is None:
         return
@@ -139,6 +182,8 @@ def record_query(
             llm_latency_ms=_millis_or_none(llm_latency_ms),
             answer_tokens=answer_tokens,
             request_id=current_request_id(),
+            answer_text=truncate_answer(answer_text),
+            answer_status=answer_status,
             evidence=evidence_meta(pack),
             user_id=user_id,
         )
@@ -155,6 +200,7 @@ def record_query_error(
     latency_ms: float,
     reason: str,
     user_id: str | None = None,
+    answer_status: str | None = None,
 ) -> None:
     """把一次**没走到检索结果**的请求落库（业务失败与未预期异常共用）。
 
@@ -179,6 +225,11 @@ def record_query_error(
                 used_tokens=0,
                 citation_coverage=None,
                 request_id=current_request_id(),
+                # TASK-099 §A：失败路径**没有**答案正文（``None``），但状态仍要如实记。
+                # 不写 ``STATUS_DEGRADED`` 当默认值：调用方没说"走的是哪条降级分支"时宁可留空，
+                # 也不替它下一个可能不对的结论。
+                answer_text=None,
+                answer_status=answer_status,
                 evidence=(),
                 user_id=user_id,
             )

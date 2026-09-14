@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::identity::repo_identity;
 use crate::index::{require_non_empty, IndexManager};
-use crate::remote::{validate_project_root, RemoteClient};
+use crate::remote::{validate_project_root, CallContext, RemoteClient};
 
 /// `search_context.max_tokens` 上限（CF-06 冻结值）。
 pub const MAX_TOKENS_SEARCH: i64 = 16_000;
@@ -104,13 +104,26 @@ impl ToolLayer {
     }
 
     /// 执行一个工具调用。
+    ///
+    /// **一次调用一个 callId**（TASK-099 §B-2）：进入这里先开一个 :class:`CallContext`，
+    /// 再派生一个带它的 ``RemoteClient``——该次调用的所有 HTTP 请求（resolve / 上传 /
+    /// 删除通知 / checkpoint / 检索）因此共享同一个 ``X-Request-Id``。服务端靠这个值把
+    /// "N 次初始化 + 1 次检索"归成一次调用（卡内 §B-1 的问题）。
+    ///
+    /// 并发安全：callId 是**每次调用局部**的值，不存进 ``self``，因此两个 tool call 并发
+    /// 执行时不会把彼此的 id 串起来（会话缓存 ``self.sessions`` 是跨调用状态，与它无关）。
     pub async fn execute(&self, tool_name: &str, arguments: Value) -> Result<String, ToolError> {
+        let remote = self.remote.for_call(CallContext::new());
+        // 诊断走 stderr（stdout 只出 JSON-RPC 帧）：用户/日志据此把客户端侧与
+        // 服务端 ``GET /api/calls/{callId}`` 对上（TASK-099 §G 要抓的就是它）。
+        eprintln!("zace-client: callId={} tool={tool_name}", remote.call_id());
         match tool_name {
             "search_context" => {
                 let args: SearchArguments = decode(tool_name, arguments)?;
                 require_query(&args.query, "query")?;
                 require_max_tokens(args.max_tokens, MAX_TOKENS_SEARCH, "max_tokens")?;
                 self.search(
+                    &remote,
                     &args.project_root,
                     args.query.trim(),
                     args.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
@@ -122,6 +135,7 @@ impl ToolLayer {
                 require_query(&args.question, "question")?;
                 require_max_tokens(args.max_tokens, MAX_TOKENS_ASK, "max_tokens")?;
                 self.ask(
+                    &remote,
                     &args.project_root,
                     args.question.trim(),
                     args.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
@@ -134,12 +148,13 @@ impl ToolLayer {
 
     async fn search(
         &self,
+        remote: &RemoteClient,
         project_root: &str,
         query: &str,
         max_tokens: i64,
     ) -> Result<String, ToolError> {
-        let (project_id, checkpoint_id) = self.sync_project(project_root).await?;
-        self.remote
+        let (project_id, checkpoint_id) = self.sync_project(remote, project_root).await?;
+        remote
             .search(&project_id, query, max_tokens, checkpoint_id.as_deref())
             .await
             .map_err(|error| ToolError::Failed(format!("检索失败：{error:#}")))
@@ -147,13 +162,13 @@ impl ToolLayer {
 
     async fn ask(
         &self,
+        remote: &RemoteClient,
         project_root: &str,
         question: &str,
         _max_tokens: i64,
     ) -> Result<String, ToolError> {
-        let (project_id, checkpoint_id) = self.sync_project(project_root).await?;
-        let (status, answer) = self
-            .remote
+        let (project_id, checkpoint_id) = self.sync_project(remote, project_root).await?;
+        let (status, answer) = remote
             .ask(&project_id, question, checkpoint_id.as_deref())
             .await
             .map_err(|error| ToolError::Failed(format!("提问失败：{error:#}")))?;
@@ -164,16 +179,19 @@ impl ToolLayer {
     ///
     /// 时序（Module 05 §3.3 + 就绪度报告 §5）：
     /// ① 算身份 → ② resolve → ③ 扫描对账 → ④ 上传变更 → ⑤ 通知删除 → ⑥ 建 checkpoint。
+    ///
+    /// ``remote`` 是**本次调用**的客户端（带该次调用的 callId，TASK-099 §B-2）：
+    /// 上面的六步全走它，因此服务端那 N 条 ``index_runs`` 与随后的 ``query_audit`` 共享同一 id。
     async fn sync_project(
         &self,
+        remote: &RemoteClient,
         project_root: &str,
     ) -> Result<(String, Option<String>), ToolError> {
         let root = validate_project_root(project_root)
             .map_err(|error| ToolError::invalid(error.to_string()))?;
         let identity = repo_identity(&root);
 
-        let project_id = self
-            .remote
+        let project_id = remote
             .resolve_project(&identity.identity_key, &identity.display_name)
             .await
             .map_err(|error| {
@@ -192,8 +210,7 @@ impl ToolLayer {
         // 上传变更（有变更才发请求）。
         if !scan.to_upload.is_empty() {
             let payload = crate::index::upload_payload(&scan.to_upload);
-            let outcome = self
-                .remote
+            let outcome = remote
                 .upload_files(&project_id, &payload)
                 .await
                 .map_err(|error| ToolError::Failed(format!("上传失败：{error:#}")))?;
@@ -218,7 +235,7 @@ impl ToolLayer {
 
         // 通知删除（幂等）。
         if !scan.deleted.is_empty() {
-            self.remote
+            remote
                 .notify_deletions(&project_id, &scan.deleted)
                 .await
                 .map_err(|error| ToolError::Failed(format!("删除通知失败：{error:#}")))?;
@@ -233,7 +250,7 @@ impl ToolLayer {
         let previous = self.session(&project_id);
         let checkpoint_id = match previous.checkpoint_id.clone() {
             Some(id) if previous.scope.as_ref() == Some(&scope) => Some(id),
-            _ => match self.remote.create_checkpoint(&project_id, &scope).await {
+            _ => match remote.create_checkpoint(&project_id, &scope).await {
                 Ok(id) => Some(id),
                 Err(error) => {
                     // checkpoint 是传输优化，失败不阻断检索（降级为服务端不用 checkpoint）。

@@ -12,6 +12,13 @@
 - **401 不区分细节**；``GET /api/auth/tokens`` **绝不含明文或哈希**；
 - ``GET /api/meta``（TASK-088 §F）：免鉴权，因此**敏感面必须门禁**——
   未鉴权的云端调用只拿得到"配置了没"与"缺哪些环境变量名"，拿不到模型名/地址/参数。
+
+TASK-099 §C 追加 **用户级 LLM 配置**（``PUT`` / ``DELETE /api/auth/llm-config``）：
+**这两个端点在本地模式也允许**（与 ``tokens`` / ``register`` 的 403 不同）。理由：
+本地单用户自部署是本项目的主场景，而"让用户配自己的 LLM"正是该场景下最需要的功能；
+为它强行要求开户 + 登录才能用，是把实现约束当成产品约束。实现上仍是**同一套**归属逻辑——
+本地模式的隐式账户 ``auth.local_user()`` 提供一个真实 ``user_id``（``"local"``），
+配置存在同一张 ``user_llm_config`` 表里（卡内 §C-2/§C-3）。
 """
 
 from __future__ import annotations
@@ -30,13 +37,22 @@ from zace_service.auth import (
     hash_password,
     integrity_is_unique,
     issue_session,
+    llm_owner,
+    llm_owner_optional,
     require_user,
     revoke_session,
     verify_password,
 )
 from zace_service.deps import get_settings
 from zace_service.errors import ApiError
+from zace_service.llmconfig import (
+    SOURCE_SERVER,
+    SOURCE_USER,
+    ResolvedLlmConfig,
+    resolve_llm_config,
+)
 from zace_service.logging import get_logger
+from zace_service.metadb import MetaDB
 
 router = APIRouter(tags=["auth"])
 
@@ -47,6 +63,8 @@ MIN_PASSWORD_CHARS = 3
 MAX_PASSWORD_CHARS = 200
 #: 账户名长度上限。
 MAX_NAME_CHARS = 64
+#: LLM 配置字段的长度上限（防超长输入：URL/模型名/Key 都是小串）。
+MAX_LLM_FIELD_CHARS = 2048
 
 
 class Credentials(BaseModel):
@@ -60,6 +78,18 @@ class TokenRequest(BaseModel):
     """创建 API Key 的请求体（``name`` 可省略）。"""
 
     name: str = ""
+
+
+class LlmConfigRequest(BaseModel):
+    """``PUT /api/auth/llm-config`` 的请求体（TASK-099 §C-3）。
+
+    ``apiKey`` 传空串（或不传）表示**保持不变**：用户只想改模型名时不必重新粘贴 key
+    （key 从不回显，因此"留空 = 不改"是唯一能用的语义）。首次保存必须给 key。
+    """
+
+    model: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
 
 
 @router.get("/api/meta")
@@ -83,6 +113,14 @@ def meta(request: Request) -> dict[str, Any]:
         db = get_meta_db(request)
         user_count = db.user_count()
         needs_bootstrap = user_count == 0
+    # TASK-099 §C-4：设置页要显示"**当前实际生效**的那一份"配置。用户配了 LLM 时（REST 面
+    # 就会用它的）必须展示用户那份，否则页面会拿环境变量给人看，与实际行为相反。
+    # ``/api/meta`` 免鉴权（web 首屏）→ 用 optional 版本：未登录的云端调用拿不到
+    # 用户配置，回落服务端默认（TASK-088 §F 的同一门禁口径）。
+    owner = llm_owner_optional(request)
+    resolved = resolve_llm_config(
+        settings, user_id=getattr(owner, "id", None), db=_optional_meta_db(request)
+    )
     return {
         "version": settings.version,
         "localMode": settings.local_mode,
@@ -90,19 +128,25 @@ def meta(request: Request) -> dict[str, Any]:
         "registerOpen": settings.register_open,
         "needsBootstrap": needs_bootstrap,
         "userCount": user_count if settings.local_mode else None,
-        "config": effective_config(settings, details=settings.local_mode or user is not None),
+        "config": effective_config(
+            settings, details=settings.local_mode or user is not None, resolved=resolved
+        ),
     }
 
 
-def effective_config(settings: Any, *, details: bool) -> dict[str, Any]:
+def effective_config(
+    settings: Any, *, details: bool, resolved: ResolvedLlmConfig | None = None
+) -> dict[str, Any]:
     """生效中的服务配置（设置页展示用；**不含任何 secret**）。
 
     ``details=False``（云端未鉴权）：只回"配了没"与缺失的环境变量名；
     ``details=True``（本地模式或已登录）：额外回模型名/地址/超时等只读展示值。
+
+    ``resolved``（TASK-099 §C-4）：已解析出的**实际生效**配置；为 ``None`` 时按环境变量报。
     """
     return {
         "embedding": _embedding_config(details=details),
-        "llm": _llm_config(settings, details=details),
+        "llm": _llm_config(settings, details=details, resolved=resolved),
         "storage": _storage_config(settings),
     }
 
@@ -122,15 +166,35 @@ def _storage_config(settings: Any) -> dict[str, Any]:
     }
 
 
-def _llm_config(settings: Any, *, details: bool) -> dict[str, Any]:
-    """LLM（``ANSWER_*``）生效值。
+def _llm_config(
+    settings: Any, *, details: bool, resolved: ResolvedLlmConfig | None = None
+) -> dict[str, Any]:
+    """LLM 生效值（``ANSWER_*`` 或**用户配置**）。
 
     ``apiKeyConfigured`` 是**布尔**：连"key 有几个字符"都不给（长度也是信息）。
+    TASK-099 §C-4 追加 ``source``（``user`` / ``server``）：设置页据此告诉用户
+    "现在实际在用哪一份"；该用户的 key 本身**永不出现在任何字段**里（只有布尔）。
     """
+    if resolved is not None and resolved.source == SOURCE_USER:
+        return {
+            "configured": resolved.configured,
+            "apiKeyConfigured": bool(resolved.api_key),
+            # 用户配置不来自环境变量 → 这里为空（前端据此不再显示"缺环境变量"那一句）。
+            "missingEnv": [],
+            "missingKeys": list(resolved.missing_keys),
+            "source": SOURCE_USER,
+            "model": resolved.model,
+            "baseUrl": resolved.base_url,
+            "timeoutS": resolved.timeout_s,
+            "maxTokens": resolved.max_tokens,
+            "temperature": resolved.temperature,
+        }
     payload: dict[str, Any] = {
         "configured": bool(settings.answer_configured),
         "apiKeyConfigured": bool(settings.answer_api_key),
         "missingEnv": list(settings.answer_missing_env),
+        "missingKeys": [],
+        "source": SOURCE_SERVER,
     }
     if not details:
         return payload
@@ -318,6 +382,114 @@ def revoke_token(id: str, request: Request) -> Response:  # noqa: A002 - 路径�
     if not get_meta_db(request).revoke_token(principal.user.id, id):
         raise ApiError(code="token_not_found", message=f"API Key 不存在或已撤销：{id}", status=404)
     return Response(status_code=204)
+
+
+# --------------------------------------------------------------------------- 用户级 LLM 配置
+
+
+@router.put("/api/auth/llm-config")
+def put_llm_config(payload: LlmConfigRequest, request: Request) -> dict[str, Any]:
+    """保存（或覆盖）**本用户**的 LLM 配置（TASK-099 §C-3）。
+
+    三个字段语义：
+
+    - ``model`` / ``baseUrl``：必填（空串 → 400 ``invalid_llm_config``）；
+    - ``apiKey``：空串/省略 = **保持不变**（key 从不回显，"留空不改"是唯一可用语义）；
+      首次保存必须给值，否则 400。
+
+    **响应里不含 key 的任何部分**（含长度/前缀/哈希）：只给 ``apiKeyConfigured`` 布尔。
+    日志只记 ``user_id`` 与 ``model``——``model`` 是用户自选的非敏感值（与 ``baseUrl`` 不同，
+    后者是内部拓扑，只在已登录的 ``/api/meta`` 里出现）。
+
+    本地模式也允许（见模块 docstring）：用隐式账户 ``auth.local_user()``，它提供一个稳定
+    的 ``user_id``，因此配置同样能落到 ``user_llm_config`` 表里并被 ``ask`` 用上。
+    """
+    user = _llm_owner(request)
+    model = payload.model.strip()
+    base_url = payload.baseUrl.strip()
+    api_key = payload.apiKey.strip()
+    _validate_llm_config(model, base_url, api_key)
+    db = _require_meta_db(request)
+    try:
+        saved = db.save_llm_config(
+            user.id,
+            model=model,
+            base_url=base_url,
+            # 空串 → None = 保持不变（见 :meth:`MetaDB.save_llm_config`）。
+            api_key=api_key or None,
+        )
+    except ValueError as exc:
+        # 唯一触发点：首次保存没给 key（没有旧值可继承）。
+        raise ApiError(code="invalid_llm_config", message=str(exc), status=400) from None
+    logger.info("用户 LLM 配置已更新：user=%s model=%s", user.id, saved.model)
+    return {**saved.to_json(), "source": SOURCE_USER}
+
+
+@router.delete("/api/auth/llm-config")
+def delete_llm_config(request: Request) -> Response:
+    """删除本用户的 LLM 配置 → 回落服务端默认（TASK-099 §C-3）。
+
+    **幂等**：本来就没配也返回 204。删除的语义是"让它不在"，而"已经不在"就是目标状态；
+    报 404 只会让前端多写一个无意义的分支（用户点两次"清除"不是错误）。
+
+    返回 204（无响应体）：没有任何有意义的字段可回（key 不回显，source 固定是 server）。
+    """
+    user = _llm_owner(request)
+    removed = _require_meta_db(request).delete_llm_config(user.id)
+    logger.info("用户 LLM 配置已删除（回落服务端默认）：user=%s removed=%s", user.id, removed)
+    return Response(status_code=204)
+
+
+def _llm_owner(request: Request) -> Any:
+    """LLM 配置的归属人（本地模式为隐式账户，云端为已认证用户）。
+
+    直接转调 :func:`zace_service.auth.llm_owner`：保存 / 展示（``/api/meta``）/ 消费
+    （``ask``）三处必须用**同一个** ``user_id``，否则会出现"设置页显示已配置、实际没用上"。
+    """
+    return llm_owner(request)
+
+
+def _validate_llm_config(model: str, base_url: str, api_key: str) -> None:
+    """字段校验（长度 + 非空 + URL 形态）。**不回显任何字段值**——key 可能就在里面。"""
+    for name, value in (("model", model), ("baseUrl", base_url), ("apiKey", api_key)):
+        if len(value) > MAX_LLM_FIELD_CHARS:
+            raise ApiError(
+                code="invalid_llm_config",
+                message=f"{name} 过长（上限 {MAX_LLM_FIELD_CHARS} 字符）",
+                status=400,
+            )
+    if not model:
+        raise ApiError(code="invalid_llm_config", message="model 不能为空", status=400)
+    if not base_url:
+        raise ApiError(code="invalid_llm_config", message="baseUrl 不能为空", status=400)
+    if not base_url.startswith(("http://", "https://")):
+        raise ApiError(
+            code="invalid_llm_config",
+            message="baseUrl 必须以 http:// 或 https:// 开头（请填 OpenAI 兼容的 /v1 地址）",
+            status=400,
+        )
+
+
+def _require_meta_db(request: Request) -> MetaDB:
+    """LLM 配置必须有库可存：无库 → 503（而不是假装保存成功）。
+
+    本地模式下 ``create_app`` 不建库（R34），因此这条分支在本地模式下是**可能的**——
+    诚实优于便利：返回 503 并说明为什么，比"200 但其实什么都没存"好。
+    """
+    db = _optional_meta_db(request)
+    if db is None:
+        raise ApiError(
+            code="meta_db_unavailable",
+            message="元数据库未就绪（zace-meta.db），用户配置无处存放：请通过 create_app 启动服务",
+            status=503,
+        )
+    return db
+
+
+def _optional_meta_db(request: Request) -> MetaDB | None:
+    """可缺失的元数据库（不在此处建库：本地模式按 R34 默认无账户库）。"""
+    db = getattr(request.app.state, "meta_db", None)
+    return db if isinstance(db, MetaDB) else None
 
 
 # --------------------------------------------------------------------------- 辅助

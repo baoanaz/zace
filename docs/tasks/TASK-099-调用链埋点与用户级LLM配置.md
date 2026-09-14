@@ -1,6 +1,6 @@
 # TASK-099：调用链埋点与用户级 LLM 配置
 
-> 状态：pending ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：TASK-100（前端已就绪，等待本卡的数据）
+> 状态：review ｜ 阶段：Phase 4（M4）｜ 硬依赖：无 ｜ soft 依赖：TASK-100（前端已就绪，等待本卡的数据）
 > 建议分支：`feature/task-099-callid-llm-config_<你的缩写><MMDD>`
 >
 > 交付物所有权：
@@ -319,4 +319,211 @@ cd web && npm run lint && npx tsc --noEmit && npm test && npm run build
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+### 2026-09-14 ｜ 泳道 A ｜ 分支 `feature/task-099-callid-llm-config_xwz0914` ｜ 状态 review
+
+**一句话**：三个缺口（答案落库 / callId 关联 / 用户级 LLM 配置）全部实现，并在真机真实链路
+（`~/.zace/cockpit-agents` 索引 + `cockpit-agents-py` 仓库 + 真实 LLM）验证通过。
+
+#### 验收命令与结果
+
+| 命令 | 结果 |
+|---|---|
+| `env -u EMBED_MODE uv run pytest -o addopts="" -q` | **1014 passed, 2 skipped**（基线 983+2；本卡新增 31 条） |
+| `uv run ruff check .` | All checks passed |
+| `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过 |
+| `cd client && cargo test` | **56 passed**（基线 50；新增 6 条） |
+| `cd web && npm run lint && npx tsc --noEmit && npm test` | 全绿，**66 passed**（基线 63；新增 3 条，改写 1 条） |
+
+#### §A 答案落库（迁移前后证据）
+
+- `query_audit` 新增 `answer_text TEXT` / `answer_status TEXT`，**走 ALTER 路径**（`_AUDIT_COLUMNS`），
+  未改 `CREATE TABLE`；`record_query()` 追加同名参数（带默认值，向后兼容）。
+- 旧库升级实测（用真实旧 schema 建库后打开）：
+
+```
+BEFORE runs: ['id','project_id','state','started_at','finished_at','duration_ms',
+              'files_total','files_processed','chunks','errors','error_text']
+BEFORE audit: answer_text 存在? False
+AFTER runs call_id: True
+old run:  {'runId':1,'state':'done','durationMs':4000,'callId':None}      ← 旧行 NULL，不编造
+old audit:{'queryId':1,'query':'旧查询','answerText':None,'answerStatus':None}
+idempotent reopen OK    count: 1
+```
+
+- 真实 LLM 落库（3 条走 LLM + 1 条短路；`answer_text` 长度单位为字符）：
+
+```
+id  mode  answer_status          chars  head
+1   fast                                                       ← search 不落正文（设计如此）
+2   deep  insufficient_evidence                                ← 正文 NULL
+3   deep  answered               1346   ## Answer / 依据现有证据，CapabilityRegistry 的注册方式是：**先实例化…
+4   deep  answered               1579   ## Answer / 依据现有证据，`CapabilityRegistry` 的注册方式是：实例化后调用…
+5   deep  answered               1105   ## Answer / 依据现有证据，CapabilityRegistry 被定位为**启动阶段的能力注册所有者…
+```
+
+- 长度上限 `ANSWER_STORE_MAX_CHARS = 20000`（+ `…（已截断）` 标记），有单测钉住。
+- **`search`（fast）不落正文**：它的输出是含源码的渲染包，落库会破 Module/04 §8 的“不存源码内容”。
+
+#### §B callId 关联
+
+**列名选择与理由（卡内 §B-3 二选一）**：采用 **`index_runs.call_id` + 复用 `query_audit.request_id`**，
+不为 `query_audit` 新加 `call_id` 列。理由：两者语义已经统一（都是 callId），同一值由客户端同一个
+`X-Request-Id` 头承载；再加一列会产生“同一事实两个字段”，需要决定谁是权威、何时同步，
+而收益只是名字好看。代价（已写入报告）：命名不齐会让人误以为它们无关——已在 `_INDEX_RUN_COLUMNS`、
+`record_index_run`、`routers/ops.py` 三处注释里交叉指明，并在文档字符串里说明“天然相等”。
+
+**抓取的真实请求头（§G-1，真机客户端 → 真机服务）**：一次 `search_context` 共 6 个请求，全带同一 callId：
+
+```
+POST /api/projects/resolve   X-Request-Id=1789383613328-8bd08eeaec028787
+POST /api/sync/batch-upload  X-Request-Id=1789383613328-8bd08eeaec028787
+POST /api/sync/batch-upload  X-Request-Id=1789383613328-8bd08eeaec028787
+POST /api/sync/batch-upload  X-Request-Id=1789383613328-8bd08eeaec028787
+POST /api/sync/checkpoint    X-Request-Id=1789383613328-8bd08eeaec028787
+POST /api/query/search       X-Request-Id=1789383613328-8bd08eeaec028787
+```
+
+**查库证据（§G-2）**：两表关联字段同值（SQL 断言输出 `MATCH: 两张表的调用关联字段同值 = …`）：
+
+```
+id  project_id        state  call_id                         duration_ms  files_total  chunks
+1   8e69da62f37e5783  done   1789383613328-8bd08eeaec028787  3000         113          3416
+2   8e69da62f37e5783  done   1789383613328-8bd08eeaec028787  2000         119          3416
+3   8e69da62f37e5783  done   1789383613328-8bd08eeaec028787  2000         55           3416
+
+id  mode  request_id                      answerable  answer_status
+1   fast  1789383613328-8bd08eeaec028787  1
+```
+
+**`GET /api/calls/{callId}` 真实响应（§G-3）**：4 条 entry（3 index + 1 query）按时间排序，
+`totals = {indexDurationMs: 7000, queryLatencyMs: 845, totalMs: 7845, indexRuns: 3, queries: 1}`，
+`withoutCallId: 0`。
+
+#### §C 用户级 LLM 配置
+
+- 新建 `llmconfig.py`：`resolve_llm_config(settings, user_id, db)` 是 REST/MCP **共用的唯一解析入口**；
+  用户配置优先，否则回落 `ANSWER_*`；`ResolvedLlmConfig.to_public_json()` 是唯一允许出网的形态。
+- 端点：`PUT /api/auth/llm-config`（`{model, baseUrl, apiKey}`；**`apiKey` 空串 = 保持不变**）、
+  `DELETE /api/auth/llm-config`（幂等 204）；`GET /api/meta` 的 `config.llm` 追加
+  `source: "user" | "server"` 与 `missingKeys`。
+- **key 隔离的专门断言**（`test_key_is_never_echoed_by_any_endpoint`）：
+
+```python
+secret = "sk-zace-t099-SECRET-abcdefghijklmnop"
+env.client.put("/api/auth/llm-config", json={"model": "secretive-model",
+    "baseUrl": "https://llm.internal.example/v1", "apiKey": secret})
+assert secret not in saved.text
+for endpoint in ("/api/meta", "/api/auth/me", "/api/usage/summary", "/api/account/overview"):
+    assert secret not in env.client.get(endpoint).text          # 全绿
+    assert secret[:12] not in env.client.get(endpoint).text     # 前缀也不给
+assert str(len(secret)) not in saved.text                        # 长度也是信息
+assert env.db.get_llm_config("local").api_key == secret          # 库里仍是明文（本卡裁定）
+```
+
+另有三条同类断言：保存**之后**的 `/api/meta`、400 错误响应、以及日志面（`caplog`）均不含 key；
+同时断言日志确实记了这次变更（防“靠什么都不记来作弊”）。
+
+#### §C-3-1 契约路径三处改动清单
+
+| 处 | 文件 | 状态 |
+|---|---|---|
+| ① 契约 | `docs/contracts/openapi.yaml` | **未改**（实施 AI 不得改，待编排者按 §D 申请裁定） |
+| ② 白名单 | `service/tests/test_skeleton.py::TASK_EXTENSION_PATHS` | **已改**（+`/api/calls/{callId}`、`/api/auth/llm-config`，注释写明 TASK-099 §B/§C 授权） |
+| ③ 实际路由 | `service/zace_service/routers/{ops,auth}.py` | **已改**（`/api/calls/{callId}` GET；`/api/auth/llm-config` PUT+DELETE） |
+
+→ **我已同时修改“白名单 + 实际路由”，契约文件保持未改（符合契约纪律）**，等编排者把这两个路径写入
+`docs/contracts/openapi.yaml`。路径冻结测试 `test_openapi_paths_match_cf05_contract` 当前为绿。
+
+#### §D L2 契约申请（等编排者裁定）
+
+```
+## L2 契约申请
+- 变更：新增 GET /api/calls/{callId}、PUT/DELETE /api/auth/llm-config
+- 动机：
+  · GET /api/calls/{callId}：用户 2026-09-14 要“一次 Tool 调用的完整视图”（N 次仓库初始化 + 1 次检索
+    的耗时归总）；服务端此前无法把这几条记录串起来。客户端现在用 X-Request-Id 承载 callId，
+    该端点把 index_runs.call_id 与 query_audit.request_id 合并成一条按时间排序的时间线。
+  · PUT/DELETE /api/auth/llm-config：用户要“设置页自定义 LLM（模型名/URL/Key），与用户绑定，
+    ASK 工具调用用用户配置”。此前没有任何配置写入端点，表单只能 disabled。
+- 影响面：CF-05 路由白名单（两个新路径）、web 端调用（SettingsPage + api/client.ts）、
+  TASK-090 的日志查询语义（同一次调用的 N 个请求共享一个 requestId，因此“按 trace 查日志”
+  会把它们归到同一条——这正是需要的：用户报错时给的就是 callId）。
+- 替代方案：
+  · 时间线能否不加路径？不能。现有端点都是单项目维度（/api/projects/{id}/index-runs），
+    而一次调用可能同时初始化多个仓库、且必须与检索审计合并——跨项目归总是新语义。
+  · LLM 配置能否复用现有端点？不能。POST /api/auth/tokens 是“凭证”语义，字段与生命周期都不同；
+    /api/meta 是只读公开端点。唯一合理位置就是 /api/auth/*（与 tokens 同级的“账户自身设置”）。
+```
+
+#### §B-4 请求头是否在契约冻结范围（重复核验）
+
+已核验并写成测试 `test_request_header_is_not_part_of_the_frozen_contract`：
+`docs/contracts/openapi.yaml` 中 `x-request-id` / `headers:` / `authorization` **全部无匹配**
+→ 请求头**不在** CF-05 冻结范围，客户端开始发送该头**不需要 L2 申请**。
+语义变化（如实说明）：客户端在**同一次 Tool 调用**里给所有请求发**同一个**值，
+因此服务端会把这一串请求视为同一次调用（TASK-090 的日志查询随之把它们归为一条）。
+
+#### §G 真实场景 5 项验证
+
+| # | 验证项 | 结果 |
+|---|---|---|
+| 1 | 客户端发起 `search_context` → 抓取实际请求头 | ✅ 6 个请求（1 resolve + 3 batch-upload + 1 checkpoint + 1 search）全带同一 callId（见上方原文） |
+| 2 | 查库确认两表关联字段一致 | ✅ SQL 断言输出 `MATCH`；真实数据见上方两张表 |
+| 3 | `GET /api/calls/{callId}` 完整时间线 | ✅ 4 条 entry、按时间排序、totals 正确（见 §B 节） |
+| 4 | 设置用户 LLM → `ask` 用用户配置 | ✅ 真实 LLM 返回 `status=answered`、**`meta.llmModel = deepseek-v4-flash`**（用户配置值，服务端默认是 `deepseek/deepseek-v4.1-flash`） |
+| 5 | 删除用户配置 → 回落服务端默认 | ✅ `DELETE` → 204；再调 `meta.llmModel = deepseek/deepseek-v4.1-flash` |
+
+真实素材：`~/.zace/cockpit-agents` 索引（287 files / 3416 chunks / 16176 edges）+ `cockpit-agents-py` 仓库
++ `ANSWER_*` 指向的真机 LLM（`http://154.12.34.214:8080/v1`）。服务用 `zace-service local`
+（MetaDB 已 attach）起在 19011/19012，客户端用 `client/target/release/zace-client` 走 stdio。
+
+**为验证 §A 的“没调 LLM 就不是空答案”**，真实跑出一条 `answerable=false`：
+`status=insufficient_evidence`、`llmModel=None`、库里 `answer_text IS NULL` 且 `answer_status='insufficient_evidence'`。
+
+#### 与设计偏差
+
+1. **`audit.py` 越出交付物清单**（清单只列 `routers/query.py`）。原因：真正调
+   `db.record_query()` 的是 `audit.py`，不碰它就无法把 `answer_text` 传到库。改动是**最小**的：
+   新增两个可选 kwarg（`answer_text` / `answer_status`）+ 透传 + 一个 `truncate_answer()`。
+   已在用户确认下实施。
+2. **`web/` 越出交付物清单**。§C-5 明确要求把 `CAN_SAVE_USER_LLM` 置 true 并接端点，清单却未列 `web/`。
+   已在用户确认下实施；改动集中在 `SettingsPage.tsx` + `api/client.ts`（类型与两个 API 函数）+ 对应测试。
+3. **本地模式允许保存用户级 LLM 配置**（与 `tokens` / `register` 的 403 `local_mode` 先例不同）。
+   理由与实现见下一条及 `routers/auth.py` 模块 docstring。已在用户确认下实施。
+4. **`meta.llmModel` 为新增的响应字段**（不在卡内 §C-4 枚举里）。理由：让 §G-4/§G-5 与设置页
+   能**直接看到实际生效的模型名**，而不是靠“配过就相信它生效了”；模型名不是 secret。
+
+#### 未决问题
+
+1. **本地模式为何与 `tokens` 不同**：`_require_remote` 在 `tokens`/`register` 上返回 403 `local_mode`，
+   而本卡的 `llm-config` 在本地模式可用。裁定依据（`auth.llm_owner`）：本地单用户自部署是主场景，
+   用户要的正是“配自己的 LLM”；强行要求开户+登录是把实现约束当产品约束。
+   实现上仍是同一套归属逻辑（本地模式的隐式账户提供稳定 `user_id="local"`，`user_llm_config` 表无外键）。
+   **若编排者认为应与 tokens 保持一致，改动点只有 `routers/auth.py` 的两处 `_require_remote` 调用。**
+2. **明文存储 §C-2 裁定的评价**：本卡照裁定实施（明文 `api_key`），并且做到了“不出网 + 不进日志”。
+   但**建议后续改进**：① `.env` 的 `ANSWER_API_KEY` 与 DB 明文属同一信任域的说法成立，
+   然而 DB 会被**备份/复制**（本次验证就 `cp` 过一份），而 `.env` 通常在 `.gitignore` 之外另行保管；
+   ② 若将来支持多租户或托管部署，明文必须改为加密（需引入密钥管理，独立议题）。
+3. **MCP 快照限制的实际影响**：`build_mcp` 在 `create_app` 时把 `Settings` 包进闭包，
+   但本卡把 provider 解析推迟到**每次 tool 调用**（`_provider_resolver` → `provider_for_request`），
+   并按 `(settings, user_id, 配置 updated_at)` 失效缓存，因此**用户 LLM 配置变更在 MCP 面也无需重启**。
+   仍存在的限制：`Settings` 本身（超时/max_tokens/温度）与存储配额快照需重启才变——与 TASK-094 同源，
+   不属本卡范围。
+4. **`query_audit` 未落模型名**：`meta.llmModel` 只在响应里，历史表看不到“这条是哪个模型答的”。
+   加列属表结构扩展，需单独评估（卡内未要求）。
+5. **同一次调用共享 requestId 对 TASK-090 的影响**：`/api/request-log/{requestId}` 会把该次调用的
+   6 条日志全部返回（`relatedLogs` 上限 `MAX_RELATED_LOGS`）。实测该上限足够覆盖本次的 6 条；
+   若将来一次调用请求数超过上限，日志会被截断——需要时再评估上限。
+6. **图（flows）未在本次检索结果中出现**：`### Flow` 节的产出条件是
+   `build_flows` 能沿 `callees` 走出 ≥2 节点，而本次真实查询命中的 seed 是类定义、
+   且同一次输出如实报了 `unresolved_refs status=failed`（59 个未解析引用）——
+   图扩展因此容易在第一步就断链。这**不是本卡引入的问题**，但用户关心，
+   建议单开一张卡验证并改进（例如对类符号补 `__init__` 出边种子）。
+
+#### 建议复核点
+
+1. `service/tests/test_chain_and_llm_config.py` 的 31 条用例（尤其迁移、key 隔离、§G 断言）；
+2. `git diff` 的 `metadb.py` 迁移段：确认只加列、未改既有 DDL 语义；
+3. `routers/auth.py` 的 `llm-config` 两个端点（尤其 `apiKey` 空串语义与 400 分支）；
+4. `llmconfig.py` 的 `provider_for_request` 缓存键与测试接缝（`app.state.answer_provider`）；
+5. 契约文件写入这两个路径后，`test_skeleton.py` 的白名单应与之一致（互不冲突）。

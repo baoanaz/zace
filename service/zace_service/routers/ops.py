@@ -11,6 +11,7 @@
 | ``GET /api/usage/projects/{id}`` | TASK-064 | 单项目查询用量（**替换 501 占位**） |
 | ``GET /api/usage/summary`` | TASK-064 | 跨项目用量汇总 |
 | ``GET /api/request-log/{requestId}`` | TASK-090 | 按 trace id 查请求日志（**只读**） |
+| ``GET /api/calls/{callId}`` | TASK-099 | 一次 Tool 调用的完整时间线（初始化 ×N + 检索）|
 
 口径见 ``docs/design/Module/04-AI总结.md`` §8（审计存档）与 ``docs/tasks/TASK-062`` §C/§D。
 **诚实性**：无数据时一律 ``null``/``0``；``citationCoverageAvg`` 在 LLM 接入前恒为 ``null``
@@ -230,6 +231,117 @@ def _request_log_not_found(request_id: str) -> ApiError:
         code="request_log_not_found",
         message=(
             "请求日志不存在，或不属于当前账户，或已被窗口清理（可用 X-Request-Id 重新请求复现）"
+        ),
+        status=404,
+    )
+
+
+# --------------------------------------------------------------------------- 调用时间线（§B）
+
+
+@router.get("/api/calls/{callId}")
+def call_timeline(callId: str, request: Request) -> dict[str, Any]:
+    """一次 Tool 调用的**完整时间线**（TASK-099 §B-2）：初始化 ×N + 检索，按时间排序。
+
+    解决的真实问题（用户 2026-09-14）：一次 Agent 调用会发 N 个 ``batch-upload``（各落一条
+    ``index_runs``）+ 1 个 ``query/search``（落一条 ``query_audit``），而服务端**无从知道**
+    它们属于同一次调用。现在客户端在同一次调用里给所有请求发同一个 ``X-Request-Id``，
+    服务端把它当 ``index_runs.call_id`` 与 ``query_audit.request_id`` 落库，于是本端点能把
+    它们合并成一条时间线（§B-3：**两个列名值天然相等**，不需要映射表）。
+
+    归属（§B 的缺失面补充）：时间线是**跨项目**的（一次调用可能同时初始化多个仓库），
+    因此无法用单个 ``require_project_id`` 判定。规则：
+
+    - 本地模式（无账户，R34）→ 放行；
+    - 云端 → 该 callId 必须出现在**当前用户可见项目**的 ``index_runs`` 里，否则 404；
+    - 两种情况都查不到记录 → 404 ``call_not_found``（与"没有这个 callId"同一文案，不给探测面）。
+
+    ``withoutCallId``：统计**没有** call_id 的索引记录数（旧客户端不发头时这些记录不属任何
+    调用）。把它一并返回，是为了让前端能如实说"另有 N 次索引不属于任何调用"，
+    而不是让这些记录静默消失（卡内 §B-3 的"无关联就每行独立展示"降级需要这个数）。
+    """
+    manager = get_engine_manager(request)
+    db = _require_meta_db(request)
+    user = getattr(request.state, "zace_user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is not None and callId not in db.visible_call_ids(
+        _visible_project_ids(request, manager)
+    ):
+        raise _call_not_found()
+
+    from zace_service.metadb import CALL_TIMELINE_LIMIT
+
+    runs = db.index_runs_by_call(callId)
+    queries = db.queries_by_request_id(callId)
+    if not runs and not queries:
+        # 本地模式没有归属过滤，必须显式判空（否则任何字符串都能换来一个空 200）。
+        raise _call_not_found()
+    entries = [
+        {"kind": "index", "at": run.started_at, "finishedAt": run.finished_at,
+         "indexRun": run.to_json()}
+        for run in runs[:CALL_TIMELINE_LIMIT]
+    ]
+    entries += [
+        {"kind": "query", "at": record.created_at, "finishedAt": record.created_at,
+         "queryAudit": record.to_json()}
+        for record in queries[:CALL_TIMELINE_LIMIT]
+    ]
+    # 按时间排序（同一秒内索引在前：先建索引才能检索）；
+    # index_runs 的 ``at`` 是**秒**、query_audit 的 ``created_at`` 也是秒——粒度一致，可比。
+    entries.sort(key=lambda item: (item["at"], 0 if item["kind"] == "index" else 1))
+    index_ms = sum(int(run.duration_ms) for run in runs)
+    query_ms = sum(int(record.latency_ms) for record in queries)
+    return {
+        "callId": callId,
+        "entries": entries,
+        "totals": {
+            # 初始化耗时之和 + 检索耗时之和：用户问的就是"初始化用了多久、检索多久"
+            # （卡内背景引用的原话）。两个数是**相加关系**，不做平均（一次调用的归总）。
+            "indexDurationMs": index_ms,
+            "queryLatencyMs": query_ms,
+            "totalMs": index_ms + query_ms,
+            "indexRuns": len(runs),
+            "queries": len(queries),
+        },
+        "withoutCallId": _count_runs_without_call_id(request, manager),
+    }
+
+
+def _count_runs_without_call_id(request: Request, manager: Any) -> int:
+    """当前用户可见项目里**没有** call_id 的索引记录数（旧客户端/启动索引）。
+
+    **旁路**：算不出来就返回 0（不因为一个统计数字让时间线端点失败）。
+    """
+    try:
+        db = _meta_db(request)
+        if db is None:
+            return 0
+        ids = _visible_project_ids(request, manager)
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        row = db._connect().execute(
+            f"SELECT COUNT(*) AS n FROM index_runs"
+            f" WHERE project_id IN ({placeholders}) AND call_id IS NULL",
+            list(ids),
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+    except Exception:  # noqa: BLE001 - 旁路统计
+        return 0
+
+
+def _call_not_found() -> ApiError:
+    """统一的"查不到这次调用"错误（越权 / 不存在 / 旧客户端没带 callId 共用）。
+
+    文案里**不回显** ``callId``：越权与真不存在的响应因此逐字节一致，
+    调用方无法据此建立"这个 id 存在"的预言机（与 TASK-090 的 ``_request_log_not_found``
+    同一条纪律）。
+    """
+    return ApiError(
+        code="call_not_found",
+        message=(
+            "这次调用不存在，或不属于当前账户，或历史记录已被清理"
+            "（旧版客户端不发 X-Request-Id 时不会产生调用记录）"
         ),
         status=404,
     )

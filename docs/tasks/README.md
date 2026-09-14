@@ -149,7 +149,7 @@
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
 |---|---|---|---|---|
-| [TASK-099](TASK-099-调用链埋点与用户级LLM配置.md) | **调用链埋点（callId 关联 N 次初始化 + 1 次检索）+ LLM 答案落库 + 用户级 LLM 配置** | 无（soft: TASK-100 前端已就绪） | `client/src/{remote,tools}.rs`、`service/zace_service/{metadb,runtime,mcp,config,llmconfig}.py`、`service/zace_service/routers/{sync,query,ops,auth}.py`、`service/tests/` | pending |
+| [TASK-099](TASK-099-调用链埋点与用户级LLM配置.md) | **调用链埋点（callId 关联 N 次初始化 + 1 次检索）+ LLM 答案落库 + 用户级 LLM 配置** | 无（soft: TASK-100 前端已就绪） | `client/src/{remote,tools}.rs`、`service/zace_service/{metadb,runtime,mcp,config,llmconfig}.py`、`service/zace_service/routers/{sync,query,ops,auth}.py`、`service/tests/` | review |
 
 > **补充说明**：TASK-100 为 WebUI 精简与调用链展示（含合并历史表、项目页、时间范围、服务模型卡）；
 > 本表未单独列卡（它由多轮用户反馈驱动，代码已落地，待总体验收后回填状态）。
