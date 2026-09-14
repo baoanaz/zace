@@ -45,9 +45,19 @@ components:
         meta: { type: object, additionalProperties: true }
     AskResponse:
       type: object
+      description: "D-24 短路 / D-26 降级 / TASK-088 LLM 四种情况共用（证据优先）。"
       properties:
-        answer: { type: string, description: "状态为 insufficient_evidence/degraded 时也非空（D-24/D-26）" }
         status: { enum: [answered, insufficient_evidence, degraded] }
+        answer: { type: string, description: "answered/degraded 时为答案文本；insufficient_evidence 时不出现。" }
+        bestEffortContext: { type: string, description: "仅 insufficient_evidence：render_markdown(pack)（TASK-087 §B）。" }
+        missingEvidence:
+          type: array
+          description: "仅 insufficient_evidence：可读文本列表，与 ### Missing Evidence 同形。"
+          items: { type: string }
+        nextQueries:
+          type: array
+          description: "仅 insufficient_evidence：确定性生成的自愈查询（Module/03 §5）。"
+          items: { type: string }
         evidenceSummary: { type: array, items: { type: object } }
         meta: { type: object, additionalProperties: true }
   responses:
@@ -212,3 +222,12 @@ paths:
       summary: 查询审计（Module/04 §8 存档的读取口）
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { '200': { description: OK } }
+
+  /api/request-log/{requestId}:
+    get:
+      tags: [ops]
+      summary: 按 trace id 查请求日志（TASK-090；仅能查自己发起的请求，他人 id 与不存在同样 404）
+      parameters: [{ name: requestId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: RequestLogEntry }
+        '404': { description: 不存在 / 不属于当前账户 / 已被窗口清理 }
