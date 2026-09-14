@@ -213,7 +213,11 @@ def test_next_queries_empty_omits_the_section(store, seed_file, sym, cand) -> No
 
 
 def test_existing_sections_are_byte_identical_to_the_snapshot(store, seed_file, sym, cand) -> None:
-    """快照式回归：除新增节外，渲染结果与快照**逐字一致**（旧节不能被本卡动到）。"""
+    """快照式回归：**顶层节**（``### ``）的标题与顺序逐字未变，且与快照逐字一致。
+
+    TASK-095 §B 在 ``### Code`` **内部**新增了四级分组标题（``#### Core`` 等），
+    但**没有**改节名、节序、证据行格式或 ``[E*]`` 编号——本断言锁的正是这三样。
+    """
     pack = _build_pack(store, seed_file, sym, cand)
     expected = SNAPSHOT_PATH.read_text(encoding="utf-8").rstrip("\n")
     text = render_markdown(pack, now=NOW)
@@ -221,9 +225,15 @@ def test_existing_sections_are_byte_identical_to_the_snapshot(store, seed_file, 
     before, marker, after = expected.partition("### Suggested Next Queries\n")
     assert marker, "快照里必须含 TASK-087 的新节"
     golden_next, _, tail = after.partition("### Meta")
-    assert text.startswith(before), "Meta 之前（含 Missing Evidence）的旧节逐字未变"
+    assert text.startswith(before), "Meta 之前的旧节逐字未变（TASK-095 只加四级标题）"
     assert f"### Suggested Next Queries\n{golden_next}" in text
     assert text.endswith(f"### Meta{tail}"), "Meta 与之前四节的顺序/内容未变"
+
+    # TASK-095：顶层节名与顺序逐字未变（四级标题不构成新顶层节）。
+    assert [line for line in text.splitlines() if line.startswith("### ")] == [
+        line for line in expected.splitlines() if line.startswith("### ")
+    ]
+    assert "\n#### Core\n" in text, "§B 的分组标题必须真的出现"
 
 
 def test_render_empty_pack_keeps_missing_and_meta(store) -> None:

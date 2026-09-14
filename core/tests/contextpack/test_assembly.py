@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 from zace_core.contextpack import (
@@ -135,7 +136,9 @@ def test_tier3_quota_uses_30_percent_of_used_budget(store, seed_file, sym, cand)
     ]
     config = BudgetConfig(hard_cap=10_000, framework_overhead=0, tier3_ratio=0.30)
 
-    pack = assemble(store, "q", candidates, config=config)
+    # TASK-095：tier3 候选分数（0.5/0.4）低于新闸门（top1×0.50 = 0.5）——
+    # 本用例只验**配额**这条腿（分数闸门另有用例），故显式关掉闸门。
+    pack = assemble(store, "q", candidates, config=replace(config, score_ratio=0.0))
     paths = [item.path for item in pack.evidence]
     assert "src/seed.py" in paths
     assert "src/g1.py" not in paths       # 100 > 30% × (100)

@@ -6,6 +6,8 @@
 - ``render_markdown(pack)`` / ``render_evidence_for_prompt(pack)``：双层合同共用 formatter；
 - ``to_json(pack)``：CF-03 JSON（供 05-MCP / Phase 2 service 直接返回）；
 - ``BudgetConfig`` / ``budget_for(mode)``：Fast 10K / Deep 12K 预算配置（D-23）；
+  ``CONTEXT_SCORE_RATIO``（默认 0.50）= TASK-095 §A 的相对分数阈值，可用环境变量
+  ``ZACE_CONTEXT_SCORE_RATIO`` 覆盖（**不暴露为 MCP 工具参数**，CF-06 冻结）；
 - ``collect_index_signals(store, candidates)``：G4/stale 与 unresolved 信号收集。
 """
 
@@ -13,10 +15,12 @@ from __future__ import annotations
 
 from zace_core.contextpack.assembly import (
     ADJACENT_GAP_LINES,
+    CONTEXT_SCORE_RATIO,
     DEEP_BUDGET,
     FAST_BUDGET,
     MODE_DEEP,
     MODE_FAST,
+    SCORE_RATIO_ENV,
     BudgetConfig,
     IndexSignals,
     assemble,
@@ -30,10 +34,12 @@ from zace_core.contextpack.render import render_evidence_for_prompt, render_mark
 
 __all__ = [
     "ADJACENT_GAP_LINES",
+    "CONTEXT_SCORE_RATIO",
     "DEEP_BUDGET",
     "FAST_BUDGET",
     "MODE_DEEP",
     "MODE_FAST",
+    "SCORE_RATIO_ENV",
     "BudgetConfig",
     "IndexSignals",
     "assemble",

@@ -20,7 +20,11 @@ SPANS = ((1, 6), (9, 14), (18, 24))
 SCORES = {1: 0.4, 9: 1.0, 18: 0.7}
 #: 真实省略行数 = 声明区间 1..24（24 行） − Σ片段行数（6+6+7=19） = 5（7..8 与 15..17）
 EXPECTED_ELIDED = 5
-CONFIG = BudgetConfig(hard_cap=100_000, framework_overhead=0, single_file_ratio=1.0)
+#: TASK-095：本文件验的是**合并后的行序与省略标注**，不是分数闸门——
+#: 三段分数跨越 0.4~1.0（低于默认闸门 top1×0.50），故显式关掉闸门（闸门另有用例）。
+CONFIG = BudgetConfig(
+    hard_cap=100_000, framework_overhead=0, single_file_ratio=1.0, score_ratio=0.0
+)
 
 
 def _body(start: int, end: int) -> str:
@@ -84,7 +88,9 @@ def test_rendered_block_line_numbers_are_monotonic(store, seed_file, sym, cand) 
     assert "     6 | L6\n     ... （省略 2 行）\n     9 | L9" in text
     assert "     14 | L14\n     ... （省略 3 行）\n     18 | L18" in text
     assert len([line for line in text.splitlines() if ELISION.match(line.strip())]) == 2
-    assert text.count("省略") == 2
+    # 证据块内的省略标注恰好 2 处。**不用** ``text.count("省略")``：``### Missing Evidence``
+    # 里可能出现别的“省略 N 个候选”（TASK-095 的闸门上报就是这种），全文计数会把它算进来。
+    assert len([line for line in text.splitlines() if ELISION.match(line.strip())]) == 2
 
 
 # --------------------------------------------------------------------------- elided 计数
