@@ -1,6 +1,10 @@
 """ContextPack 渲染（TASK-012 §B）：对外 Markdown（Module/03 §6，D-21 双层合同）。
 
-节顺序固定：``## Relevant Context`` → Code / Flow / Docs / Missing Evidence / Meta。
+节顺序固定：``## Relevant Context`` → Code / Flow / Docs / Missing Evidence /
+Suggested Next Queries / Meta。TASK-087 在 ``Missing Evidence`` 与 ``Meta`` 之间补了
+``Suggested Next Queries``（D-24 的"有用的失败"：先给证据、再给缺口、最后给下一步该问什么），
+``next_queries`` 为空时**整节不渲染**（空节白占 token）。
+
 引用格式 ``[E*]`` / ``[F*]`` 与合同一致（04 citation 的锚点）；代码带行号（agent 可直接对齐
 Edit）；stale 文档带 ``⚠`` 行；budget/confidence/index 状态入 ``Meta``。
 
@@ -28,6 +32,7 @@ def render_markdown(pack: ContextPack, *, now: int | None = None) -> str:
     sections.extend(_flow_section(pack))
     sections.extend(_docs_section(pack))
     sections.extend(_missing_section(pack))
+    sections.extend(_next_queries_section(pack))
     sections.append(_meta_section(pack, now=now))
     return "\n".join(sections)
 
@@ -80,6 +85,20 @@ def _missing_section(pack: ContextPack) -> list[str]:
         symbol = f" ({item.symbol})" if item.symbol else ""
         lines.append(f"- [{item.code}]{symbol} {item.message}")
     return lines
+
+
+def _next_queries_section(pack: ContextPack) -> list[str]:
+    """D-24 的自愈查询（``pack.next_queries``）；为空时整节不渲染。
+
+    每行形如 ``- <query>``，**不加编号**：证据编号 ``[E*]`` / ``[F*]`` 是 citation 锚点，
+    给建议查询编号会让 Agent 误把它们当成可引用的证据。节名与既有节同为英文（§A）。
+
+    只在 :func:`render_markdown`（面向 Agent 的形态）里出现；
+    :func:`render_evidence_for_prompt` 是给 LLM prompt 的 evidence 分节，**不含**本节。
+    """
+    if not pack.next_queries:
+        return []
+    return ["### Suggested Next Queries", *(f"- {query}" for query in pack.next_queries)]
 
 
 def _evidence_lines(item: EvidenceItem, *, is_doc: bool = False) -> list[str]:

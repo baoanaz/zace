@@ -5,7 +5,13 @@
 | 端点 | 语义 |
 |---|---|
 | ``POST /api/query/search`` | Fast 模式：检索 + 组装 + **服务端渲染 Markdown** |
-| ``POST /api/query/ask`` | Deep 模式：Phase 2 **一律走 D-26 降级包**（LLM 属 Phase 3），返回 200 |
+| ``POST /api/query/ask`` | Deep 模式：**一律 200，绝不 500**（D-26 降级 / D-24 短路） |
+
+``ask`` 的两条分支（TASK-087 §B）：
+
+- ``answerable=false`` → ``status="insufficient_evidence"``：结构化证据不足包
+  （``bestEffortContext`` / ``missingEvidence`` / ``nextQueries``，D-24，**不调 LLM**）；
+- ``answerable=true`` → ``status="degraded"``：Phase 2 降级包（接入 LLM 属 TASK-088）。
 
 薄壳纪律（D-34）：本文件不出现检索/组装/渲染逻辑——检索走 ``EngineManager.search``
 （转调 core ``search_with_trace``），渲染走 ``zace_core.contextpack.render_markdown``（D-21：
@@ -22,7 +28,11 @@
   3. 有账本但索引为空（上次索引失败）→ 500 ``index_failed``，**不得**再说"请先同步"
      （用户会以为没上传过，从而陷入"同步→重试"的无限循环）；
 - ``ask`` **绝不 500**：Phase 2 没有 LLM，``Engine.ask()`` 抛 ``NotImplementedError``，
-  本实现不调用它，而是返回带 ``status="degraded"`` 的检索包（诚实降级，D-26）。
+  本实现不调用它，而是返回检索结果（D-26 诚实降级）。它分两条路（TASK-087 §B）：
+  ``pack.answerable == False`` → **不调 LLM**，直接返回 ``status="insufficient_evidence"``
+  的结构化包（``bestEffortContext`` / ``missingEvidence`` / ``nextQueries``，D-24 的
+  "有用的失败"）；``answerable == True`` → 保持 Phase 2 的 ``status="degraded"`` 降级包
+  （接入 LLM 是 TASK-088）。
 
 查询审计（TASK-084，旁路）：两个端点各自被 :func:`_audited` 包住，把本次查询落进
 ``query_audit``（``fast`` / ``deep``）。三条纪律：**记账失败不得让检索失败**、
@@ -40,6 +50,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from zace_core.contextpack import render_markdown
+from zace_core.types import ContextPack
 
 from zace_service import audit
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
@@ -66,6 +77,15 @@ MAX_MAX_TOKENS = 20_000
 #: ``ask`` 的降级说明（D-26 要求写清"为什么不是答案"与"包可以直接用"）。
 DEGRADED_NOTICE = (
     "Deep 模式（LLM 总结）尚未接入（Phase 3）；以下为检索与组装结果，可直接作为上下文使用。"
+)
+
+#: ``ask`` 的**证据不足**说明（D-24 短路，TASK-087 §B）。
+#:
+#: 与 :data:`DEGRADED_NOTICE` 分开：那条说的是"没有 LLM"，这条说的是"有 LLM 也答不了"。
+#: ``answerable=false`` 时二者同时成立，但调用方（Agent / 编辑器）需要的是后者的语义——
+#: 该怎么补证据由返回体里的 ``missingEvidence`` / ``nextQueries`` 说清。
+INSUFFICIENT_NOTICE = (
+    "证据不足（answerable=false）：按 D-24 不调用 LLM，返回尽力而为的上下文与补齐建议。"
 )
 
 
@@ -123,7 +143,7 @@ def search(payload: SearchRequest, request: Request) -> dict[str, Any]:
 
 @router.post("/api/query/ask")
 def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
-    """Deep 模式：Phase 2 固定返回**降级包**（200 + ``status="degraded"``），绝不 500。"""
+    """Deep 模式：**绝不 500**。证据不足 → D-24 短路包；否则 Phase 2 降级包（D-26）。"""
     manager = get_engine_manager(request)
     with _audited(request, mode=audit.MODE_ASK, query=payload.question) as ctx:
         project_id = require_project_id(request, payload.projectId)
@@ -136,25 +156,54 @@ def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
             rescan = _rescan_before_query(manager, request, project_id)
             trace = manager.search(project_id, question, DEFAULT_MAX_TOKENS)
         pack = trace.pack
+        # 两条路都如实记 ``degraded=True``（都不含 LLM 总结），但"为什么"不同：
+        # 证据不足是 D-24，无 LLM 是 D-26。审计的 answerable 由 pack.answerable 出（TASK-084）。
+        insufficient = not pack.answerable
         meta = pack_meta(
             pack,
             project_id=project_id,
             channels=trace.channels_used,
             degraded=True,
-            reason=DEGRADED_NOTICE,
+            reason=INSUFFICIENT_NOTICE if insufficient else DEGRADED_NOTICE,
             candidate_count=trace.candidate_count,
             checkpoint_id=payload.checkpointId,
         )
         meta["freshness"] = _with_rescan_signal(meta["freshness"], rescan)
         ctx["pack"] = pack
-        # ``ask`` 恒为降级包（D-26）：审计如实记 degraded=true。
+        # ``ask`` 恒为降级包（D-26 / D-24）：审计如实记 degraded=true。
         ctx["degraded"] = True
+        if insufficient:
+            # D-24：证据不足时**不调 LLM**（省一次调用，也避免模型在弱证据上硬编）。
+            # 这是 TASK-087 §B 的**唯一**分支；answerable=true 仍走下面的降级包（TASK-088 接 LLM）。
+            return _insufficient_package(pack, meta)
         return {
             "status": "degraded",
             "answer": f"{DEGRADED_NOTICE}\n\n{render_markdown(pack)}",
             "evidenceSummary": evidence_summary(pack),
             "meta": meta,
         }
+
+
+def _insufficient_package(pack: ContextPack, meta: dict[str, Any]) -> dict[str, Any]:
+    """D-24 的结构化证据不足包（Module/04 §3）：有什么给什么 + 缺什么 + 怎么补。
+
+    - ``bestEffortContext``：``render_markdown(pack)``——搜索确实命中了些东西，别丢；
+    - ``missingEvidence``：可读文本列表（与 ``### Missing Evidence`` 同形），
+      调用方不必再解析 ``meta.missingEvidence`` 的结构体；
+    - ``nextQueries``：组装层确定性生成的自愈查询（Module/03 §5），
+      Agent 拿到就能换个措辞再问，而不是自己瞎猜；
+    - ``meta``：与 ``search`` 同一份（``pack_meta``，字段集冻结）。
+    """
+    return {
+        "status": "insufficient_evidence",
+        "bestEffortContext": render_markdown(pack),
+        "missingEvidence": [
+            f"[{item.code}]" + (f" ({item.symbol})" if item.symbol else "") + f" {item.message}"
+            for item in pack.missing_evidence
+        ],
+        "nextQueries": list(pack.next_queries),
+        "meta": meta,
+    }
 
 
 # --------------------------------------------------------------------------- 查询审计（TASK-084）

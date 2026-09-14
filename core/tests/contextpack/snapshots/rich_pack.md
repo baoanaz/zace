@@ -25,5 +25,9 @@
 - [index_stale] 索引落后于工作区：1 个文件已变更但未重索引，证据可能不是当前代码。
 - [unresolved_reference] 2 个符号引用无法解析（unresolved_refs status=failed），涉及这些符号的调用关系可能缺失。
 - [stale_doc_reference] (LegacyToken.rotate) 文档 docs/design/auth.md 引用了已删除或改名的符号（LegacyToken.rotate），该文档可能已过时；需要以代码为准并更新文档。
+### Suggested Next Queries
+- refresh 的调用方有哪些
+- src/auth/token_service.py 里还有哪些与查询相关的符号
+- 认证 > Token Refresh 对应的实现代码在哪里
 ### Meta
 confidence: high | index: stale (1 files) | budget: 574/10.0K
