@@ -32,9 +32,13 @@ claim 由 TASK-085 补上，但 ``require_project_id`` 的**归属校验**与其
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,7 +106,7 @@ def two_users(tmp_path: Path) -> Iterator[SimpleNamespace]:
     A 的会话 cookie；用两个 Bearer 头才能在同一客户端上干净地切换身份。
     """
     ns = _build(tmp_path, local_mode=False)
-    ns.client = make_client(ns.app)
+    ns.client = _make_mcp_client(ns.app)
     with ns.client:
         bootstrap = ns.client.post(
             "/api/auth/bootstrap", json={"name": "alice", "password": PASSWORD}
@@ -392,23 +396,334 @@ def test_local_mode_ignores_ownership_entirely(tmp_path: Path) -> None:
     manager.close()
 
 
-# --------------------------------------------------------------------------- 未接线说明
+# --------------------------------------------------------------------------- MCP 面（TASK-089）
+
+#: MCP 的请求头（缺 ``Accept`` 会被协议层拒）。base_url 必须带端口：SDK 的 DNS-rebinding
+#: 白名单只有 ``127.0.0.1:*`` / ``localhost:*`` / ``[::1]:*``，``testserver`` 会被 421 拒。
+_MCP_BASE_URL = "http://127.0.0.1:8787"
+_MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
 
-def test_mcp_face_ownership_is_not_wired_yet(two_users: SimpleNamespace) -> None:
-    """**登记未接通**：``mcp.py`` 的 ``_project_id_for`` 只判"项目存在"，**不判归属**。
+def _make_mcp_client(app) -> TestClient:
+    """带端口的 ``TestClient``：MCP SDK 的 DNS-rebinding 白名单只有 ``127.0.0.1:*`` /
+    ``localhost:*`` / ``[::1]:*``，默认的 ``http://testserver`` 会被 421 拒。REST 路径不受影响。
 
-    卡内 §C 点名"MCP 面同样要过归属校验"，但卡内「交付物所有权」清单**不含** ``mcp.py``
-    （§A0 的"剩余"列也只列了 ``routers/{projects,sync,query,ops}.py``）——两者自相矛盾。
-    本用例**不断言越权成功**（那会把缺口固化成契约），只钉住"当前 MCP 面拿不到 HTTP 请求里的
-    ``zace_user``"这一实现事实，作为未决问题的可执行证据：要接上，必须先给 MCP 工具一条
-    身份传递通道（contextvar 或按 Bearer 重解析），属跨卡改动。
+    不复用 :func:`tests.conftest.make_client`（它固定了默认 base_url）：本文件只有 MCP 必须带端口。
     """
-    from zace_service.mcp import manager_for_app
+    return TestClient(app, base_url=_MCP_BASE_URL, raise_server_exceptions=False)
+_MCP_PROTOCOL = "2025-06-18"
 
-    # MCP 工具没有 ``Request``（见 ``mcp.py`` 的 ``manager_for_app`` 注释）：它只拿到 manager，
-    # 因此今天无从得知"当前用户是谁"——这正是归属校验无法就地接入的原因。
-    manager = manager_for_app(two_users.app)
-    assert manager.project_exists(two_users.alice_project), (
-        "MCP 面只能看到项目是否存在；归属不在其可见范围内（待接线）"
+#: 矩阵的两列：CF-06 冻结的两个工具 → （参数名，参数值）。
+_MCP_TOOLS: dict[str, tuple[str, str]] = {
+    "search_context": ("query", "令牌过期后在哪里刷新"),
+    "ask_project": ("question", "令牌过期后在哪里刷新"),
+}
+
+
+def _mcp_call(
+    client: TestClient,
+    *,
+    tool: str,
+    project_root: str,
+    headers: dict[str, str],
+    msg_id: int = 3,
+) -> tuple[int, dict[str, Any] | None]:
+    """在**新会话**上跑一次 ``tools/call``，返回 ``(HTTP 状态, result | None)``。
+
+    返回 ``None`` 的 result = 请求在协议/鉴权层就被拒（如 401），没有 JSON-RPC 结果对象——
+    这正是把"未认证"与"已认证但越权"两行矩阵分开钉住的地方。
+    """
+    init = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": _MCP_PROTOCOL,
+                "capabilities": {},
+                "clientInfo": {"name": "zace-tests", "version": "0"},
+            },
+        },
+        headers={**_MCP_HEADERS, **headers},
     )
+    if init.status_code != 200:
+        return init.status_code, None
+    session_id = init.headers.get("mcp-session-id")
+    assert session_id, "initialize 必须返回 mcp-session-id"
+    session_headers = {**_MCP_HEADERS, **headers, "mcp-session-id": session_id}
+    client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers=session_headers,
+    )
+    field, value = _MCP_TOOLS[tool]
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": {field: value, "project_root": project_root},
+            },
+        },
+        headers=session_headers,
+    )
+    if response.status_code != 200:
+        return response.status_code, None
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            return response.status_code, json.loads(line[len("data: ") :])["result"]
+    raise AssertionError(f"响应里没有 data 帧：{response.text[:200]!r}")
+
+
+def _mcp_text(result: dict[str, Any] | None) -> str:
+    assert result is not None, "没有 JSON-RPC 结果对象（协议/鉴权层已拒）"
+    return "\n".join(block["text"] for block in result["content"] if block["type"] == "text")
+
+
+def _mcp_error_reason(result: dict[str, Any] | None) -> str:
+    """工具错误的**业务文本**（剥掉 SDK 的 ``Error executing tool <name>: `` 前缀）。
+
+    为什么只比业务部分：前缀随工具名变化（``... search_context: ...`` vs ``ask_project`` 那条），
+    它不是 zace 的语义。
+    """
+    text = _mcp_text(result)
+    _, separator, reason = text.partition(": ")
+    return reason if separator else text
+
+
+#: "项目不存在"拒绝的形态（projectId 是 16 位十六进制）。
+_DENIAL_RE = re.compile(r"^项目不存在：[0-9a-f]{16}$")
+
+
+def _assert_indistinguishable_denial(result: dict[str, Any] | None) -> None:
+    """断言拒绝是**同一种形态**且**不含任何可操作线索**。
+
+    为什么不必比 projectId 字面值：它由调用方自己提交的 ``project_root`` 决定，B 本来就能算出来，
+    写进文案不构成泄露。真正的泄露面是"两种结果形态不同"——例如"越权"给简短拒绝、"不存在"给
+    ``未知项目：… 请用 zace-service local --repo …`` 这种可操作提示，B 据此即可区分存在性。
+    """
+    reason = _mcp_error_reason(result)
+    assert _DENIAL_RE.match(reason), reason
+    assert "未知项目" not in reason, f"不得给可区分的存在性提示：{reason}"
+    assert "zace-service local" not in reason, f"不得给可区分的存在性提示：{reason}"
+
+
+def _materialize_repo(tmp_path: Path, name: str) -> Path:
+    """在 ``tmp_path`` 下写一份样例仓库并返回其根（D-29 非 git → 身份 = 绝对路径 hash）。"""
+    repo = tmp_path / name
+    for path, content in SAMPLE_FILES.items():
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return repo
+
+
+def _prepare_project(
+    ns: SimpleNamespace, repo: Path, headers: dict[str, str]
+) -> tuple[str, str]:
+    """把真实目录 ``repo`` 变成一个**已提交给当前身份且已索引**的项目。
+
+    为什么要走 resolve + batch-upload 而不是 attach：MCP 工具用 ``repo_identity`` 从
+    ``project_root`` 反解 projectId，而 attach 只在本地模式可用（云端 403）。
+    ``POST /api/projects/resolve`` 要**调用方自己算 identityKey**（D-29）：
+
+    - 有 git remote → ``sha256(remote_url)``；
+    - 无 git → ``sha256(canonical 绝对路径)``。
+
+    这里用后者（临时目录不是 git 仓库），之后 resolve 会认领它、上传会灌入样例文件。
+    返回 ``(identityKey, project_root)``。
+
+    为何不用 ``manager.attach_local``：那条路径会给 manager 绑上 ``attached_root``，使 MCP 的
+    懒重扫（``rescan_if_due``）去扫本地目录，而不是走已上传的 blobs——本卡要验的是归属校验，
+    不是重扫，故保持"云端上传"这一条形态。
+    """
+    resolved = repo.resolve()
+    identity_key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()
+    resolved_project = ns.client.post(
+        "/api/projects/resolve",
+        json={"identityKey": identity_key, "displayName": repo.name},
+        headers=headers,
+    )
+    assert resolved_project.status_code == 200, resolved_project.text
+    project_id = resolved_project.json()["projectId"]
+    _upload_via_api(ns, project_id, headers)
+    return project_id, str(resolved)
+
+
+def _upload_via_api(ns: SimpleNamespace, project_id: str, headers: dict[str, str]) -> None:
+    """走 REST 上传（注入的 manager 无 attached_root，不能用 MCP 的懒重扫路径）。"""
+    uploaded = ns.client.post(
+        "/api/sync/batch-upload",
+        json={"projectId": project_id, "blobs": _blobs(SAMPLE_FILES)},
+        headers=headers,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+
+
+@pytest.mark.parametrize("tool", sorted(_MCP_TOOLS))
+def test_mcp_cross_user_call_is_indistinguishable_from_missing(
+    two_users: SimpleNamespace, tool: str
+) -> None:
+    """**TASK-089 主验收**：B 在 MCP 面调 A 的项目 → ``isError``，且与"项目真不存在"逐字同文案。
+
+    两条断言合起来才完整：
+
+    1. ``isError=true`` 且文本是 REST 面的 404 文案 —— 越权被拒；
+    2. 与 **B 自己拿着同样格式、但从未存在的 projectId** 所得的文本**逐字相同** —— 没有探测面。
+       若两者不同，B 就能据此判断"这个 projectId 存在"。
+    """
+    alice_project, alice_root = _prepare_project(
+        two_users,
+        _materialize_repo(two_users.settings.data_root.parent, "alice-repo"),
+        two_users.alice,
+    )
+    ghost_root = _materialize_repo(two_users.settings.data_root.parent, "ghost-repo")
+
+    status, denied = _mcp_call(
+        two_users.client, tool=tool, project_root=alice_root, headers=two_users.bob
+    )
+    assert status == 200, "MCP 的工具错误走正常响应 + isError（Module/05 §2.2），不是 HTTP 4xx"
+    assert denied is not None and denied.get("isError") is True, _mcp_text(denied)
+    assert _mcp_error_reason(denied) == f"项目不存在：{alice_project}", _mcp_text(denied)
+
+    _, missing = _mcp_call(
+        two_users.client, tool=tool, project_root=str(ghost_root), headers=two_users.bob
+    )
+    # 越权与不存在走**同一种**拒绝形态（均无 "未知项目" / "请用 zace-service local" 这类线索）。
+    _assert_indistinguishable_denial(missing)
+    _assert_indistinguishable_denial(denied)
+
+
+@pytest.mark.parametrize("tool", sorted(_MCP_TOOLS))
+def test_mcp_owner_call_succeeds(two_users: SimpleNamespace, tool: str) -> None:
+    """**归属者自己在 MCP 面正常**（不误伤）：同一 project_root，A 调 → 非 ``isError``。"""
+    _, alice_root = _prepare_project(
+        two_users,
+        _materialize_repo(two_users.settings.data_root.parent, "alice-repo"),
+        two_users.alice,
+    )
+    status, result = _mcp_call(
+        two_users.client, tool=tool, project_root=alice_root, headers=two_users.alice
+    )
+    assert status == 200, status
+    assert result is not None and result.get("isError") is not True, _mcp_text(result)
+    assert SAMPLE_MODULE_PATH in _mcp_text(result), "归属者应拿到真实检索结果"
+
+
+@pytest.mark.parametrize("tool", sorted(_MCP_TOOLS))
+def test_mcp_without_credentials_is_401(two_users: SimpleNamespace, tool: str) -> None:
+    """**无凭据** → HTTP **401**（与 REST 面一致）。
+
+    这一行由 ``app.py`` 的鉴权中间件给出（TASK-060），早于任何工具执行——
+    因此没有 JSON-RPC 结果对象，也拿不到 ``project_root``（不给越权者任何项目信息）。
+
+    必须先清 cookie：``bootstrap``/``register`` 会在 ``TestClient`` 的 cookie jar 里留下一个
+    session（见夹具注释），不清掉就不是真的『无凭据』。
+    """
+    _, alice_root = _prepare_project(
+        two_users,
+        _materialize_repo(two_users.settings.data_root.parent, "alice-repo"),
+        two_users.alice,
+    )
+    two_users.client.cookies.clear()
+    status, result = _mcp_call(two_users.client, tool=tool, project_root=alice_root, headers={})
+    assert status == 401, status
+    assert result is None
+
+
+def test_mcp_identity_is_per_request_not_sticky(two_users: SimpleNamespace) -> None:
+    """**身份按请求而非按会话**：同一 session 上换 Bearer 头 → 看到的是新身份。
+
+    这条是 §A ``contextvars`` 方案的正确性钉子：若身份被粘在 session 上（方案 B 的天然风险），
+    B 只要在 A 建好的 session 上发一个请求就能读到 A 的项目。
+    """
+    alice_project, alice_root = _prepare_project(
+        two_users,
+        _materialize_repo(two_users.settings.data_root.parent, "alice-repo"),
+        two_users.alice,
+    )
+    init = two_users.client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": _MCP_PROTOCOL,
+                "capabilities": {},
+                "clientInfo": {"name": "zace-tests", "version": "0"},
+            },
+        },
+        headers={**_MCP_HEADERS, **two_users.alice},
+    )
+    session_id = init.headers["mcp-session-id"]
+    two_users.client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers={**_MCP_HEADERS, **two_users.alice, "mcp-session-id": session_id},
+    )
+    field, value = _MCP_TOOLS["search_context"]
+
+    def call(headers: dict[str, str], msg_id: int) -> dict[str, Any]:
+        response = two_users.client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_context",
+                    "arguments": {field: value, "project_root": alice_root},
+                },
+            },
+            headers={**_MCP_HEADERS, **headers, "mcp-session-id": session_id},
+        )
+        for line in response.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[len("data: ") :])["result"]
+        raise AssertionError(response.text[:200])
+
+    # A 建会话 + 调用 → 正常；同 session 换 B 的凭据 → 拒绝（不泄露）
+    assert call(two_users.alice, 2).get("isError") is not True
+    denied = call(two_users.bob, 3)
+    assert denied.get("isError") is True
+    assert _mcp_error_reason(denied) == f"项目不存在：{alice_project}"
+
+
+def test_mcp_local_mode_still_fully_open(tmp_path: Path) -> None:
+    """**本地模式（R34）完全放行**：无凭据、无账户，两个工具都照常工作（不误伤）。"""
+    ns = _build(tmp_path, local_mode=True)
+    ns.client = _make_mcp_client(ns.app)
+    with ns.client:
+        repo = _materialize_repo(tmp_path, "local-repo")
+        identity_key = hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()
+        project_id = ns.client.post(
+            "/api/projects/resolve", json={"identityKey": identity_key}
+        ).json()["projectId"]
+        _upload_via_api(ns, project_id, {})
+        for tool in sorted(_MCP_TOOLS):
+            status, result = _mcp_call(ns.client, tool=tool, project_root=str(repo), headers={})
+            assert status == 200, status
+            assert result is not None and result.get("isError") is not True, _mcp_text(result)
+    ns.manager.close()
+
+
+def test_mcp_local_mode_unknown_project_keeps_actionable_hint(tmp_path: Path) -> None:
+    """**本地模式 R34 回归**：未知目录仍给 TASK-040 的可操作文案，逐字未变（不误伤）。"""
+    ns = _build(tmp_path, local_mode=True)
+    ns.client = _make_mcp_client(ns.app)
+    with ns.client:
+        ghost = _materialize_repo(tmp_path, "ghost-repo")
+        status, result = _mcp_call(
+            ns.client, tool="search_context", project_root=str(ghost), headers={}
+        )
+        assert status == 200, status
+        assert result is not None and result.get("isError") is True
+        text = _mcp_text(result)
+        assert "未知项目" in text and "zace-service local --repo" in text, text
+        assert "项目不存在" not in text, "本地模式不该被云端的『不给探测面』文案顶替"
+    ns.manager.close()
