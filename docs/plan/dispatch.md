@@ -2,49 +2,201 @@
 
 > 面向用户：照着做即可，不需要懂 git 或开发细节。评审、测试与合并由总览 AI（编排者）负责。
 > 面向实施 AI：每段提示词是自包含的，照其中步骤执行即可。
+>
+> **2026-09-14 晚重写**：仓库路径已变更、环境事实已重核（cargo/docker/Playwright 现已可用）；
+> W1–W6 的历史提示词移到文末「附录 A」归档，只作参考。
 
 ## 0. 你要做的三件事
 
-1. **建工作区**（只需一次）：在任意终端执行
+1. **建工作区**（只需一次）：
    ```bash
-   bash /home/xuwenzheng/github/ACE/zace/scripts/lane-worktrees.sh create
+   bash /home/xuwenzheng/2_github/AI/ACE/zace/scripts/lane-worktrees.sh create
    ```
-   它会在 `/home/xuwenzheng/github/ACE/` 下建出 `zace-lane-a` … `zace-lane-f` 六个独立工作区（互不干扰，可同时开工）。
+   它会在 `/home/xuwenzheng/2_github/AI/ACE/` 下建出 `zace-lane-a` … `zace-lane-j` 十个独立工作区（互不干扰，可同时开工）。
 2. **开会话**：每一波按下方表格开对应数量的 AI 会话，**会话的工作目录必须是对应的工作区**（如泳道 A 用 `zace-lane-a`），然后把该泳道的提示词整段粘贴进去。
-3. **收报告**：AI 做完会输出“完成报告”。把这些报告复制粘贴回总览会话（我），我评审+跑集成测试+合并，然后给你下一波的提示词。
+3. **收报告**：AI 做完会输出「完成报告」。把这些报告复制粘贴回总览会话（我），我评审 + 跑集成测试 + 合并，然后给你下一波的提示词。
 
 > 若某个 AI 中途提问题、卡住或报错：把它的原话复制给我，我判断后给你处理方式。
 
-### 已知事项（2026-09-13 环境切换后更新）
+### 已知事项（2026-09-14 晚重核）
 
-- **远程推送**：origin 为 `git@github.com:baoanaz/zace.git`（SSH）。
-- **工作区根目录变了**：新环境（家里 WSL2）仓库在 `/home/xuwenzheng/github/ACE/zace`，
-  泳道工作区在 `/home/xuwenzheng/github/ACE/zace-lane-*`。**本文旧波次提示词里的 `/home/xuwenzheng/2_github/...` 已失效**，
-  以各段提示词顶部的【工作区】为准。
-- **旧靶场不存在**：`aibox-super-sdk` / `linux-mtk-mw-cameraservice` / `linux-mtk-hmi` 在本机都没有；
-  新主靶场是 `/home/xuwenzheng/github/hello-agents`（见 `docs/plan/phase2-m2b-w6.md`）。
-- **云端 embedding 是当前主路径**：硅基流动 `BAAI/bge-m3`（免费）；配置坑见 `docs/tasks/TASK-046-云端embedding接入.md`。
-- **`~/.bashrc` 里的 key 子进程拿不到**（第 5-9 行有非交互守卫）：派活时要么把 `export` 写进提示词，
-  要么让子 AI 按 TASK-046 §C 的注入方式做。
-- **测试汇总行被吞**：根 `pyproject.toml` 设了 `addopts = "-q"`，`uv run pytest` **不打印** passed/failed；
-  要看数字用 `uv run pytest -o addopts="" -q`。
-- **参考源码 `../source/` 不存在**：任务卡的“参考锚点”只能按卡内摘录理解。
-- **工作区里的“main”是本地 main**：不要自行 `git pull`。各泳道从本地 main 开分支，远端同步由编排者（总览 AI）在合并后统一处理。
+| 项 | 事实 |
+|---|---|
+| **仓库根** | `/home/xuwenzheng/2_github/AI/ACE/zace`（旧文档的 `~/github/ACE/zace` **已不存在**） |
+| **泳道工作区** | `/home/xuwenzheng/2_github/AI/ACE/zace-lane-{a..j}` |
+| **远程** | `origin = https://github.com/baoanaz/zace.git`（HTTPS；不是旧文档写的 SSH） |
+| **`.env`** | 每个工位已铺好：Voyage embedding + LLM(`ANSWER_*`) + `NO_PROXY`。用法 `set -a; source .env; set +a`。**已被 gitignore，永不提交** |
+| **cargo** | ✅ 1.97.1 可用（Rust client 可本地构建：`cd client && cargo build --release`） |
+| **docker** | ✅ 29.1.3 可用，daemon 在跑（TASK-092 可本地部分验证） |
+| **Playwright** | ✅ chromium 已装；`--with-deps` 需 sudo |
+| **靶场** | `/home/xuwenzheng/2_github/Agent开发/hello-agents/hello-agents` @ `4f7682c`（**只读**，不要在里面建文件） |
+| **测试汇总行** | 根 `pyproject.toml` 设了 `addopts = "-q"`，`uv run pytest` **不打印** passed/failed；要看数字用 `uv run pytest -o addopts="" -q` |
+| **跑测试前** | 需 `env -u EMBED_MODE`，否则 `.env` 的 `EMBED_MODE=api` 会让 `test_default_is_local_onnx_provider` 因环境而红 |
+| **端口** | WSL 会误报某些高位端口「address already in use」（实测 8898/8901/18897）；用 18898/18896 或先 `ss -ltn` 确认 |
+| **参考源码 `../source/`** | ✅ 存在（相对仓库根即 `/home/xuwenzheng/2_github/AI/ACE/source/`，只读参考；任务卡的引用锚点以此为准） |
+| **工作区里的「main」** | 是本地 main。不要自行 `git pull`；远端同步由编排者（总览 AI）在合并后统一处理 |
 
 ## 1. 波次表（谁和谁可以同时做）
 
-| 波次 | 同时开几个会话 | 泳道（工作区） | 任务卡（按序做） | 状态 |
-|---|---|---|---|---|
-| W1 / W2 | — | A/B/C/D/E | TASK-001..012 | 已完成 |
-| W3a | 3 | B / C / F | TASK-016 / TASK-017 / TASK-013 | 已完成 |
-| W3c | 2 | A / C | TASK-018 / TASK-019 | 已完成 |
-| W3d | 2 | B / F | TASK-020（零成本版）/ TASK-014（基线） | 已完成 |
-| W4a | 1 | A `zace-lane-a` | TASK-021 → TASK-022（质量修复） | 已完成 |
-| W5a | 1 | A `zace-lane-a` | TASK-030 → 031 → 032 → 033（Phase 2 M2a-1：service 外壳） | 已完成 |
-| W5b | 1 | A `zace-lane-a` | TASK-035 → 034 → 040 → 045 | 已完成 |
-| W5c | 3 | A / B / C | A：TASK-034 → 040 → 045（demo 收口）；B：TASK-015A（模型选型）；C：TASK-036（规模自举） | 已完成 |
-| **W6** | **3** | **A / B / C** | A：TASK-037（索引范围）；B：TASK-046（云端 embedding 接入）；C：TASK-047（新靶场 + golden + 冒烟脚本） | **当前波次**（规划：`docs/plan/phase2-m2b-w6.md`） |
+### 当前波次：W7（Phase 3 补强 / 上线准备）
 
+| 卡 | 泳道 | 状态 |
+|---|---|---|
+| TASK-087 ContextPack 渲染补齐 | lane-a | ✅ 已合并（`2664f70`） |
+| TASK-088 LLM 总结接入 | lane-b | ✅ 已合并（`5aac030`） |
+| TASK-089 MCP 面归属校验 | lane-c | ✅ 已合并（`77f76ca`） |
+| TASK-090 请求日志与 trace 查询 | lane-d | ✅ 已合并（`7ca94ff`） |
+| **TASK-091 评测靶场打磨** | **lane-e** | 🔄 **进行中** |
+| **TASK-092 VPS 部署** | lane-f | ⏳ 可开工（依赖 089/090 已合并） |
+| **TASK-094 内存配额与 trace 关联** | lane-g | ⏳ 可开工（依赖 090 已合并） |
+| TASK-093 真实数据闭环 | — | ⛔ 等 TASK-091 |
+
+> **TASK-092 与 TASK-094 的文件所有权无重叠**（092 只碰 `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md`；
+> 094 碰 `service/zace_service/{quota,runtime,metadb,config,routers/*}.py` 与 web 两页），可并行派两个会话。
+
+### 历史波次（均已完成）
+
+| 波次 | 泳道 | 任务卡 | 状态 |
+|---|---|---|---|
+| W1 / W2 | A/B/C/D/E | TASK-001..012 | 已完成 |
+| W3a | B / C / F | TASK-016 / TASK-017 / TASK-013 | 已完成 |
+| W3c | A / C | TASK-018 / TASK-019 | 已完成 |
+| W3d | B / F | TASK-020 / TASK-014 | 已完成 |
+| W4a | A | TASK-021 → TASK-022 | 已完成 |
+| W5a | A | TASK-030 → 031 → 032 → 033 | 已完成 |
+| W5b | A | TASK-035 → 034 → 040 → 045 | 已完成 |
+| W5c | A / B / C | TASK-034→040→045 / TASK-015A / TASK-036 | 已完成 |
+| W6 | A / B / C | TASK-037 / TASK-046 / TASK-047 | 已完成 |
+
+## 2. 当前波次提示词（整段复制）
+
+### W7-e · 泳道 E（TASK-091 评测靶场与 golden 集打磨）
+
+**状态：进行中**（该会话已完成勘察，等待按修订计划执行）。
+
+关键决策（已由用户 2026-09-14 拍板）：
+
+1. 用例扩到 ~75 条；来源允许是「你/用户真实会问的问题」，但**必须如实标注**（`query_audit` 目前几乎为空）；
+2. **不新增评测入口**——不做 `bench-eval` 子命令；如要首中层级统计，只做**报告层统计**；
+3. **TASK-023 不合并**（真实采集由 TASK-093 接手）；
+4. 靶场密钥泄露已由编排者处置（`.env copy` 已恢复占位符），实施 AI 不需处理、不得在报告中写出 key。
+
+### W7-f · 泳道 F（TASK-092 VPS 部署）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 F：VPS 部署（docker compose 单栈 + 公网发布）】。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-f
+启动会话时把工作目录设为该路径。若 CWD 不是它，先停下来提醒我，不要改任何文件。
+
+【开工前核验】
+  git log --oneline -1            # 应为 d5f7eb4 或之后
+  git status --short              # 应为空
+  uv run pytest -o addopts="" -q  # 应为 878 passed, 2 skipped
+开分支：git switch -c feature/task-092-deploy_xwz0914 main
+
+【环境（已核实，可直接用）】
+  set -a; source .env; set +a     # Voyage key + NO_PROXY
+  docker 29.1.3 可用、daemon 在跑 —— 本卡**可以本地部分验证**（旧文档说"本机没有 docker"已过时）
+
+【开工】完成 1 张任务卡：docs/tasks/TASK-092-VPS部署.md
+
+【前置已解除（开工前确认）】
+  TASK-089（MCP 归属校验）与 TASK-090（请求日志）**均已合并进 main** —— 卡内列的阻断项已清除。
+  设计依据：docs/design/Module/06-服务化与部署.md §4-A（已定稿）。
+
+【本卡特别提醒】
+1. **必须给出"无域名时 Caddy 自动 TLS 不可用 → key 明文暴露"的方案**（卡内已列为风险 #10）。
+   这是用户真实会上公网 IP 的场景，不能回避。
+2. 验收要求包含"在目标 VPS 上真实跑起来"——**本机跑不通的部分要如实说明**，
+   不要用本地结果冒充 VPS 验证。
+3. 规格：2C4G 起步、4C8G 舒适；磁盘 <500MB/百万行代码；**不上 k8s**（V1 上限是单 compose）。
+4. 不要改 core/service 的实现代码（清单外）。
+
+【工艺】
+  a) 只修改卡内"交付物所有权"清单里的文件（deploy/、*/Dockerfile、docs/handbook/部署.md、.github/workflows/）；
+  b) 跑通卡内"验收标准"全部命令 + 基线三条（用 -o addopts="" 看数字）；
+  c) 回填"执行记录"；任务板 docs/tasks/README.md 里 TASK-092 那行状态改为 review；
+  d) git add -A && git commit（"task-092: " 前缀）。**不要 push**。
+
+【报告格式】
+- 卡号 / 分支：
+- compose 栈结构与各服务职责：
+- 本机验证结果（贴真实输出）与 VPS 待验部分（**如实分开列**）：
+- 无域名场景的 TLS/key 暴露方案：
+- 验收命令与结果：
+- 契约影响 / 与设计偏差 / 未决问题：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
+```
+
+### W7-g · 泳道 G（TASK-094 内存配额与 trace 关联）
+
+```text
+你是 zace 项目的实施工程师，本会话负责【泳道 G：项目内存可见性 + 存储配额告警 + 历史记录 trace id】。
+
+【工作区】/home/xuwenzheng/2_github/AI/ACE/zace-lane-g
+启动会话时把工作目录设为该路径。若 CWD 不是它，先停下来提醒我，不要改任何文件。
+
+【开工前核验】
+  git log --oneline -1            # 应为 d5f7eb4 或之后
+  git status --short              # 应为空
+  uv run pytest -o addopts="" -q  # 应为 878 passed, 2 skipped
+开分支：git switch -c feature/task-094-quota-trace_xwz0914 main
+
+【环境】set -a; source .env; set +a
+
+【开工】完成 1 张任务卡：docs/tasks/TASK-094-内存配额与trace关联.md
+
+【前置已解除】卡内说"必须等 TASK-090"——**090 已合并**（`request_log` 表已建、
+`X-Request-Id` 与查询端点已就绪）。卡内 §C 的 trace id 部分（`query_audit` 加 `request_id` 列）
+现在可以正常做了：090 用的是**文件轮转**方案、**没有动 metadb.py**，所以该文件的冲突面已归零。
+
+【用户原话（本卡的目标）】
+> 1、项目栏，占用多少内存。
+> 2、用户存在内存上限，需要在 tool 的内容中报警，提示 Agent 提醒用户进行管理内存。
+> 3、历史记录加上 trace id，方便用户报错后，能在服务端回溯问题，优化架构
+
+【本卡特别提醒】
+1. **配额告警要进 tool 返回内容**（MCP 面 + REST 面都要），不能只写日志——
+   这是用户明确要求"提示 Agent 提醒用户"的语义。
+2. `metadb.py` 加列要注意：项目里**没有 ALTER TABLE 先例**，
+   要自己建安全的加列路径（如 `PRAGMA table_info` 检查后再 ALTER），并保证旧库能平滑升级。
+3. 前端两页（Dashboard 内存展示、History 加 trace id）风格与既有页面一致，复用现有组件。
+4. TASK-088 已给设置页加了配置展示——本卡的配额配置项也应出现在那里（卡内已注明）。
+
+【工艺】
+  a) 只修改卡内"交付物所有权"清单里的文件；
+  b) 跑通卡内"验收标准"全部命令 + 基线三条（用 -o addopts="" 看数字）；
+  c) 前端也要绿：cd web && npm run lint && npm test && npm run build
+  d) 回填"执行记录"；任务板对应行状态改为 review；
+  e) git add -A && git commit（"task-094: " 前缀）。**不要 push**。
+
+【报告格式】
+- 卡号 / 分支：
+- §A 内存可见性（数据来源与展示）：
+- §B 配额告警（配置项 + 触发实测 + tool 返回片段）：
+- §C trace id 落库（migration 路径 + 旧库升级验证）：
+- 验收命令与结果：
+- 契约影响 / 与设计偏差 / 未决问题：
+
+【纪律】不 push、不切 main、不 force push；不改 docs/contracts/**、docs/design/**、
+core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问题"。
+```
+
+## 3. 收尾
+
+- 每个泳道做完后，把它的完成报告整段贴回总览会话：我会核对验收输出、跑全仓集成检查、合并到 main、更新任务板，并给你下一波提示词。
+- **合并后**的泳道要 release：`bash scripts/lane-worktrees.sh release <lane>`；
+  已合并且干净的工作区可删除：`bash scripts/lane-worktrees.sh remove <lane>`。
+
+---
+
+# 附录 A：历史波次提示词（W1–W6，仅供追溯）
+
+> 这些波次全部已完成并合并。保留在此仅供追溯当时的派活方式；
+> **其中的路径（`/home/xuwenzheng/github/ACE/...`）与部分环境描述已过时**，不要直接使用。
 ## 2. 提示词（整段复制）
 
 ### W1-1 · 泳道 A（TASK-001 存储层）
@@ -916,8 +1068,3 @@ core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问�
 【纪律】不 push、不切 main、不 force push；不改契约与设计文档；冲突先停下写进“未决问题”。
 ```
 
-## 3. 收尾
-
-- 每个泳道做完后，把它的完成报告整段贴回总览会话：我会核对验收输出、跑全仓集成检查、合并到 main、更新任务板，并给你下一波提示词。
-- Phase 1 已完成 M1 验收（基线报告 benches/results/phase1-baseline.md）；Phase 2 的卡片已按 docs/plan/phase2-roadmap.md 逐波开出。
-- 工作区清理（所有波次结束后）：`bash scripts/lane-worktrees.sh remove`。
