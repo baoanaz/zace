@@ -393,3 +393,56 @@ describe("§需求4 刷新（TASK-100 用户 2026-09-14 定稿）", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });
+
+describe("§需求5 同一次调用折叠（TASK-100 用户 2026-09-14 提问）", () => {
+  /** 同 callId 的三条 run——真实的 113+119+55=287 分批形态。 */
+  const BATCHED = [
+    { ...RUN, runId: 1, filesProcessed: 113, filesTotal: 113, durationMs: 4000, callId: "call-A" },
+    { ...RUN, runId: 2, filesProcessed: 119, filesTotal: 119, durationMs: 2000, callId: "call-A", finishedAt: RUN.finishedAt + 2 },
+    { ...RUN, runId: 3, filesProcessed: 55, filesTotal: 55, durationMs: 2000, callId: "call-A", finishedAt: RUN.finishedAt + 4 },
+  ];
+
+  it("同 callId 的多条初始化折叠成一行，耗时与文件数求和", async () => {
+    // 时间戳可能让三条落进同一秒，这里靠 callId 分组（不靠时间）。
+    stubAll([], BATCHED);
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    // 三条 run 折叠后只剩一行。
+    expect(rows.length).toBe(1);
+    // 工具名标出批次数（用户能看出它分了几批）。
+    expect(within(rows[0]!).getByText("仓库初始化（3 批）")).toBeInTheDocument();
+    // 耗时**求和**：4000+2000+2000 = 8000ms → "8.0 s"（不是单批的 4.0 s）。
+    expect(rows[0]!.textContent).toContain("8.0 s");
+    expect(rows[0]!.textContent).not.toContain("4.0 s");
+  });
+
+  it("无 callId 的记录各自独立展示（不假装它们属于同一次）", async () => {
+    const standalone = BATCHED.map((run) => ({ ...run, callId: null }));
+    stubAll([], standalone);
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    // 三条独立记录 → 三行（**不折叠**）。
+    expect(within(table).getAllByRole("row").slice(1).length).toBe(3);
+  });
+
+  it("弹窗里说明分批原因（用户看不到这一点会以为出了 bug）", async () => {
+    stubAll([], BATCHED);
+    renderPage(<HistoryPage />);
+
+    const table = await screen.findByRole("table");
+    const row = within(table).getAllByRole("row")[1]!;
+    await userEvent.click(within(row).getByRole("button", { name: "查看" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 弹窗内容是 <pre> 代码块（纯文本），因此断言其整体文本。
+    const pres = dialog.querySelectorAll("pre");
+    const all = [...pres].map((node) => node.textContent ?? "").join("\n");
+    expect(all).toContain("上传批次：3 批");
+    expect(all).toContain("1MB 分批");
+    // 文件数**求和**：113+119+55 = 287（输出区）。
+    expect(all).toContain("解析文件：287 / 287");
+  });
+});

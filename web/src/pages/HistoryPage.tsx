@@ -205,35 +205,74 @@ export function HistoryPage() {
     if (runs === null || usage === null) return null;
     const since = Math.floor(Date.now() / 1000) - days * 86400;
 
-    const initRows: ActivityRow[] = runs
-      .filter(({ run }) => run.finishedAt >= since)
-      .map(({ projectId, run }) => ({
+    /**
+     * 仓库初始化：**按 callId 折叠**（TASK-100 用户 2026-09-14 提问：
+     * "为什么刚刚请求工具会经历三次仓库初始化"）。
+     *
+     * 真相：客户端按 1MB/批上传，服务端**每批触发一次 ingest**，因此**一次逻辑初始化**
+     * 会落多条 `index_runs`（实测 287 个文件 → 113+119+55 三条）。
+     * 它们共享一个 callId（TASK-099 §B），所以按它分组后：
+     * - 耗时取**各组之和**（用户看到的是"这次初始化一共花了多久"）；
+     * - 文件数取各组之和；chunks 取最后一条（它是累计值，不能相加）；
+     * - 批次数量写在标题与输入里（用户能看出它分了几批）。
+     *
+     * 无 callId（旧服务端/旧客户端）→ 每条独立展示，**不假装它们属于同一次**。
+     */
+    const initGroups = new Map<string, { projectId: string; runs: IndexRun[] }>();
+    for (const { projectId, run } of runs) {
+      if (run.finishedAt < since) continue;
+      const key = run.callId ?? `standalone-${projectId}-${run.runId}`;
+      const group = initGroups.get(key);
+      if (group === undefined) {
+        initGroups.set(key, { projectId, runs: [run] });
+      } else {
+        group.runs.push(run);
+      }
+    }
+
+    const initRows: ActivityRow[] = [...initGroups.values()].map(({ projectId, runs: group }) => {
+      const sorted = [...group].sort((a, b) => a.finishedAt - b.finishedAt);
+      const first = sorted[0]!;
+      const last = sorted[sorted.length - 1]!;
+      const files = sorted.reduce((total, run) => total + run.filesProcessed, 0);
+      const totalFiles = sorted.reduce((total, run) => total + run.filesTotal, 0);
+      const errors = sorted.reduce((total, run) => total + run.errors, 0);
+      const duration = sorted.reduce((total, run) => total + run.durationMs, 0);
+      const failed = sorted.some((run) => run.state !== "done");
+      const batches = sorted.length;
+      const errorText = sorted.map((run) => run.error).filter(Boolean).join("；");
+      return {
         kind: "init" as const,
-        key: `init-${projectId}-${run.runId}`,
-        at: run.finishedAt,
+        key: `init-${projectId}-${first.runId}`,
+        at: last.finishedAt,
         project: nameOf(projectId),
         query: null,
-        state: run.state === "done" ? ("ok" as const) : ("failed" as const),
-        durationMs: run.durationMs,
-        volume: { label: "chunks", value: String(run.chunks) },
+        state: failed ? ("failed" as const) : ("ok" as const),
+        durationMs: duration,
+        volume: { label: "chunks", value: String(last.chunks) },
         traceId: null,
-        tool: "仓库初始化",
+        tool: batches > 1 ? `仓库初始化（${batches} 批）` : "仓库初始化",
         input: [
           { label: "项目", value: nameOf(projectId) },
           { label: "projectId", value: projectId },
+          { label: "上传批次", value: `${batches} 批` },
+          ...(first.callId ? [{ label: "callId", value: first.callId }] : []),
         ],
-        // 真实返回：这次索引实际处理了什么。
         output: [
-          `解析文件：${run.filesProcessed} / ${run.filesTotal}`,
-          `chunks：${run.chunks}`,
-          `解析问题：${run.errors > 0 ? `${run.errors} 个` : "无"}`,
+          `解析文件：${files} / ${totalFiles}`,
+          `chunks：${last.chunks}`,
+          `解析问题：${errors > 0 ? `${errors} 个` : "无"}`,
+          ...(batches > 1
+            ? ["", `（本次初始化分 ${batches} 批上传：客户端按 1MB 分批，每批触发一次索引）`]
+            : []),
         ].join("\n"),
         metrics: [
-          { label: "解析文件", value: `${run.filesProcessed} / ${run.filesTotal}` },
-          { label: "chunks", value: String(run.chunks) },
+          { label: "解析文件", value: `${files} / ${totalFiles}` },
+          { label: "chunks", value: String(last.chunks) },
         ],
-        ...(run.error ? { note: run.error } : {}),
-      }));
+        ...(errorText ? { note: errorText } : {}),
+      };
+    });
 
     const searchRows: ActivityRow[] = usage.recent
       .filter((record) => record.createdAt >= since)

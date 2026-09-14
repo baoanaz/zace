@@ -314,6 +314,12 @@ export interface IndexRun {
   chunks: number;
   errors: number;
   error: string | null;
+  /**
+   * 同一次 Tool 调用的 id（TASK-099 §B）。同值的多条 run 是**一次逻辑初始化**
+   * （客户端按 1MB 分批上传，服务端每批触发一次 ingest）。
+   * `null` = 旧服务端或旧客户端（无法关联，按独立记录展示）。
+   */
+  callId?: string | null;
 }
 
 export interface IndexStats {
