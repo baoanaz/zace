@@ -127,6 +127,21 @@
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
 | [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id**（用户 3 条补充） | **TASK-090**（抢 metadb/ops）、TASK-088 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx` | pending |
 
+### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）
+
+> **由来**：编排者在真实仓库 `cockpit-agents-py`（287 文件 / 3416 chunks）上跑真实问题，
+> 发现返回结构平铺、测试文件挤占首位、预算控制失效（超 30%）、next_queries 生成口径粗糙。
+> 用户拍板：按分数（相对阈值）而非条数截断；分组呈现；next_queries 改从缺口出发且仅证据不足时生成。
+
+| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
+|---|---|---|---|---|
+| [TASK-095](TASK-095-返回分组与分数阈值.md) | **返回结构分组（Code 内分 Core/Related/Tests）+ 分数相对阈值截断** | 无 | `core/zace_core/contextpack/{render,assembly}.py`、`core/tests/contextpack/` | pending |
+| [TASK-096](TASK-096-预算计量与next_queries.md) | **预算计量修复（框架开销未计入 + 中文估算偏差）+ next_queries 从缺口出发** | 无（soft: TASK-095，同改 assembly.py） | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/` | pending |
+
+> **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
+> 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。
+> 若并行，则 095 不再碰 `assembly.py` 的 token 计量部分、096 不碰 `render.py`。
+
 ### 用户后续人工任务（非 AI 卡片，记录在案）
 
 > 用户 2026-09-14 明确：
