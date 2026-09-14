@@ -76,7 +76,6 @@ def _cloud(tmp_path: Path) -> SimpleNamespace:
     settings = Settings(
         data_root=tmp_path / "data",
         local_mode=False,
-        register_open=True,
         local_rescan_interval_s=0.0,
     )
     app = create_app(settings)

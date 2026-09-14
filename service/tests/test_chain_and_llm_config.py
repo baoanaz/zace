@@ -349,27 +349,26 @@ def test_call_timeline_is_scoped_to_owner(tmp_path: Path) -> None:
         bob = client.post(
             "/api/auth/register", json={"name": "bob", "password": "pw1"}
         )
-        # register 默认关闭 → 用 bootstrap 建 alice，bob 走 DB 直建 + 手动认领项目
+        assert bob.status_code == 201, bob.text
         db = app.state.meta_db
-        bob_user = db.create_user("bob", "")
+        bob_id = bob.json()["userId"]
         alice_id = alice.json()["userId"]
         alice_project = manager.resolve_project("identity:a", "a").project_id
         bob_project = manager.resolve_project("identity:b", "b").project_id
         assert db.claim_project(alice_id, alice_project)[0]
-        assert db.claim_project(bob_user.id, bob_project)[0]
+        assert db.claim_project(bob_id, bob_project)[0]
         upload_files(manager, alice_project, SAMPLE_FILES)
         upload_files(manager, bob_project, SAMPLE_FILES)
 
-        alice_token = client.post(
-            "/api/auth/tokens", json={"name": "a"}
-        ).json()["token"]
-        # bob 的 token **直接铸**：``POST /api/auth/tokens`` 会带上 bootstrap 留下的 alice
-        # session cookie，两次都铸成 alice 的（本用例第一版就踩到这个，才有了"B 也能读"的假红）。
+        # 注册会把浏览器 session 切到新用户。隔离用例直接为两位用户各铸一枚 token，避免
+        # TestClient 的单 cookie jar 把 token 错记到最后登录的人名下。
         from zace_service.auth import create_api_token
 
+        alice_raw, alice_digest, alice_prefix = create_api_token()
+        db.create_token(alice_id, token_hash=alice_digest, prefix=alice_prefix, name="a")
         bob_raw, bob_digest, bob_prefix = create_api_token()
-        db.create_token(bob_user.id, token_hash=bob_digest, prefix=bob_prefix, name="b")
-        alice_headers = {"Authorization": f"Bearer {alice_token}", "X-Request-Id": CALL_ID}
+        db.create_token(bob_id, token_hash=bob_digest, prefix=bob_prefix, name="b")
+        alice_headers = {"Authorization": f"Bearer {alice_raw}", "X-Request-Id": CALL_ID}
         bob_headers = {"Authorization": f"Bearer {bob_raw}"}
 
         response = client.post(
@@ -385,7 +384,6 @@ def test_call_timeline_is_scoped_to_owner(tmp_path: Path) -> None:
         assert denied.json()["error"]["code"] == "call_not_found"
         # 文案里不回显 callId（越权与不存在逐字节一致）。
         assert CALL_ID not in denied.text
-    del bob  # 仅记录"register 关闭"的现状，本用例不依赖它
     manager.close()
 
 

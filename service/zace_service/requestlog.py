@@ -249,13 +249,15 @@ def lookup_all(
 def read_entries(path: str | Path, *, max_files: int = 32) -> list[RequestLogEntry]:
     """读日志家族并返回**按时间倒序**的条目（新的在前；无法解析的行直接跳过）。
 
-    ``max_files`` 限制读多少个文件（防止轮转备份异常多时的 O(全部) 扫描）。
+    ``max_files`` 是允许读取的最大轮转编号；只接受 ``.1`` 到 ``.max_files``，避免异常残留的
+    ``.99`` 在较新备份缺失时被切片选中、越过配置窗口。
     """
     base = Path(path)
     files = [base] if base.exists() else []
     # 轮转备份：``request.log.1`` 最新、编号越大越旧（RotatingFileHandler 的既定命名）。
+    max_backup = max(0, int(max_files))
     backups = sorted(base.parent.glob(f"{base.name}.*"), key=_backup_order)
-    files += backups[: max(0, int(max_files))]
+    files += [candidate for candidate in backups if _backup_order(candidate) <= max_backup]
     entries: list[RequestLogEntry] = []
     for candidate in files:
         entries.extend(_read_file(candidate))

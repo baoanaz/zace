@@ -3,7 +3,7 @@
 三条纪律：
 
 1. **本地模式（默认）完全放行**（R34）：行为与今天逐字一致——本地单用户模式不该被迫登录。
-   鉴权只在 ``ZACE_LOCAL_MODE=false``（云端形态）下生效；
+   普通 ``serve`` 始终鉴权；只有显式 ``local`` 命令的本地形态免鉴权；
 2. **401 不区分细节**（Module/06 §2.2）：token 无效 / 已撤销 / 会话过期一律 ``unauthorized``，
    不给探测面；
 3. **明文不留存**：密码用 argon2id 单向哈希；API Key 只存 ``sha256``，明文仅创建时返回一次。
@@ -202,7 +202,12 @@ def llm_owner_optional(request: Request) -> User | None:
         user = getattr(request.state, "zace_user", None)
         return user if isinstance(user, User) else local_user()
     user = getattr(request.state, "zace_user", None)
-    return user if isinstance(user, User) else None
+    if isinstance(user, User):
+        return user
+    # `/api/meta` 是公开路径，鉴权中间件会直接放行，因此已登录浏览器的 user 不会预先写进
+    # request.state。这里做一次可选认证：有合法 cookie/key 就返回详情，没有则仍保持公开响应。
+    principal = authenticate(request)
+    return principal.user if principal is not None else None
 
 
 def get_meta_db(request: Request) -> MetaDB:

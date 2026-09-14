@@ -30,7 +30,7 @@ import { Layout } from "./Layout";
 
 type AuthState =
   | { kind: "loading" }
-  | { kind: "anonymous"; needsBootstrap: boolean; registerOpen: boolean }
+  | { kind: "anonymous"; needsBootstrap: boolean }
   | { kind: "signed-in"; account: Account };
 
 export function App() {
@@ -48,7 +48,6 @@ export function App() {
         setState({
           kind: "anonymous",
           needsBootstrap: true,
-          registerOpen: meta.registerOpen,
         });
         return;
       }
@@ -59,7 +58,6 @@ export function App() {
           setState({
             kind: "anonymous",
             needsBootstrap: false,
-            registerOpen: meta.registerOpen,
           });
           return;
         }
@@ -67,7 +65,7 @@ export function App() {
       }
     } catch {
       // 服务不可达等：落到匿名态，登录页的请求会给出可操作提示。
-      setState({ kind: "anonymous", needsBootstrap: false, registerOpen: false });
+      setState({ kind: "anonymous", needsBootstrap: false });
     }
   }, []);
 
@@ -88,7 +86,7 @@ export function App() {
     needsBootstrap: state.kind === "anonymous" ? state.needsBootstrap : false,
     onSignedIn: (account) => setState({ kind: "signed-in", account }),
     onSignedOut: () =>
-      setState({ kind: "anonymous", needsBootstrap: false, registerOpen: false }),
+      setState({ kind: "anonymous", needsBootstrap: false }),
   });
 
   return <RouterProvider router={router} />;

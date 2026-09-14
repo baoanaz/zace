@@ -101,7 +101,7 @@ def _install_auth(app: FastAPI, settings: Settings) -> None:
     漏一个就是越权面（TASK-051 A1 的 `auth: enabled` 自述已经在骗人）；中间件只判"能不能进"，
     业务侧的归属校验（TASK-061）仍在依赖里。
 
-    本地模式（默认）**完全放行**：行为与今天逐字一致（R34）。
+    显式 ``zace-service local`` 模式**完全放行**；普通 ``serve`` 始终鉴权。
 
     ``request.state.zace_user`` 写入已认证用户：下游（归属校验、概览聚合、审计归属）读它，
     避免重复解析凭据。

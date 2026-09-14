@@ -5,7 +5,7 @@
  *
  * ```bash
  * export NO_PROXY=127.0.0.1,localhost
- * ZACE_LOCAL_MODE=false ZACE_REGISTER_OPEN=true ZACE_DATA_ROOT=/tmp/zace-ui/data \
+ * ZACE_DATA_ROOT=/tmp/zace-ui/data \
  *   uv run zace-service serve --port 8891
  * cd web && ZACE_E2E=1 ZACE_E2E_BASE=http://127.0.0.1:8891 \
  *   ZACE_E2E_USER=<账户> ZACE_E2E_PASSWORD=<密码> \

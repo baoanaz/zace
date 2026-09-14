@@ -1,7 +1,7 @@
 """TASK-060 验收：鉴权（session / API Key / 首个用户初始化 / 本地模式回归）。
 
 对应卡内 DoD 逐条：401 不区分细节、token 明文只出现一次、bootstrap 只能用一次、
-register 开关、会话过期、以及**本地模式完全放行**（R34 的回归保护）。
+始终可注册、会话过期、以及**本地模式完全放行**（R34 的回归保护）。
 """
 
 from __future__ import annotations
@@ -25,14 +25,11 @@ from tests.conftest import DeterministicBigramEmbedding, make_client
 PASSWORD = "correct-horse-battery"
 
 
-def _make(
-    tmp_path: Path, *, local_mode: bool = False, register_open: bool = False
-) -> SimpleNamespace:
+def _make(tmp_path: Path, *, local_mode: bool = False) -> SimpleNamespace:
     """构造一个 app（非本地模式 = 云端形态，鉴权生效）。"""
     settings = Settings(
         data_root=tmp_path / "data",
         local_mode=local_mode,
-        register_open=register_open,
     )
     app = create_app(settings)
     app.state.engine_manager = EngineManager.open(
@@ -59,8 +56,27 @@ def test_meta_reports_deployment_shape_without_leaking_counts(cloud) -> None:
     body = cloud.client.get("/api/meta").json()
     assert body["authRequired"] is True
     assert body["needsBootstrap"] is True
-    assert body["registerOpen"] is False
+    assert body["registerOpen"] is True
     assert body["userCount"] is None
+
+
+def test_meta_shows_model_details_to_authenticated_browser(
+    cloud, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """公开 meta 对匿名请求隐藏详情，但合法 session 能看到控制台所需模型字段。"""
+    monkeypatch.setenv("EMBED_MODE", "api")
+    monkeypatch.setenv("EMBED_MODEL", "voyage-4-lite")
+    monkeypatch.setenv("EMBED_BASE_URL", "https://api.voyageai.com")
+    anonymous = cloud.client.get("/api/meta").json()["config"]
+    assert "model" not in anonymous["llm"]
+
+    _bootstrap(cloud)
+    authenticated = cloud.client.get("/api/meta").json()["config"]
+    assert "model" in authenticated["llm"]
+    assert authenticated["embedding"]["model"] == "voyage-4-lite"
+    assert authenticated["embedding"]["provider"] == "voyage"
+    assert authenticated["embedding"]["dim"] == 1024
+    assert authenticated["embedding"]["maxInputTokens"] == 32_000
 
 
 # --------------------------------------------------------------------------- 无凭据 = 401
@@ -152,21 +168,9 @@ def test_bootstrap_unavailable_in_local_mode(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- register / login
 
 
-def test_register_is_closed_by_default(tmp_path: Path) -> None:
-    """注册默认关闭（自部署单人场景）：403 register_disabled。"""
-    ns = _make(tmp_path, register_open=False)
-    with ns.client:
-        response = ns.client.post(
-            "/api/auth/register", json={"name": "bob", "password": PASSWORD}
-        )
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "register_disabled"
-    ns.app.state.engine_manager.close()
-
-
 def test_register_conflict_is_409(tmp_path: Path) -> None:
-    """开启注册后：可注册；同名 → 409 name_taken。"""
-    ns = _make(tmp_path, register_open=True)
+    """每次部署都可注册；同名 → 409 name_taken。"""
+    ns = _make(tmp_path)
     with ns.client:
         for _ in range(2):
             response = ns.client.post(
@@ -311,8 +315,8 @@ def test_public_paths_do_not_require_credentials(cloud) -> None:
     register = cloud.client.post(
         "/api/auth/register", json={"name": "x", "password": PASSWORD}
     )
-    assert register.status_code == 403
-    assert register.json()["error"]["code"] == "register_disabled"
+    assert register.status_code == 201
+    assert register.json()["name"] == "x"
 
     bootstrap = cloud.client.post(
         "/api/auth/bootstrap", json={"name": "x", "password": "ab"}

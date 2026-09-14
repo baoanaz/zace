@@ -222,7 +222,8 @@ export function SettingsPage() {
 
         {!llm.configured && !usingUser && llm.missingEnv.length > 0 && (
           <p className="mt-3 text-xs text-amber-700">
-            服务端缺少环境变量：{llm.missingEnv.join("、")}。未配置时 ask_project 返回检索结果而非总结。
+            尚未配置总结模型。请在上方填写模型名、接口地址和 API Key；保存后
+            ask_project 才会生成总结，未配置时只返回检索结果。
           </p>
         )}
       </Card>

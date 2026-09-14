@@ -29,8 +29,8 @@ zace 的**账户 console**：登录、账户面板、API Key、历史记录、�
 
 | 部署状态 | 首屏 |
 |---|---|
-| 云端 + 有账户 + 未登录 | **登录页**（注册开启时下方可切注册） |
-| 云端 + 无账户 | **初始化账户**页（`register` 默认关闭时这是唯一入口） |
+| 完整服务 + 有账户 + 未登录 | **登录页**（下方始终可切换注册） |
+| 完整服务 + 无账户 | **初始化账户**页 |
 | 本地模式 | 直接进入（`/api/auth/me` 返回隐式账户 `isLocal=true`） |
 
 **不能**只看 `/api/auth/me` 的 401 来判定——那是"未登录"，不是"没有账户可登"。
@@ -42,8 +42,8 @@ zace 的**账户 console**：登录、账户面板、API Key、历史记录、�
 export NO_PROXY=127.0.0.1,localhost
 uv run zace-service local --repo /绝对路径/你的仓库 --port 8787
 
-# 或云端形态（验证登录/Key/面板）：注册开关打开，或先用 bootstrap 建首个账户
-ZACE_LOCAL_MODE=false ZACE_REGISTER_OPEN=true ZACE_DATA_ROOT=/tmp/zace-ui uv run zace-service serve --port 8891
+# 或完整服务形态（验证登录/API Key/面板）：普通 serve 默认启用全部账户功能
+ZACE_DATA_ROOT=/tmp/zace-ui uv run zace-service serve --port 8891
 
 # 2) 前端（终端 B）
 cd web && npm ci && npm run dev        # http://127.0.0.1:5173

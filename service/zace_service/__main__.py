@@ -14,7 +14,7 @@ zace-service local --repo PATH [--data-root PATH] [--host H] [--port N]
 它已在 TASK-030/035 的验收与文档里出现，属向下兼容而不是新语义。
 
 - 参数缺省值来自 :class:`~zace_service.config.Settings`（即 ``ZACE_DATA_ROOT`` /
-  ``ZACE_LOCAL_MODE`` / ``ZACE_LOCAL_RESCAN_INTERVAL`` 等环境变量），命令行显式给出时优先；
+  ``ZACE_LOCAL_RESCAN_INTERVAL`` 等环境变量），命令行显式给出时优先；
 - ``--reload`` 是开发便利开关：uvicorn 的 reload 需要 import string，此时子进程从
   **环境变量**重建配置（``ZACE_DATA_ROOT`` 由本函数写入），因此 ``--log-level`` 只作用于
   uvicorn 自身日志，服务自身 JSON 日志沿用默认 ``info``；
@@ -37,7 +37,6 @@ from zace_service.app import create_app
 from zace_service.cli_hint import format_snippets, mcp_url
 from zace_service.config import (
     DATA_ROOT_ENV,
-    LOCAL_MODE_ENV,
     LOCAL_RESCAN_INTERVAL_ENV,
     Settings,
 )
@@ -158,16 +157,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _run_local(args: argparse.Namespace, base: Settings, settings: Settings) -> int:
+def _run_local(args: argparse.Namespace, _base: Settings, settings: Settings) -> int:
     """``zace-service local --repo``：绑定仓库 + 后台索引 + 立刻监听（TASK-034 §D）。"""
     from zace_service.indexer import LocalRootError
 
-    if not base.local_mode:  # 卡内 §D-1：强制本地模式，但要告警（不静默改掉用户的配置）
-        print(
-            f"[警告] {LOCAL_MODE_ENV} 被设为非本地模式，但 `local` 子命令强制本地模式"
-            "（本地单用户模式无鉴权，请勿在共享机器上这样跑）",
-            file=sys.stderr,
-        )
     settings = replace(settings, local_mode=True)
     app = create_app(settings)
     if args.reload:  # reload 需 import string：绑仓库/索引无法在 reload 子进程里保留

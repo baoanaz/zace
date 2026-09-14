@@ -7,13 +7,13 @@
  * |---|---|
  * | 本地模式（默认） | 不需要登录，直接进入（避免"强制登录但没有账户体系"的死局） |
  * | 云端 + 无账户 | **初始化账户**（users 为空，register 默认关闭时这是唯一入口） |
- * | 云端 + 有账户 | **登录**（register 开启时下方多一个注册表单） |
+ * | 云端 + 有账户 | **登录**（下方可切换到注册表单） |
  *
  * 都不需要用户去记"我该点哪个"。
  *
  * TASK-098 只改**外观**：左侧装饰区（老纸底 + 衬线品牌字 + 细线几何图案），
  * 右侧纯白浮卡片（参考 Voyage 登录页）。三种模式、三个字段、错误展示、忙态禁用、
- * 注册开关提示**一个都没动**；窄屏（<768px）时装饰区收起，只留表单。
+ * 窄屏（<768px）时装饰区收起，只留表单。
  */
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
@@ -205,7 +205,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
             </button>
 
             <div className="space-y-1 border-t border-ink-line pt-3 text-center text-xs">
-              {mode === "login" && meta.registerOpen && (
+              {mode === "login" && (
                 <button
                   type="button"
                   className="text-accent-seal underline"
@@ -222,11 +222,6 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
                 >
                   已有账户？登录
                 </button>
-              )}
-              {!meta.registerOpen && mode === "login" && (
-                <p className="text-ink-muted">
-                  注册已关闭（ZACE_REGISTER_OPEN）——单用户自部署的默认配置。
-                </p>
               )}
             </div>
           </form>

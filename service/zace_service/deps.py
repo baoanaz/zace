@@ -71,7 +71,7 @@ def require_project_id(request: Request, project_id: str | None) -> str:
     - 显式给出：必须存在，否则 404 ``project_not_found``；已认证用户还必须是该项目的
       归属者，否则**同样** 404 ``project_not_found``（不报 403：403 会泄露"这个 projectId
       存在"，与 Module/06 §2.2"不给探测面"冲突）；
-    - 省略：仅本地模式（``ZACE_LOCAL_MODE``）允许，取**唯一**的本地项目；
+    - 省略：仅 ``zace-service local`` 模式允许，取**唯一**的本地项目；
       本地 0 个项目 → 404（附"先 resolve"提示）；多于 1 个 → 409 ``ambiguous_project``
       （不猜、不隐式选一个：静默挑错项目比报错更糟）。
 
@@ -89,7 +89,7 @@ def require_project_id(request: Request, project_id: str | None) -> str:
     if not settings.local_mode:
         raise ApiError(
             code="project_id_required",
-            message="非本地模式必须显式提供 projectId（R37 的省略仅限 ZACE_LOCAL_MODE）",
+            message="非本地模式必须显式提供 projectId（R37 的省略仅限 local 命令）",
             status=400,
         )
     projects = manager.list_projects()

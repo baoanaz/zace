@@ -889,6 +889,8 @@ def test_meta_exposes_effective_config_without_key_material(ask_env: SimpleNames
     assert config["llm"]["configured"] is True
     assert config["llm"]["apiKeyConfigured"] is True
     assert config["llm"]["model"] == "deepseek/deepseek-v4.1-flash"
+    assert config["llm"]["provider"] == "DeepSeek"
+    assert config["llm"]["maxContextTokens"] == 128_000
     assert config["llm"]["baseUrl"] == "http://llm.invalid/v1"
     assert config["llm"]["timeoutS"] == 60.0
     assert config["llm"]["maxTokens"] == 3072

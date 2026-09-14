@@ -122,7 +122,7 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
     expect(apiKey).toHaveValue("");
   });
 
-  it("未配置时明确说清缺哪些环境变量与 ask 的降级行为", async () => {
+  it("未配置时引导填写表单并说清 ask 的降级行为", async () => {
     stubMeta({
       config: {
         embedding: { mode: "local", configured: true, missingEnv: [] },
@@ -136,10 +136,9 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
 
     render(<SettingsPage />);
 
-    // 未配置提示仍在（"缺什么 + 会怎样"）。
-    const notice = await screen.findByText(/缺少环境变量/);
-    expect(notice.textContent).toContain("ANSWER_BASE_URL");
-    expect(notice.textContent).toContain("ANSWER_MODEL");
+    // 未配置提示只讲用户下一步，不暴露部署环境变量实现细节。
+    const notice = await screen.findByText(/尚未配置总结模型/);
+    expect(notice.textContent).toContain("模型名、接口地址和 API Key");
     expect(notice.textContent).toContain("返回检索结果");
     // 标题旁的"未配置"状态。
     expect(screen.getAllByText("未配置").length).toBeGreaterThanOrEqual(1);

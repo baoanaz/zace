@@ -132,3 +132,18 @@ services:
 - **未决/未完成**：卡内 `deploy/`、Dockerfiles、部署手册及 compose/Caddy 验收尚未交付；
   `npx zace-client` 鉴权 E2E、MCP stdio、服务重启后的账户/索引持久化仍待验证。因此本卡继续
   保持 `pending`，不得据此声明 TASK-092 DoD 完成。
+
+### 2026-09-14 · 部署功能统一与默认模型
+
+- **用户决策**：普通部署不得通过配置关闭注册、账户或 API Key 功能；每次 `serve` 都走完整
+  鉴权流程。删除 `ZACE_REGISTER_OPEN` 和 `ZACE_LOCAL_MODE` 两个部署环境开关；只有用户显式
+  执行 `zace-service local --repo ...` 时才进入 R34 专用免鉴权模式。
+- **兼容处理**：`GET /api/meta` 暂保留 `registerOpen` 字段并恒为 `true`，避免旧 web/client
+  因响应字段消失而破坏；后端注册接口与前端注册入口始终可用。
+- **模型展示修复**：公开 `/api/meta` 对携带合法 session/API Key 的请求执行可选认证，登录后
+  返回当前模型详情；Embedding 从 core 注册表补全厂商、维度和输入上限，已知 DeepSeek 模型
+  补全厂商与上下文窗口。匿名请求仍不暴露内部模型地址。
+- **VPS 默认模型**：Voyage embedding 与本机 DeepSeek 兼容网关通过
+  `/etc/zace/zace.env` 注入；密钥只存 VPS、未写入仓库、文档、日志或测试。
+- **验证**：`uv run ruff check .`、依赖方向检查、前端 lint/typecheck/build、设置页 6 个测试
+  通过；全仓 `uv run pytest -o addopts="" -q` 为 `1014 passed, 2 skipped`。

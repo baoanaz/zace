@@ -115,7 +115,7 @@ def attach_project(payload: AttachRequest, request: Request) -> dict[str, Any]:
     if not get_settings(request).local_mode:
         raise ApiError(
             "local_mode_required",
-            "POST /api/projects/attach 仅在本地单用户模式（ZACE_LOCAL_MODE=true）可用："
+            "POST /api/projects/attach 仅在 `zace-service local` 本地单用户模式可用："
             "服务与代码不在同一文件系统时，请用客户端上传（/api/sync/batch-upload）。",
             403,
         )

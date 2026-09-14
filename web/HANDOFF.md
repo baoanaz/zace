@@ -100,7 +100,7 @@ cd web && npm ci && npm run dev     # 打开 http://127.0.0.1:5173
 要看登录页 / API Key / 面板，用云端形态（需先建首个账户）：
 
 ```bash
-ZACE_LOCAL_MODE=false ZACE_REGISTER_OPEN=true ZACE_DATA_ROOT=/tmp/zace-ui \
+ZACE_DATA_ROOT=/tmp/zace-ui \
   uv run zace-service serve --port 8891
 # 打开 http://127.0.0.1:8891/api/meta 确认 needsBootstrap=true，然后：
 curl -c /tmp/c -X POST http://127.0.0.1:8891/api/auth/bootstrap \

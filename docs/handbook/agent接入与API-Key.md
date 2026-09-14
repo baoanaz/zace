@@ -29,16 +29,15 @@
 | `--token <TOKEN>` | **API Key**（云端形态必填） | `ZACE_API_TOKEN` |
 | `--cache-root <DIR>` | 本地缓存（默认 `~/.cache/zace`） | `ZACE_CLIENT_CACHE` |
 
-## 2. 服务端准备（云端形态）
+## 2. 服务端准备（完整服务形态）
 
-**关键**：默认是本地单用户模式（`ZACE_LOCAL_MODE` 默认 **true**），该模式下**完全不鉴权**、也没有账户概念。
-要用 API Key，必须以**非本地模式**启动：
+普通 `serve` 始终启用账户、注册、登录、API Key 与鉴权，不需要用环境变量打开功能：
 
 ```bash
-export ZACE_LOCAL_MODE=false          # 关键：开启鉴权
-export ZACE_REGISTER_OPEN=true        # 可选：允许注册（否则只能 bootstrap 第一个用户）
 uv run zace-service serve --host 0.0.0.0 --port 8787 --data-root <数据根>
 ```
+
+只有显式执行 `zace-service local --repo <目录>` 才进入免账户的专用本地嵌入流程。
 
 启动后自查：
 
@@ -54,7 +53,7 @@ $ curl -s http://127.0.0.1:8787/api/meta
 
 ### 3.1 首个用户（bootstrap）
 
-**全新部署必须走这一步**——`register` 默认关闭，否则没有任何途径产生第一个账户。
+全新部署的网页会自动显示初始化页；bootstrap 用原子方式创建第一个账户。初始化完成后，普通注册仍然可用。
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8787/api/auth/bootstrap \
@@ -138,7 +137,7 @@ tools/call search_context → isError=True
 - **免鉴权白名单**（`PUBLIC_PATHS`）：`/healthz`、`/api/meta`、`/api/auth/{login,register,bootstrap,logout}`；
   **其余全部要求凭据**；
 - **凭据两种**：`Authorization: Bearer <API Key>`（客户端用）或 session cookie（浏览器用）；
-- **本地模式完全放行**（`ZACE_LOCAL_MODE=true`，默认）：行为与 M2a 逐字一致（R34）；
+- **显式 local 命令完全放行**：行为与 M2a 一致（R34），普通 serve 不会进入该模式；
 - **401 不区分细节**（无效/已撤销/过期同一文案）——不给探测面。
 
 客户端侧（Rust，`client/src/remote.rs`）：发 `Bearer`（若有 token），
@@ -150,10 +149,10 @@ tools/call search_context → isError=True
 |---|---|---|
 | 401 `unauthorized` | 没带 key / key 错 / key 已撤销 | 检查 `--token`；在控制台重建 key |
 | 400 `project_id_required` | 非本地模式下检索必须显式给 `projectId` | 这是 R37 的设计（省略仅限本地模式）；client 会先 `resolve` 拿到 id |
-| 403 `local_mode` | 在本地模式下调用 `/api/auth/bootstrap` 等 | 本地模式没有账户概念；要建用户必须 `ZACE_LOCAL_MODE=false` |
-| 403 `already_initialized` | 已有用户还调 bootstrap | 改用登录；或开 `ZACE_REGISTER_OPEN=true` 注册 |
+| 403 `local_mode` | 对显式 `local` 命令启动的服务调用账户接口 | 改用普通 `zace-service serve` |
+| 403 `already_initialized` | 已有用户还调 bootstrap | 改用登录或注册 |
 | `npx zace-client` 无输出 | 它是 **MCP stdio 服务**，等 stdin 上的 JSON-RPC | 正常。用编辑器或 MCP SDK 客户端连它 |
-| client 报 401 但 token 是对的 | 服务端是本地模式（`authRequired=false`） | 确认服务端 `ZACE_LOCAL_MODE=false` |
+| client 报 401 但 token 是对的 | Key 已撤销、输错或不属于当前服务 | 在网页控制台重建 Key |
 | 连不上 127.0.0.1 | 本机 `http_proxy` 拦截 | `NO_PROXY=127.0.0.1,localhost` |
 
 ## 7. 尚未验证的部分（诚实声明）

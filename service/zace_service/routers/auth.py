@@ -7,8 +7,7 @@
 - **本地模式（默认）**：无账户体系（R34）。除 ``GET /api/meta`` 与 ``GET /api/auth/me``
   外，其余端点返回 403 ``local_mode``——**不假装有账户**，也不允许在本地模式建账户后
   以为自己受保护（诚实性优先）；
-- **非本地模式**：``register`` 默认关闭（``ZACE_REGISTER_OPEN``），首次部署用
-  ``POST /api/auth/bootstrap`` 建第一个账户（否则 ``register`` 关闭时**没有任何途径**产生用户）；
+- **非本地模式**：首次部署用 ``POST /api/auth/bootstrap`` 建第一个账户，之后注册与登录始终可用；
 - **401 不区分细节**；``GET /api/auth/tokens`` **绝不含明文或哈希**；
 - ``GET /api/meta``（TASK-088 §F）：免鉴权，因此**敏感面必须门禁**——
   未鉴权的云端调用只拿得到"配置了没"与"缺哪些环境变量名"，拿不到模型名/地址/参数。
@@ -106,7 +105,6 @@ def meta(request: Request) -> dict[str, Any]:
       写文档里的就是它们），模型名与地址属内部拓扑，登录后才给。
     """
     settings = get_settings(request)
-    user = getattr(request.state, "zace_user", None)
     needs_bootstrap = False
     user_count = 0
     if not settings.local_mode:
@@ -125,11 +123,12 @@ def meta(request: Request) -> dict[str, Any]:
         "version": settings.version,
         "localMode": settings.local_mode,
         "authRequired": not settings.local_mode,
-        "registerOpen": settings.register_open,
+        # 保留既有响应字段兼容旧 web/client；注册不再受部署配置控制。
+        "registerOpen": True,
         "needsBootstrap": needs_bootstrap,
         "userCount": user_count if settings.local_mode else None,
         "config": effective_config(
-            settings, details=settings.local_mode or user is not None, resolved=resolved
+            settings, details=settings.local_mode or owner is not None, resolved=resolved
         ),
     }
 
@@ -188,6 +187,7 @@ def _llm_config(
             "timeoutS": resolved.timeout_s,
             "maxTokens": resolved.max_tokens,
             "temperature": resolved.temperature,
+            **_llm_model_metadata(resolved.model),
         }
     payload: dict[str, Any] = {
         "configured": bool(settings.answer_configured),
@@ -205,9 +205,19 @@ def _llm_config(
             "timeoutS": settings.answer_timeout_s,
             "maxTokens": settings.answer_max_tokens,
             "temperature": settings.answer_temperature,
+            **_llm_model_metadata(settings.answer_model),
         }
     )
     return payload
+
+
+def _llm_model_metadata(model: str | None) -> dict[str, Any]:
+    """已知 LLM 的只读展示元数据；未知模型不猜。"""
+    if model == "deepseek/deepseek-v4.1-flash":
+        return {"provider": "DeepSeek", "maxContextTokens": 128_000}
+    if model and "deepseek" in model.lower():
+        return {"provider": "DeepSeek"}
+    return {}
 
 
 def _embedding_config(*, details: bool) -> dict[str, Any]:
@@ -228,13 +238,33 @@ def _embedding_config(*, details: bool) -> dict[str, Any]:
         "missingEnv": _embedding_missing(config),
     }
     if details:
+        model = config.model
+        provider = config.provider
+        dim = config.dim
+        max_input_tokens = config.max_input_tokens
+        if config.mode == "local" and model:
+            from zace_core.embedding.registry import get_local_spec
+
+            spec = get_local_spec(model)
+            provider = "Local ONNX"
+            dim = dim or spec.dim
+            max_input_tokens = max_input_tokens or spec.max_input_tokens
+        elif config.mode == "api" and model:
+            from zace_core.embedding.registry import find_api_spec, resolve_transport
+
+            spec = find_api_spec(model)
+            transport = resolve_transport(spec, base_url=config.base_url, provider=config.provider)
+            provider = transport.provider
+            if spec is not None:
+                dim = dim or spec.output_dimension or spec.dim
+                max_input_tokens = max_input_tokens or spec.max_input_tokens
         payload.update(
             {
-                "model": config.model,
-                "provider": config.provider,
+                "model": model,
+                "provider": provider,
                 "baseUrl": config.base_url,
-                "dim": config.dim,
-                "maxInputTokens": config.max_input_tokens,
+                "dim": dim,
+                "maxInputTokens": max_input_tokens,
                 "offline": config.offline,
             }
         )
@@ -255,15 +285,9 @@ def _embedding_missing(config: Any) -> list[str]:
 
 @router.post("/api/auth/register", status_code=201)
 def register(payload: Credentials, request: Request, response: Response) -> dict[str, Any]:
-    """注册（默认关闭；``ZACE_REGISTER_OPEN`` 开启后可用）。"""
+    """注册账户；完整服务模式始终可用。"""
     settings = get_settings(request)
     _require_remote(settings.local_mode)
-    if not settings.register_open:
-        raise ApiError(
-            code="register_disabled",
-            message="注册已关闭：请用 ZACE_REGISTER_OPEN=true 开启，或用初始化接口建第一个账户",
-            status=403,
-        )
     name, password = _validate_credentials(payload)
     db = get_meta_db(request)
     try:
@@ -282,8 +306,8 @@ def register(payload: Credentials, request: Request, response: Response) -> dict
 def bootstrap(payload: Credentials, request: Request, response: Response) -> dict[str, Any]:
     """首个用户初始化：``users`` 表为空时创建并直接登录，之后**自动关闭**。
 
-    为什么必须有：``register`` 默认关闭（Module/06 §2.2），全新部署否则**没有任何途径**
-    产生第一个账户。已有用户时返回 403，**不得**用它创建第二个账户，也不得覆盖第一个。
+    为什么保留：它为首个账户提供原子初始化语义，避免并发部署时产生多个首任账户。
+    已有用户时返回 403，**不得**用它创建第二个账户，也不得覆盖第一个。
     """
     settings = get_settings(request)
     _require_remote(settings.local_mode)
@@ -292,7 +316,7 @@ def bootstrap(payload: Credentials, request: Request, response: Response) -> dic
     if db.user_count() > 0:
         raise ApiError(
             code="already_initialized",
-            message="已存在账户，初始化接口已关闭：请改用登录，或由管理员开启注册",
+            message="已存在账户，初始化接口已关闭：请改用登录或注册",
             status=403,
         )
     try:
@@ -502,7 +526,7 @@ def _require_remote(local_mode: bool) -> None:
             code="local_mode",
             message=(
                 "本地单用户模式没有账户与 API Key（R34）：该端点在云端形态"
-                "（ZACE_LOCAL_MODE=false）下才有意义"
+                "（普通 serve 模式）下才有意义"
             ),
             status=403,
         )

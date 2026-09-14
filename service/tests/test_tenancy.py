@@ -67,7 +67,6 @@ def _build(tmp_path: Path, *, local_mode: bool) -> SimpleNamespace:
     settings = Settings(
         data_root=tmp_path / "data",
         local_mode=local_mode,
-        register_open=True,  # 便于用例注册第二个用户（bootstrap 只给第一个）
         local_rescan_interval_s=0.0,
     )
     app = create_app(settings)

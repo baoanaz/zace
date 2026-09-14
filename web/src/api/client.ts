@@ -90,8 +90,6 @@ export function errorHint(error: unknown): string | null {
     // ---- TASK-060 鉴权 ----
     case "unauthorized":
       return "凭据无效或已失效：请重新登录（或检查 API Key 是否已被撤销）。";
-    case "register_disabled":
-      return "注册已关闭：首个账户请用初始化页面创建，或由管理员开启 ZACE_REGISTER_OPEN。";
     case "already_initialized":
       return "已存在账户：初始化接口已关闭，请直接登录。";
     case "name_taken":
@@ -216,12 +214,7 @@ export interface EmbeddingConfigView {
   maxInputTokens?: number | null;
   offline?: boolean;
   error?: string;
-  /**
-   * 速率与吞吐限额（TASK-100 §需求9 要求展示）。
-   *
-   * **后端尚未提供**（`GET /api/meta` 目前不返回这两个字段）——声明为可选，
-   * 页面在缺失时显示 `—`；TASK-099 补齐后无需再改前端。
-   */
+  /** 速率与吞吐限额；厂商没有提供可靠静态值时为空。 */
   tpm?: number | null;
   rpm?: number | null;
 }
@@ -244,7 +237,7 @@ export interface LlmConfigView {
   source?: "user" | "server";
   /** 用户配置缺哪几项（字段名，不是环境变量名；TASK-099 §C）。 */
   missingKeys?: string[];
-  /** 厂商与上下文窗口（TASK-100 §需求9）。同样**后端尚未提供**，缺失时显示 `—`。 */
+  /** 厂商与上下文窗口（TASK-100 §需求9）。 */
   provider?: string | null;
   maxContextTokens?: number | null;
 }

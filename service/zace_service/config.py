@@ -1,13 +1,13 @@
 """zace-service 配置（TASK-030 §交付物）。
 
 设计依据：``docs/design/Module/06-服务化与部署.md`` §2.4（可观测：secret 全部环境变量注入）、
-``docs/plan/contracts.md`` §3.8 R34（M2a 本地单用户模式：无鉴权、绑 127.0.0.1）。
+``docs/plan/contracts.md`` §3.8 R34（专用 ``local`` 命令：无鉴权、绑 127.0.0.1）。
 
 口径（本卡冻结，后续卡只读不改）：
 
 - 纯标准库实现（``os.environ`` + ``dataclasses``），**不引入 pydantic-settings**（依赖最小化）；
 - ``data_root`` 与 core 的 ``ZACE_DATA_ROOT`` 同名同义（``~/.zace``，core 只管 ``projects/``）；
-- ``local_mode`` 默认 ``True``：M2a 为本地单用户模式（R34），鉴权归 M2c（TASK-060/061）；
+- 普通 ``serve`` 固定走完整账户与鉴权流程；只有显式 ``local`` 命令会设置 ``local_mode``；
 - ``local_rescan_interval_s``（TASK-034 §C）：本地模式下检索前的懒重扫间隔，默认 2.0 秒，
   **0 表示禁用**（测试与"只读演示"）；只影响本地模式（远端模式走客户端上传）；
 - 非法布尔值**显式报错**而不是静默取默认——``local_mode`` 决定是否要求鉴权，静默取真会让
@@ -49,14 +49,12 @@ __all__ = [
     "DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES",
     "DEFAULT_STORAGE_LIMIT_PER_USER_BYTES",
     "DEFAULT_STORAGE_WARN_RATIO",
-    "LOCAL_MODE_ENV",
     "LOCAL_RESCAN_INTERVAL_ENV",
     "LOG_BACKUP_COUNT_ENV",
     "LOG_DIRNAME",
     "LOG_MAX_BYTES_ENV",
     "LOG_RETENTION_DAYS_ENV",
     "PROJECTS_DIRNAME",
-    "REGISTER_OPEN_ENV",
     "STORAGE_LIMIT_PER_PROJECT_ENV",
     "STORAGE_LIMIT_PER_USER_ENV",
     "STORAGE_WARN_RATIO_ENV",
@@ -65,12 +63,8 @@ __all__ = [
 
 #: 数据根环境变量（与 core 的 ``zace_core.engine.DATA_ROOT_ENV`` 同名同义）。
 DATA_ROOT_ENV = "ZACE_DATA_ROOT"
-#: 本地模式环境变量（R34：默认开启，M2c 才关）。
-LOCAL_MODE_ENV = "ZACE_LOCAL_MODE"
 #: 懒重扫间隔环境变量（TASK-034 §C；0 = 禁用）。
 LOCAL_RESCAN_INTERVAL_ENV = "ZACE_LOCAL_RESCAN_INTERVAL"
-#: 注册开关（TASK-060；默认关闭：自部署单人场景够用，Module/06 §2.2）。
-REGISTER_OPEN_ENV = "ZACE_REGISTER_OPEN"
 #: session cookie 的 Secure 属性（TASK-060；HTTPS 部署必须置 true）。
 COOKIE_SECURE_ENV = "ZACE_COOKIE_SECURE"
 #: 数据根子目录名（core 的 ``projects/``；元数据库文件名见 ``metadb.META_DB_FILENAME``）。
@@ -152,10 +146,8 @@ class Settings:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     log_level: str = DEFAULT_LOG_LEVEL
-    local_mode: bool = True
+    local_mode: bool = False
     local_rescan_interval_s: float = DEFAULT_LOCAL_RESCAN_INTERVAL_S
-    #: 注册开关（TASK-060）：默认关闭；首个账户走 ``POST /api/auth/bootstrap``。
-    register_open: bool = False
     #: session cookie 的 ``Secure``（TASK-060）：本地 http 调试为 False，上云必须 True。
     cookie_secure: bool = False
     #: 请求日志窗口（TASK-090 §A）：单文件上限 / 备份数 / 保留天数。
@@ -230,13 +222,13 @@ class Settings:
         raw_root = source.get(DATA_ROOT_ENV)
         return cls(
             data_root=Path(raw_root).expanduser() if raw_root else DEFAULT_DATA_ROOT,
-            local_mode=_as_bool(source.get(LOCAL_MODE_ENV), LOCAL_MODE_ENV, default=True),
+            # 部署统一走完整账户流程；专用 `local` CLI 会在启动前显式 replace 为 True。
+            local_mode=False,
             local_rescan_interval_s=_as_float(
                 source.get(LOCAL_RESCAN_INTERVAL_ENV),
                 LOCAL_RESCAN_INTERVAL_ENV,
                 default=DEFAULT_LOCAL_RESCAN_INTERVAL_S,
             ),
-            register_open=_as_bool(source.get(REGISTER_OPEN_ENV), REGISTER_OPEN_ENV, default=False),
             cookie_secure=_as_bool(source.get(COOKIE_SECURE_ENV), COOKIE_SECURE_ENV, default=False),
             log_max_bytes=_as_int(
                 source.get(LOG_MAX_BYTES_ENV), LOG_MAX_BYTES_ENV, default=DEFAULT_LOG_MAX_BYTES

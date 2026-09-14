@@ -106,7 +106,7 @@ describe("首屏门禁", () => {
           version: "0.0.1",
           localMode: false,
           authRequired: true,
-          registerOpen: false,
+          registerOpen: true,
           needsBootstrap: false,
           userCount: 1,
         },
@@ -120,8 +120,7 @@ describe("首屏门禁", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "登录" })).toBeInTheDocument();
-    // 注册关闭时如实说明（不自作主张显示注册入口）
-    expect(screen.getByText(/注册已关闭/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "没有账户？注册" })).toBeInTheDocument();
   });
 
   it("云端 + 无账户 → 显示初始化账户（否则用户没有账户可登）", async () => {

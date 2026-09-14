@@ -250,18 +250,17 @@ def test_redact_text_masks_credentials() -> None:
 
 def test_settings_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ZACE_DATA_ROOT", str(tmp_path / "root"))
-    monkeypatch.setenv("ZACE_LOCAL_MODE", "false")
     resolved = Settings.from_env()
     assert resolved.data_root == tmp_path / "root"
     assert resolved.local_mode is False
     assert (resolved.host, resolved.port, resolved.log_level) == ("127.0.0.1", 8787, "info")
 
 
-def test_settings_rejects_invalid_local_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """非法布尔值显式报错（local_mode 关乎鉴权，不静默取默认）。"""
-    monkeypatch.setenv("ZACE_LOCAL_MODE", "maybe")
-    with pytest.raises(ValueError):
-        Settings.from_env()
+def test_deployment_mode_cannot_disable_full_auth_flow() -> None:
+    """旧环境变量不再把普通部署切成缺少账户/API Key 的本地模式。"""
+    resolved = Settings.from_env({"ZACE_LOCAL_MODE": "true", "ZACE_REGISTER_OPEN": "false"})
+    assert resolved.local_mode is False
+    assert resolved.auth_required is True
 
 
 def test_cli_parser_accepts_documented_flags(tmp_path: Path) -> None:
