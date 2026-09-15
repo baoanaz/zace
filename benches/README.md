@@ -13,7 +13,7 @@
 | **复用三靶场持久索引**跑基准（**不要重新索引**） | `targets-benchmark.md` §持久索引 + `results/raw/ingest-vps/INDEXES.json` |
 | 看索引耗时/内存/带宽/TPM 的结论与留档 | `results/README.md`（报告索引）→ `results/index-cost-model-vps.md` |
 | 改维度 / chunk 切分前，先看冻结配置与基线 | **`results/baseline-v1.md`** |
-| 测检索/问答质量（60 题题库 + 跑分脚本） | **`results/qa-quality-v1.md`**、`golden/<repo>/qa.md`、`golden/qa_probe.py` |
+| 测检索/问答质量（60 题题库 + 跑分脚本） | **`results/qa-audit-2026-09-15.md`**（v2 当前）、`golden/<repo>/qa.md`、`golden/qa_probe.py` |
 | 改计量脚本 / 查指标口径定义 | `embed-bench/README.md` |
 | 找某个数字的原始证据 | `results/README.md` §4 `raw/` 证据索引 |
 
@@ -27,7 +27,7 @@
 | `targets.json` | **靶场清单**：把「用例集 + 预建索引」绑成靶场名（golden / commit / projectId / 指纹 / 产物获取方式）。只放元信息，**不放索引** |
 | `golden/<repo>/*.jsonl` | 查询用例集（问题 + 期望文件/符号；**不含正文**） |
 | `golden/<repo>/qa.md` | 题库正文：**问题 + 人工核实的参考答案 + 依据路径 + 建议工具**（`search`/`ask`） |
-| `golden/qa_probe.py` | 按每题的 `tool` 字段分别跑 search（core 评估器）与 ask（service 的 LLM 路径） |
+| `golden/qa_probe.py` | 按每题的 `tool` 字段分别跑 search（core 评估器）与 ask（service 的 LLM 路径）；ask 同时统计多证据覆盖与引用落点 |
 | `run.py` | 统一入口：`--target <靶场名>` 展开 `--golden`/`--project-id`，其余参数原样转给 `zace-core eval` |
 | `test_targets.py` | 清单与入口的单元测试（不在根 `pyproject.toml` 的 `testpaths` 里，跑法见"运行"） |
 | `results/*.md` | 报告产物：当前口径的原始报告 + 整理过的基线/选型报告 |
@@ -57,11 +57,23 @@
 | `expected` | 命中集合：任一条的 `path` 出现在 top-k 候选（且若给 `symbol`，该符号出现在候选/证据中）即命中；`negative` 用空数组 |
 | `notes` | 可选，出题人备注 |
 
+跨文件 `ask` 题可增加 `"expected_mode": "all"`。默认 `any` 沿用 core eval 的“任一 expected
+命中即通过”口径；`all` 不改变 core 的 recall/MRR，只让 `qa_probe.py` 额外计算逐项排名、
+`pack_expected_coverage` 与 `pack_complete`，避免只捞到流程中的一个文件就被当成完整证据。
+
 ## 指标定义
 
 - **recall@k** = 命中用例数 / 总用例数（k=5、10）；**MRR** = 首个命中排名的倒数均值。
 - 命中判定在 runner 中实现（TASK-013）；评估分列：整体 + 按 `lang` + 按 `category`。
 - `negative` 用例单独统计：top5 无强相关证据且 `missingEvidence` 非空视为通过。
+- ask 的 `pack_expected_coverage` = top-k 内逐项命中的 expected 数 / expected 总数；
+  `expected_mode=all` 时全部命中才算 `pack_complete`。
+- ask 的 `answer_cites_expected` = LLM 有效引用的 `[E*]` 至少一个对应期望 path+symbol。它只证明
+  答案使用了目标证据，不替代人工语义判分。
+- ask 严格复现 D-24：`pack.answerable=false` 时记为 `insufficient_evidence` 并短路，不调用 LLM。
+  `answered` 分母中仍保留这些题，但不能把短路包计作“LLM 已回答”。
+- `answer_hit` 是 v1 兼容字段，只检查答案正文是否出现期望路径字符串。LLM 通常只写 `[E1]`，
+  因此该值波动大，**不得再命名或解释为“答案正确率”**。
 
 ## 靶场（用例集 + 本地索引）
 
@@ -75,6 +87,7 @@ uv run python benches/run.py --list-targets     # 清单：角色 / 用例 / com
 | 角色 | 靶场 | 用例 | commit | 索引 |
 |---|---|---|---|---|
 | **primary（主靶场）** | `hello-agents`（`datawhalechina/hello-agents`） | 31（含 2 负例） | `4f7682ceafe5` | clone 到该 commit，`zace-core ingest` 一次 |
+| primary | `leveldb-v1` / `helloagents-v1` / `langchain-v1` | 各 20（各含 1 负例） | 见 `targets.json` | VPS 的 `/root/.zace/bench/voyage-4-lite-d1024`，只复用不 ingest |
 | dogfood | `zace`（本仓） | 24（`zace.jsonl` 20 + `sample.jsonl` 4） | `self` | 本仓自举，405 文件 ≈ 34s；projectId 已记在清单，任意 checkout 可复用 |
 | internal（**不进默认流程**） | `cockpit-agents-py` | 32（含 2 负例，答案经读码核实） | `febac6d2273bb` | 索引含公司内部源码，只能内网获得（`scripts/bench-bundle.sh`）；公开机器不参与 |
 

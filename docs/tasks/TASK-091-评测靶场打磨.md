@@ -1,6 +1,6 @@
 # TASK-091：评测靶场与 golden 集打磨（为质量优化建立可信标尺）
 
-> 状态：pending ｜ 阶段：Phase 2（M2b）｜ 硬依赖：无 ｜ soft 依赖：TASK-087（渲染补齐，可并行）
+> 状态：review ｜ 阶段：Phase 2（M2b）｜ 硬依赖：无 ｜ soft 依赖：TASK-087（渲染补齐，可并行）
 > 建议分支：`feature/task-091-benchmark_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `benches/golden/**`（用例集：新增/修订）
@@ -106,4 +106,25 @@ grep 核验证据（≥10 条）、基线指标表、以及**对"标尺是否可
 
 ## 执行记录
 
-（实施 AI 在此填写。）
+**日期**：2026-09-15 ｜ **分支**：`feature/task-091_benchmark-audit0915`
+
+**交付**：
+
+- 审计 leveldb / HelloAgents / langchain 固定 commit 的 60 题，修正 10 条事实错误或明显误导；
+- 语言从全中文调整为 `zh=33 / en=12 / mixed=15`，保留 `search=44 / ask=16`；
+- ask 增加 `expected_mode=all`、逐项 coverage、pack complete、期望证据引用与 D-24 短路；
+- 三个 VPS 持久索引进入 `targets.json`，原始 v2 结果写入 `results/raw/qa-probe-v2/`；
+- 结论与 core P0-P2 建议见 `results/qa-audit-2026-09-15.md`。本卡未修改 core。
+
+**验收**：
+
+```text
+jq 语法与 expected 路径/符号核验：60/60 通过
+uv run ruff check benches/golden/qa_probe.py benches/golden/test_qa_probe.py benches/test_targets.py：通过
+uv run pytest -o addopts='' -q benches/test_targets.py benches/golden/test_qa_probe.py：18 passed
+uv run pytest -o addopts='' -q：1023 passed, 2 skipped
+qa_probe v2：三仓库 60/60 执行完成，数据见 raw/qa-probe-v2/
+```
+
+**未决**：core 的 C++ 局部解析容错、Deep 二轮检索与 answerable 收紧需另开任务卡；parser
+修改会改变 fingerprint，必须重建索引后再对照 v2。

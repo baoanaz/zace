@@ -36,22 +36,34 @@ def _manifest(tmp_path: Path, targets: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_repo_manifest_lists_the_three_kept_targets() -> None:
+def test_repo_manifest_lists_all_kept_targets() -> None:
     targets = tt.load_targets()
-    assert list(targets) == ["hello-agents", "zace", "cockpit-agents-py"]
+    assert list(targets) == [
+        "hello-agents",
+        "zace",
+        "cockpit-agents-py",
+        "leveldb-v1",
+        "helloagents-v1",
+        "langchain-v1",
+    ]
     for target in targets.values():
         assert target.golden.is_dir(), f"{target.name} 的 golden 目录不存在"
         assert list(target.golden.glob("*.jsonl")), f"{target.name} 的 golden 没有用例"
 
 
 def test_primary_target_is_a_public_local_build() -> None:
-    """主靶场必须是公共仓库 + 本地建索引：默认流程不能依赖任何索引分发。"""
+    """主靶场必须是公共仓库，可本地建索引或复用本机已登记的持久索引。"""
     targets = tt.load_targets()
     primaries = [t for t in targets.values() if t.role == "primary"]
-    assert [t.name for t in primaries] == ["hello-agents"]
+    assert [t.name for t in primaries] == [
+        "hello-agents",
+        "leveldb-v1",
+        "helloagents-v1",
+        "langchain-v1",
+    ]
     for target in targets.values():
         if target.role in ("primary", "dogfood"):
-            assert target.index_how == "local-build", f"{target.name} 不该依赖索引分发"
+            assert target.index_how in {"local-build", "vps-persistent"}
     assert targets["cockpit-agents-py"].role == "internal"
 
 
@@ -68,6 +80,9 @@ def test_recorded_indexes_carry_a_project_id_and_fingerprint() -> None:
     assert targets["hello-agents"].project_id == "e9ee9dd1d41a7d2c"
     assert targets["zace"].project_id == "adfdd1a626db62b7"
     assert targets["cockpit-agents-py"].project_id == "8e69da62f37e5783"
+    assert targets["leveldb-v1"].project_id == "3ed886ce58bc0e47"
+    assert targets["helloagents-v1"].project_id == "06078cc80c7ce7d7"
+    assert targets["langchain-v1"].project_id == "ca2050db0db5b1e2"
     # 记了 projectId 的靶场必须同时记指纹：否则拿别的模型的向量算 cosine 无从察觉
     for target in targets.values():
         assert target.embedding == {"model": "api:voyage-4-lite", "dim": 1024}
@@ -180,7 +195,14 @@ def test_target_arg_is_extracted_in_both_forms() -> None:
 
 def test_describe_targets_mentions_every_target_and_role() -> None:
     text = tt.describe_targets(tt.load_targets())
-    for name in ("zace", "hello-agents", "cockpit-agents-py"):
+    for name in (
+        "zace",
+        "hello-agents",
+        "cockpit-agents-py",
+        "leveldb-v1",
+        "helloagents-v1",
+        "langchain-v1",
+    ):
         assert name in text
     for role in ("primary", "dogfood", "internal"):
         assert role in text
