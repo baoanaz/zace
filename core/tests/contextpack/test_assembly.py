@@ -733,6 +733,59 @@ def test_stale_doc_gap_asks_where_the_symbol_is_now(store, seed_file, sym, cand)
     assert f"{stale.symbol} 现在在哪里实现" in pack.next_queries
 
 
+def test_consensus_without_structured_code_is_not_answerable(store, seed_file, sym, cand) -> None:
+    """TASK-106：双通道共识全落在文档/前导段上时不得判可答。
+
+    真实反例（HelloAgents H-20）：问“仓库里 Qdrant 向量库的实现在哪”而该能力**不存在**，
+    README 与 ``.env.example`` 同时被 BM25/Vector 命中，旧规则因此判 ``answerable=True``。
+    新口径要求共识候选里至少有一个结构化代码切片（``kind=code/test``）。
+    """
+    seed_file(
+        store,
+        path="src/config.py",
+        language="python",
+        symbols=[sym("cfg", "cfg", kind="fallback_block", start=1)],
+    )
+    seed_file(
+        store,
+        path="docs/readme.md",
+        language="markdown",
+        spec_blocks=[_spec_block("docs/readme.md", "Overview")],
+    )
+    consensus_fallback = cand("src/config.py", "(module)", 1, score=1.0, kind="fallback")
+    consensus_fallback.channel_ranks = {"bm25": 1, "vector": 1}
+    consensus_spec = cand("docs/readme.md", "Overview", 1, score=0.9, kind="spec")
+    consensus_spec.channel_ranks = {"bm25": 2, "vector": 2}
+
+    pack = assemble(store, "q", [consensus_fallback, consensus_spec])
+
+    assert pack.answerable is False
+    assert pack.confidence == "low"
+
+
+def test_consensus_with_structured_code_stays_answerable(store, seed_file, sym, cand) -> None:
+    """防修过头：共识里有真实代码切片时仍可答（不能把所有多通道查询都压掉）。"""
+    seed_file(
+        store,
+        path="src/store.py",
+        symbols=[sym("get", "Store.get", kind="method", start=10)],
+    )
+    seed_file(
+        store,
+        path="docs/readme.md",
+        language="markdown",
+        spec_blocks=[_spec_block("docs/readme.md", "Overview")],
+    )
+    code = cand("src/store.py", "Store.get", 10, score=0.8, kind="code")
+    code.channel_ranks = {"bm25": 3, "vector": 3}
+    doc = cand("docs/readme.md", "Overview", 1, score=1.0, kind="spec")
+    doc.channel_ranks = {"bm25": 1, "vector": 1}
+
+    pack = assemble(store, "q", [doc, code])
+
+    assert pack.answerable is True
+
+
 def test_gap_message_lists_unresolved_symbol_names(store, seed_file, sym, cand) -> None:
     """缺口 message 里的符号名来自 ``unresolved_symbols``（标识符形态过滤，不含表达式）。"""
     _long(store, seed_file, sym, "src/a.py", "f", 1, 40)

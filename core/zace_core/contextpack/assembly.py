@@ -942,6 +942,26 @@ def _consensus_count(candidates: Iterable[Candidate]) -> int:
     return sum(1 for candidate in candidates if len(candidate.channel_ranks) >= 2)
 
 
+#: 可读的代码结构切片 kind（TASK-106）：有这些才说明索引里有真实实现证据。
+#: ``Candidate.kind`` 已在 fusion 层按切片类型归一（CF-04 四级）：结构化代码切片
+#: = ``code``（函数/方法/类/类型定义，含 class_skeleton），测试代码 = ``test``；
+#: ``fallback``（文件前导/降级段）与 ``spec``（文档）只证明“仓库里出现过这个词”，
+#: 不证明“这个能力存在”，因此**都不算**可读实现证据。
+_STRUCTURED_CODE_KINDS = frozenset({"code", "test"})
+
+
+def _has_structured_code(candidates: Iterable[Candidate]) -> bool:
+    """共识候选里是否至少有一个结构化代码切片（TASK-106）。
+
+    只看**双通道共识候选**：单通道命中不构成”被交叉印证“，不应作为可答依据。
+    ``kind`` 已由 fusion 层按路径/符号判定写入，此处不重复推断。
+    """
+    return any(
+        len(candidate.channel_ranks) >= 2 and candidate.kind in _STRUCTURED_CODE_KINDS
+        for candidate in candidates
+    )
+
+
 def _consensus_files(candidates: Iterable[Candidate]) -> int:
     """双通道共识候选覆盖的**不同文件**数（R22/TASK-022）。
 
@@ -988,6 +1008,10 @@ def _assess(
       ② 共识候选覆盖 ≥2 个不同文件，且共识最高分 ≥ `CONSENSUS_SCORE_RATIO` × 候选池分数中位数
       （存在显著强于池中位的共识）——堵住"文档密集仓库里文档天然双通道命中"；
     - `answerable=False` 时 `confidence` 一律 `low`（不用中等把握掩盖不可回答）。
+    - **共识必须含可读代码结构**（TASK-106）：双通道共识本身仍可能全部落在文档或
+      文件前导段上。真实反例：问"仓库里 Qdrant 向量库的实现在哪"（该能力**不存在**），
+      README 与 ``.env.example`` 同时被 BM25/Vector 命中 → 旧规则判可答。现在要求共识
+      候选里至少有一个结构化代码切片（函数/方法/类等），把"只有文档和 import 前导段"堵住。
     """
     explicit_hits = sum(1 for candidate in pool if _is_explicit(candidate))
     inferred_hits = sum(1 for candidate in pool if _is_inferred(candidate))
@@ -999,6 +1023,10 @@ def _assess(
         or (median > 0.0 and _consensus_peak(pool) >= CONSENSUS_SCORE_RATIO * median)
     )
     answerable = explicit_hits >= 1 or inferred_hits >= 1 or structural_result or corroborated
+    if answerable and not structural_result and not _has_structured_code(pool):
+        # 旧规则的全部依据都是“文本相似”，没有任何可读代码结构时不足以支撑回答
+        # （文档 + import 前导段也会双通道共识）。显式符号命中仍视为强依据。
+        answerable = explicit_hits >= 1 or inferred_hits >= 1 or structural_result
 
     spec_only = bool(docs) and not evidence
     if not answerable:
