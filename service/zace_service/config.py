@@ -33,6 +33,10 @@ __all__ = [
     "ANSWER_MODEL_ENV",
     "ANSWER_TEMPERATURE_ENV",
     "ANSWER_TIMEOUT_S_ENV",
+    "ANSWER_MAX_CONTEXT_TOKENS_ENV",
+    "ANSWER_PROVIDER_ENV",
+    "EMBED_TPM_ENV",
+    "EMBED_RPM_ENV",
     "COOKIE_SECURE_ENV",
     "DATA_ROOT_ENV",
     "DEFAULT_ANSWER_MAX_TOKENS",
@@ -114,7 +118,10 @@ DEFAULT_STORAGE_WARN_RATIO = 0.8
 ANSWER_BASE_URL_ENV = "ANSWER_BASE_URL"
 #: LLM 的 API key（**绝不进日志/响应/仓库/设置页**）。
 ANSWER_API_KEY_ENV = "ANSWER_API_KEY"
-#: LLM 模型名（如 ``deepseek/deepseek-v4.1-flash``）。
+#: LLM 模型名（zace 统一使用 ``deepseek-flash``；可配置）。
+#:
+#: 不写代码默认值：网关背后的真实路由由部署方维护（同一名字在不同网关可以是不同模型），
+#: 因此“用哪个模型”是部署决策，必须显式给（未配 → ``answer_configured`` 为 False）。
 ANSWER_MODEL_ENV = "ANSWER_MODEL"
 #: 整体超时秒数（Module/04 §2：连接 10s / 整体 60s）。
 ANSWER_TIMEOUT_S_ENV = "ANSWER_TIMEOUT_S"
@@ -122,6 +129,19 @@ ANSWER_TIMEOUT_S_ENV = "ANSWER_TIMEOUT_S"
 ANSWER_MAX_TOKENS_ENV = "ANSWER_MAX_TOKENS"
 #: 采样温度（Module/04 §2：0.2——调查要事实不要创意）。
 ANSWER_TEMPERATURE_ENV = "ANSWER_TEMPERATURE"
+#: 该 LLM 的**最大上下文窗口**（token）。仅用于设置页展示，不参与任何调优。
+#:
+#: 为什么做成配置而不是代码里的模型名映射：服务端无法可靠地知道用户自建网关背后的
+#: 真实模型与其窗口（同一个 ``deepseek-flash`` 名字在不同网关可以是不同东西）。
+#: 写死映射会把“猜测”当作事实展示（TASK-107 修的真实缺陷：代码里只认一个硬编码的
+#: 已废弃模型名，与实际使用的模型名不一致，页面上因此恒为空）。
+ANSWER_MAX_CONTEXT_TOKENS_ENV = "ANSWER_MAX_CONTEXT_TOKENS"
+#: 该 LLM 厂商名（仅展示用；不填则按模型名推测）。
+ANSWER_PROVIDER_ENV = "ANSWER_PROVIDER"
+#: Embedding 的速率配额（仅展示用；TPM = token/分钟，RPM = 请求/分钟）。
+#: 同样不写死在代码里：配额随账号档位变化，属“账号属性”而非“模型属性”。
+EMBED_TPM_ENV = "EMBED_TPM"
+EMBED_RPM_ENV = "EMBED_RPM"
 #: 三个必填项的默认值（未配置任一 → ``answer_configured`` 为 False，``ask`` 走降级包）。
 DEFAULT_ANSWER_TIMEOUT_S = 60.0
 DEFAULT_ANSWER_MAX_TOKENS = 3072
@@ -167,6 +187,13 @@ class Settings:
     answer_timeout_s: float = DEFAULT_ANSWER_TIMEOUT_S
     answer_max_tokens: int = DEFAULT_ANSWER_MAX_TOKENS
     answer_temperature: float = DEFAULT_ANSWER_TEMPERATURE
+    #: 展示用元数据（TASK-107）：模型上下文窗口与厂商。**不参与任何调优**，
+    #: 未配置时设置页如实显示 `—`，不猜。
+    answer_max_context_tokens: int | None = None
+    answer_provider: str | None = None
+    #: Embedding 速率配额（展示用）：TPM / RPM。未配置 → 页面显示 `—`。
+    embed_tpm: int | None = None
+    embed_rpm: int | None = None
     version: str = __version__
 
     @property
@@ -277,6 +304,12 @@ class Settings:
                 ANSWER_TEMPERATURE_ENV,
                 default=DEFAULT_ANSWER_TEMPERATURE,
             ),
+            answer_max_context_tokens=_as_optional_int(
+                source.get(ANSWER_MAX_CONTEXT_TOKENS_ENV), ANSWER_MAX_CONTEXT_TOKENS_ENV
+            ),
+            answer_provider=(source.get(ANSWER_PROVIDER_ENV) or "").strip() or None,
+            embed_tpm=_as_optional_int(source.get(EMBED_TPM_ENV), EMBED_TPM_ENV),
+            embed_rpm=_as_optional_int(source.get(EMBED_RPM_ENV), EMBED_RPM_ENV),
         )
 
 
@@ -319,6 +352,20 @@ def _as_non_negative_int(raw: str | None, name: str, *, default: int) -> int:
     if value < 0:
         raise ValueError(f"环境变量 {name} 不能为负（0 表示不限），收到 {raw!r}")
     return value
+
+
+def _as_optional_int(raw: str | None, name: str) -> int | None:
+    """可缺省的整数配置：缺失/空串 → ``None``；非法值**显式报错**。
+
+    与 :func:`_as_int` 的差别是“没配”是一个合法状态（设置页显示 `—`），而“配错”
+    仍然要报——静默回落会让用户以为配额已生效（与 ``local_mode`` 的纪律一致）。
+    """
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
 
 
 def _as_ratio(raw: str | None, name: str, *, default: float) -> float:

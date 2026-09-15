@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 import threading
@@ -283,6 +284,12 @@ class QueryAuditRecord:
     answer_text: str | None = None
     #: 答案状态（TASK-099 §A）：``answered`` / ``insufficient_evidence`` / ``degraded``。
     answer_status: str | None = None
+    #: 证据清单（TASK-107）：**不含源码正文**的 ``[{id, path, lines, tier, score}]``。
+    #:
+    #: 这是历史页"Tool 输出"对 search_context 的可展示内容——它如实反映工具**返回了什么
+    #: 证据**（编号/路径/行号/分层/分数），而不破 Module/04 §8 的"审计不含源码内容"。
+    #: 落库侧一直有写（``evidence_json``），本字段把它读出来交给前端。
+    evidence: tuple[dict[str, Any], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -307,6 +314,8 @@ class QueryAuditRecord:
             # 前端才能区分"没调 LLM"（insufficient_evidence + null）与"调了得到空答案"。
             "answerText": self.answer_text,
             "answerStatus": self.answer_status,
+            # TASK-107：search_context 的"Tool 输出"= 真实返回的证据清单（不含源码正文）。
+            "evidence": [dict(item) for item in self.evidence],
             "createdAt": self.created_at,
         }
 
@@ -1113,4 +1122,22 @@ def _audit_record(row: sqlite3.Row) -> QueryAuditRecord:
         created_at=int(row["created_at"]),
         answer_text=row["answer_text"],
         answer_status=row["answer_status"],
+        evidence=_parse_evidence_json(row["evidence_json"]),
     )
+
+
+def _parse_evidence_json(raw: Any) -> tuple[dict[str, Any], ...]:
+    """``evidence_json`` → 证据元组（TASK-107）。
+
+    历史库里可能是不合法 JSON（旧版本/手改）——那种情况如实当“没有证据”处理，
+    不让一条脏记录把整个历史页接口打挂（与 ``load()`` 对损坏缓存的宽容口径一致）。
+    """
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(item for item in parsed if isinstance(item, dict))

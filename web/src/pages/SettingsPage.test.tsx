@@ -102,7 +102,7 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
           configured: true,
           apiKeyConfigured: true,
           missingEnv: [],
-          model: "deepseek/deepseek-v4.1-flash",
+          model: "deepseek-flash",
           baseUrl: "http://host:8080/v1",
         },
       },
@@ -112,7 +112,7 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
 
     // 模型名与接口地址用当前生效值预填（便于用户看到"现在是什么"）。
     const model = await screen.findByLabelText(/模型名/);
-    expect(model).toHaveValue("deepseek/deepseek-v4.1-flash");
+    expect(model).toHaveValue("deepseek-flash");
     const baseUrl = screen.getByLabelText(/接口地址/);
     expect(baseUrl).toHaveValue("http://host:8080/v1");
 

@@ -188,7 +188,7 @@ describe("仪表盘统计口径", () => {
               provider: "voyage",
               dim: 1024,
             },
-            llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "deepseek-v4-flash" },
+            llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "deepseek-flash" },
           },
         },
       },

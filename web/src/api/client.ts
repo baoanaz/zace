@@ -418,7 +418,22 @@ export interface UsageRecord {
    * `null` = 非 LLM 路径（如 fast 模式的检索）。
    */
   answerStatus: string | null;
+  /**
+   * 证据清单（TASK-107）：`search_context` 的"Tool 输出"——它工具真实返回了哪些证据。
+   *
+   * 只含 `id/path/lines/tier/score`，**不含源码正文**（Module/04 §8：审计不存源码内容）。
+   */
+  evidence: EvidenceMetaItem[];
   createdAt: number;
+}
+
+/** 审计里的单条证据元数据（`query_audit.evidence_json` 的对外形态）。 */
+export interface EvidenceMetaItem {
+  id?: string;
+  path?: string;
+  lines?: [number, number] | number[];
+  tier?: number;
+  score?: number;
 }
 
 export interface UsageSummary {

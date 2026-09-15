@@ -144,7 +144,7 @@ def effective_config(
     ``resolved``（TASK-099 §C-4）：已解析出的**实际生效**配置；为 ``None`` 时按环境变量报。
     """
     return {
-        "embedding": _embedding_config(details=details),
+        "embedding": _embedding_config(details=details, settings=settings),
         "llm": _llm_config(settings, details=details, resolved=resolved),
         "storage": _storage_config(settings),
     }
@@ -187,7 +187,7 @@ def _llm_config(
             "timeoutS": resolved.timeout_s,
             "maxTokens": resolved.max_tokens,
             "temperature": resolved.temperature,
-            **_llm_model_metadata(resolved.model),
+            **_llm_model_metadata(settings, resolved.model),
         }
     payload: dict[str, Any] = {
         "configured": bool(settings.answer_configured),
@@ -205,22 +205,36 @@ def _llm_config(
             "timeoutS": settings.answer_timeout_s,
             "maxTokens": settings.answer_max_tokens,
             "temperature": settings.answer_temperature,
-            **_llm_model_metadata(settings.answer_model),
+            **_llm_model_metadata(settings, settings.answer_model),
         }
     )
     return payload
 
 
-def _llm_model_metadata(model: str | None) -> dict[str, Any]:
-    """已知 LLM 的只读展示元数据；未知模型不猜。"""
-    if model == "deepseek/deepseek-v4.1-flash":
-        return {"provider": "DeepSeek", "maxContextTokens": 128_000}
-    if model and "deepseek" in model.lower():
-        return {"provider": "DeepSeek"}
-    return {}
+def _llm_model_metadata(settings: Any, model: str | None) -> dict[str, Any]:
+    """LLM 的**只读展示**元数据（厂商 + 上下文窗口）。
+
+    取值优先来自显式配置（``ANSWER_PROVIDER`` / ``ANSWER_MAX_CONTEXT_TOKENS``），
+    因为服务端无法可靠推断用户自建网关背后的真实模型——写死模型名映射正是 TASK-107
+    修复的缺陷：代码里只认一个硬编码的（已废弃）模型名，与实际使用的
+    模型名不一致，页面上该项因此恒为空。
+
+    未配置时：只有能从名字确定的事实才回（``deepseek`` → 厂商 DeepSeek）；
+    上下文窗口**不猜**，宁显示 `—`。
+    """
+    payload: dict[str, Any] = {}
+    provider = settings.answer_provider
+    if not provider and model and "deepseek" in model.lower():
+        provider = "DeepSeek"
+    if provider:
+        payload["provider"] = provider
+    tokens = settings.answer_max_context_tokens
+    if tokens is not None:
+        payload["maxContextTokens"] = tokens
+    return payload
 
 
-def _embedding_config(*, details: bool) -> dict[str, Any]:
+def _embedding_config(*, details: bool, settings: Any = None) -> dict[str, Any]:
     """embedding（``EMBED_*``）生效值（读 core 的工厂配置；**不调优、不加载模型**）。
 
     读不到（依赖缺失/配置非法）时如实回 ``error``——设置页宁可显示"读不到配置"，
@@ -266,6 +280,10 @@ def _embedding_config(*, details: bool) -> dict[str, Any]:
                 "dim": dim,
                 "maxInputTokens": max_input_tokens,
                 "offline": config.offline,
+                # 速率配额是**账号属性**而非模型属性（同一模型不同档位配额不同），因此只从显式
+                # 配置读；未配置就是 `—`，不从别的模型或厂商预设里“推断”一个数字。
+                "tpm": getattr(settings, "embed_tpm", None),
+                "rpm": getattr(settings, "embed_rpm", None),
             }
         )
     return payload

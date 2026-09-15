@@ -393,7 +393,7 @@ def test_api_key_never_appears_in_logs_or_response(
         local_rescan_interval_s=0.0,
         answer_base_url=FAKE_BASE_URL,
         answer_api_key=FAKE_API_KEY,
-        answer_model="deepseek/deepseek-v4.1-flash",
+        answer_model="deepseek-flash",
     )
     ask_env.app.state.settings = settings
     ask_env.app.state.engine_manager = ask_env.manager
@@ -878,7 +878,9 @@ def test_meta_exposes_effective_config_without_key_material(ask_env: SimpleNames
         local_rescan_interval_s=0.0,
         answer_base_url="http://llm.invalid/v1",
         answer_api_key=FAKE_SK_KEY,
-        answer_model="deepseek/deepseek-v4.1-flash",
+        answer_model="deepseek-flash",
+        answer_provider="DeepSeek",
+        answer_max_context_tokens=1_048_576,
     )
     ask_env.app.state.settings = settings
     ask_env.app.state.answer_provider = None
@@ -888,9 +890,11 @@ def test_meta_exposes_effective_config_without_key_material(ask_env: SimpleNames
     config = payload["config"]
     assert config["llm"]["configured"] is True
     assert config["llm"]["apiKeyConfigured"] is True
-    assert config["llm"]["model"] == "deepseek/deepseek-v4.1-flash"
+    assert config["llm"]["model"] == "deepseek-flash"
     assert config["llm"]["provider"] == "DeepSeek"
-    assert config["llm"]["maxContextTokens"] == 128_000
+    # TASK-107：上下文窗口与厂商来自**显式配置**，不再靠硬编码模型名映射
+    # （旧实现只认一个写死的（已废弃）模型名，与实际模型名不符时页面恒为空）。
+    assert config["llm"]["maxContextTokens"] == 1_048_576
     assert config["llm"]["baseUrl"] == "http://llm.invalid/v1"
     assert config["llm"]["timeoutS"] == 60.0
     assert config["llm"]["maxTokens"] == 3072
@@ -901,6 +905,31 @@ def test_meta_exposes_effective_config_without_key_material(ask_env: SimpleNames
     assert FAKE_SK_KEY not in dumped
     assert FAKE_SK_KEY[:8] not in dumped, "连 key 前缀都不许出现"
     assert str(len(FAKE_SK_KEY)) not in dumped, "连 key 长度都不许出现"
+
+
+def test_meta_does_not_invent_model_quota_when_unconfigured(ask_env: SimpleNamespace) -> None:
+    """TASK-107：未显式配置时**不猜**上下文窗口与速率配额，如实缺字段。
+
+    防回归：旧实现按模型名硬编码回溯一个上下文值（而且认的是一个不存在的模型名），
+    结果“页面显示一个数字”与“那个数字是真的”是两件事。现在只有显式配置才给。
+    """
+    settings = Settings(
+        data_root=ask_env.tmp_path / "data",
+        local_mode=True,
+        local_rescan_interval_s=0.0,
+        answer_base_url="http://llm.invalid/v1",
+        answer_api_key=FAKE_SK_KEY,
+        answer_model="some-unknown-model",
+    )
+    ask_env.app.state.settings = settings
+    ask_env.app.state.answer_provider = None
+    ask_env.app.state.answer_provider_settings = None
+
+    config = ask_env.client.get("/api/meta").json()["config"]
+    assert "maxContextTokens" not in config["llm"], "未知模型的窗口不能编"
+    assert "provider" not in config["llm"], "认不出的厂商不能编"
+    assert config["embedding"].get("tpm") is None, "未配 EMBED_TPM 时不应有数字"
+    assert config["embedding"].get("rpm") is None
 
 
 def test_meta_hides_model_details_when_unauthenticated(tmp_path: Path) -> None:

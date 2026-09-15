@@ -300,13 +300,13 @@ export function HistoryPage() {
          *   因此这里先给计数与模式，并在下方 `note` 如实说明。
          */
         output: record.answerText
-          ? `${record.answerText}\n\n── 证据──\n证据条数：${record.evidenceCount}\n文档条数：${record.docsCount}`
+          ? `${record.answerText}\n\n── 证据──\n${evidenceLines(record) || `证据条数：${record.evidenceCount}`}`
           : [
-              "（本条没有 LLM 答案正文）",
-              `证据条数：${record.evidenceCount}`,
-              `文档条数：${record.docsCount}`,
+              "（search_context 不调用 LLM，输出为检索到的证据清单）",
               `模式：${record.mode}`,
               ...(record.confidence ? [`confidence：${record.confidence}`] : []),
+              evidenceLines(record) || `证据条数：${record.evidenceCount}`,
+              `文档条数：${record.docsCount}`,
             ].join("\n"),
         metrics: [
           { label: "证据条数", value: String(record.evidenceCount) },
@@ -649,6 +649,31 @@ function inputText(row: ActivityRow): string {
 /** Tool 输出的纯文本（现在直接就是字符串——真实返回内容）。 */
 function outputText(row: ActivityRow): string {
   return row.output;
+}
+
+/**
+ * 证据清单的可读文本（TASK-107）。
+ *
+ * 为什么需要它：`search_context` 不调 LLM，它给客户端的"输出"就是证据本身。
+ * 只列编号/路径/行号/分层/分数（`evidence_json` 的口径，**无源码正文**），
+ * 让用户在历史页能核对"那次检索到底返回了哪几条证据"。
+ *
+ * 空清单返回空串（由调用方决定退化成计数文案），不返回一件占位行。
+ */
+function evidenceLines(record: UsageRecord): string {
+  const items = record.evidence ?? [];
+  if (items.length === 0) return "";
+  const lines = items.map((item, index) => {
+    const id = item.id ?? `#${index + 1}`;
+    const path = item.path ?? "(未知路径)";
+    const span = Array.isArray(item.lines) && item.lines.length >= 2
+      ? `:${item.lines[0]}-${item.lines[1]}`
+      : "";
+    const tier = item.tier === undefined ? "" : `  tier=${item.tier}`;
+    const score = item.score === undefined ? "" : `  score=${item.score}`;
+    return `[${id}] ${path}${span}${tier}${score}`;
+  });
+  return [`证据清单（${items.length} 条，不含源码正文）：`, ...lines].join("\n");
 }
 
 /** 底层元信息行：一行小字，不受代码块滚动影响。 */
