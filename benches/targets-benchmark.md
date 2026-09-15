@@ -44,10 +44,42 @@
 
 ## 耗时基准
 
-见 `benches/results/index-cost-model-company-wsl.md`（设备绑定 `company-wsl`）。
+- 公司 WSL：`benches/results/index-cost-model-company-wsl.md`（设备绑定 `company-wsl`，硅基流动 bge-m3）；
+- **VPS 量产环境**：`benches/results/index-cost-model-vps.md`（设备绑定 `vps-la-2c2g`，Voyage voyage-4-lite）。
+
+## 持久索引（VPS，2026-09-15 起）
+
+> 设备：`vps-la-2c2g`（2 vCPU / 1.9 GiB / 内核 5.15.0-191 / 洛杉矶）｜embedding：`api:voyage-4-lite@1024`
+> 五项留档指标（Total Tokens / TPM / Chunks / Response MB / API→VPS MB/s）与内存约束见
+> `benches/results/index-cost-model-vps.md`；机器可读清单：`/root/.zace/bench/voyage-4-lite-d1024/INDEXES.json`。
+
+**三个索引已建好并落在持久目录，未来测试一律复用（不再 ingest）**：
+
+| 档 | 仓库 | commit | projectId | chunks | 索引体积 | 冷启动墙钟 | 峰值 RSS |
+|---|---|---|---|---|---|---|---|
+| 小 | `leveldb` | `7ee830d` | `3ed886ce58bc0e47` | 1,898 | 13 MB | 8.9s | 504.6 MB |
+| 中 | `HelloAgents` | `93e77ea` | `06078cc80c7ce7d7` | 2,729 | 28 MB | 16.9s | 554.9 MB |
+| 大 | `langchain` | `41d3572` | `ca2050db0db5b1e2` | 20,673 | 179 MB | 115.9s | 928.0 MB |
+
+数据根按**模型 + 维度**分目录（`<model>-d<dim>`）：换模型或换维度即换数据根，互不污染、
+也不会因指纹不符触发 D-07 重嵌。当前根：`/root/.zace/bench/voyage-4-lite-d1024`。
+
+```bash
+DATA=/root/.zace/bench/voyage-4-lite-d1024
+uv run zace-core search "<query>" --project-id ca2050db0db5b1e2 \
+  --repo /root/xuwenzheng/ACE/benchmark/langchain --data "$DATA"
+```
+
+- 缺索引时用 `bash benches/embed-bench/build_indexes.sh`（**已建的自动跳过、不重嵌**，
+  脚本即"不再索引"的执行者）；`--dry-run` 只看不动；
+- **这台机器 2 GiB，并发用 `EMBED_CONCURRENCY=4`**（registry 默认 8 会让窗口翻倍到 4,000
+  chunk、峰值 ~1.19 GB 并触发 cgroup 回收，langchain 7 分钟都跑不完）；吞吐几乎无损
+  （conc=4 → 4.46 MB/s，conc=8 → 4.48 MB/s）；
+- 三个索引合计：25,300 chunk、4.58 M API token（bge-m3 口径 5.88 M）、响应体 307.8 MB。
 
 ## 未做的事
 
 - **未出 golden 用例**：本轮只测索引耗时，不测检索质量。若要在这三个靶场上做质量回归，
   需按 `benches/README.md` 的 JSONL 格式出题（`expected[].path` 用仓库相对路径）。
-- **未进 `targets.json`**：该文件绑定"用例集 + 预建索引"，本靶场暂无用例，故不登记。
+- **未进 `targets.json`**：该文件绑定"用例集 + 预建索引"，本靶场暂无用例，故不登记
+  （VPS 侧的预建索引登记在本文件上一节 + 数据根 `INDEXES.json`）。

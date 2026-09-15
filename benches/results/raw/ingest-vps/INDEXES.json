@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "note": "本机持久索引清单：未来基准测试一律复用这里的索引（--project-id + --data），不要再 ingest。数据根按「模型-维度」分目录；换模型/维度即换根，不会误触发 D-07 重嵌。",
+  "device": "vps-la-2c2g（2 vCPU / 1.9 GiB / 内核 5.15.0-191 / 洛杉矶）",
+  "built_at": "2026-09-15",
+  "data_root": "/root/.zace/bench/voyage-4-lite-d1024",
+  "embedding": {
+    "mode": "api",
+    "model": "api:voyage-4-lite",
+    "dim": 1024,
+    "base_url": "https://api.voyageai.com",
+    "transport": "voyage",
+    "batch_size": 500,
+    "batch_token_budget": 300000,
+    "concurrency": 4,
+    "max_input_tokens": 32000
+  },
+  "tpm_quota": {
+    "tokens_per_minute": 16000000,
+    "requests_per_minute": 2000
+  },
+  "reuse": "uv run zace-core <search|eval> --project-id <project_id> --repo <repo> --data <data_root>",
+  "report": "benches/results/index-cost-model-vps.md",
+  "indexes": [
+    {
+      "target": "leveldb",
+      "repo": "/root/xuwenzheng/ACE/benchmark/leveldb",
+      "commit": "7ee830d02b623e8ffe0b95d59a74db1e58da04c5",
+      "project_id": "3ed886ce58bc0e47",
+      "index_dir": "/root/.zace/bench/voyage-4-lite-d1024/projects/3ed886ce58bc0e47",
+      "chunks": 1898,
+      "symbols_edges": null,
+      "tokens_bge_m3": 260328,
+      "api_total_tokens": 207083,
+      "requests": 4,
+      "response_mb": 23.09,
+      "response_kb_per_chunk": 12.46,
+      "api_mb_per_s_in_embed_window": 5.25,
+      "ingest_wall_s_probe": 10.05,
+      "embed_window_s": 4.4,
+      "peak_rss_mb_probe": 774.6,
+      "ingest_wall_s_cli": 8.9,
+      "peak_rss_mb_cli": 504.6,
+      "fingerprint": {
+        "parser_config_hash": "76741bca6f8eed43ce6bb84b6a1f43be0e01f4049afce592f283a1cb84b5998b",
+        "embedding_model": "api:voyage-4-lite",
+        "embedding_dim": 1024,
+        "embedding_profile": "api:voyage-4-lite@1024"
+      },
+      "files_parsed": 152
+    },
+    {
+      "target": "HelloAgents",
+      "repo": "/root/xuwenzheng/ACE/benchmark/HelloAgents",
+      "commit": "93e77ea60c13436636c9b39b6761ff8dfe940ba2",
+      "project_id": "06078cc80c7ce7d7",
+      "index_dir": "/root/.zace/bench/voyage-4-lite-d1024/projects/06078cc80c7ce7d7",
+      "chunks": 2729,
+      "symbols_edges": null,
+      "tokens_bge_m3": 894705,
+      "api_total_tokens": 738653,
+      "requests": 11,
+      "response_mb": 33.21,
+      "response_kb_per_chunk": 12.46,
+      "api_mb_per_s_in_embed_window": 3.5,
+      "ingest_wall_s_probe": 21.02,
+      "embed_window_s": 9.48,
+      "peak_rss_mb_probe": 851.5,
+      "ingest_wall_s_cli": 16.9,
+      "peak_rss_mb_cli": 554.9,
+      "fingerprint": {
+        "parser_config_hash": "76741bca6f8eed43ce6bb84b6a1f43be0e01f4049afce592f283a1cb84b5998b",
+        "embedding_model": "api:voyage-4-lite",
+        "embedding_dim": 1024,
+        "embedding_profile": "api:voyage-4-lite@1024"
+      },
+      "files_parsed": 236
+    },
+    {
+      "target": "langchain",
+      "repo": "/root/xuwenzheng/ACE/benchmark/langchain",
+      "commit": "41d357287c0470f70e45e232c711013258c0ac1a",
+      "project_id": "ca2050db0db5b1e2",
+      "index_dir": "/root/.zace/bench/voyage-4-lite-d1024/projects/ca2050db0db5b1e2",
+      "chunks": 20673,
+      "symbols_edges": null,
+      "tokens_bge_m3": 4725916,
+      "api_total_tokens": 3634688,
+      "requests": 64,
+      "response_mb": 251.52,
+      "response_kb_per_chunk": 12.46,
+      "api_mb_per_s_in_embed_window": 4.22,
+      "ingest_wall_s_probe": 137.63,
+      "embed_window_s": 59.61,
+      "peak_rss_mb_probe": 1182.5,
+      "ingest_wall_s_cli": 115.9,
+      "peak_rss_mb_cli": 928.0,
+      "fingerprint": {
+        "parser_config_hash": "76741bca6f8eed43ce6bb84b6a1f43be0e01f4049afce592f283a1cb84b5998b",
+        "embedding_model": "api:voyage-4-lite",
+        "embedding_dim": 1024,
+        "embedding_profile": "api:voyage-4-lite@1024"
+      },
+      "files_parsed": 2950
+    }
+  ]
+}

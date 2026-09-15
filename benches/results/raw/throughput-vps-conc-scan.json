@@ -1,0 +1,117 @@
+{
+  "generated_at": "2026-09-15T03:58:16+0000",
+  "machine": {
+    "cpu_count": 2,
+    "mem_total_gib": 1.9,
+    "kernel": "5.15.0-187-generic",
+    "proxy": "(none)",
+    "measured_bandwidth_note": "见 TASK-049 §8.1：本机 2.9–4.8 MB/s（走本机代理）"
+  },
+  "repo": "/root/xuwenzheng/ACE/benchmark/langchain",
+  "sample": 2000,
+  "sample_tokens_total": 577864,
+  "model": "voyage-4-lite",
+  "base_url": "https://api.voyageai.com",
+  "results": [
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 4,
+        "max_input_tokens": 32000
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 5.46,
+      "walls_s": [
+        5.46
+      ],
+      "m_tok_per_min": 6.352,
+      "chunk_per_s": 366.4,
+      "requests": 7,
+      "response_mb": 24.33,
+      "response_MB_per_s": 4.46,
+      "status_counts": {
+        "200": 7
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=4 batch=500 budget=300000"
+    },
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 8,
+        "max_input_tokens": 32000
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 5.43,
+      "walls_s": [
+        5.43
+      ],
+      "m_tok_per_min": 6.383,
+      "chunk_per_s": 368.2,
+      "requests": 7,
+      "response_mb": 24.33,
+      "response_MB_per_s": 4.48,
+      "status_counts": {
+        "200": 7
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=8 batch=500 budget=300000"
+    },
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 16,
+        "max_input_tokens": 32000
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 22.97,
+      "walls_s": [
+        22.97
+      ],
+      "m_tok_per_min": 1.51,
+      "chunk_per_s": 87.1,
+      "requests": 7,
+      "response_mb": 24.33,
+      "response_MB_per_s": 1.06,
+      "status_counts": {
+        "200": 7
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=16 batch=500 budget=300000"
+    },
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 32,
+        "max_input_tokens": 32000
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 5.47,
+      "walls_s": [
+        5.47
+      ],
+      "m_tok_per_min": 6.338,
+      "chunk_per_s": 365.6,
+      "requests": 7,
+      "response_mb": 24.33,
+      "response_MB_per_s": 4.45,
+      "status_counts": {
+        "200": 7
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=32 batch=500 budget=300000"
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+[
+  {
+    "repo": "/root/xuwenzheng/ACE/benchmark/leveldb",
+    "files_listed": 152,
+    "files_read": 152,
+    "files_parsed": 152,
+    "chunks": 1898,
+    "tokens_total": 260328,
+    "tokens_per_chunk_mean": 137.2,
+    "token_p50": 39,
+    "token_p90": 271,
+    "token_p99": 2527,
+    "token_max": 4967,
+    "skipped": {},
+    "languages": {
+      "cpp": 132,
+      "fallback": 12,
+      "markdown": 7,
+      "c": 1
+    },
+    "parse_errors": 0,
+    "parse_error_samples": [],
+    "truncation": [
+      {
+        "limit": 8192,
+        "tokens": 260328,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 8192,
+        "tokens": 260328,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 2048,
+        "tokens": 242575,
+        "chunks_truncated": 23,
+        "chunks_truncated_pct": 1.21,
+        "tokens_saved_vs_max": 17753
+      }
+    ],
+    "wall_seconds_local_only": 2.2
+  },
+  {
+    "repo": "/root/xuwenzheng/ACE/benchmark/HelloAgents",
+    "files_listed": 240,
+    "files_read": 236,
+    "files_parsed": 236,
+    "chunks": 2729,
+    "tokens_total": 894705,
+    "tokens_per_chunk_mean": 327.9,
+    "token_p50": 168,
+    "token_p90": 655,
+    "token_p99": 2920,
+    "token_max": 3498,
+    "skipped": {
+      "oversize": 4
+    },
+    "languages": {
+      "python": 107,
+      "fallback": 86,
+      "markdown": 43
+    },
+    "parse_errors": 0,
+    "parse_error_samples": [],
+    "truncation": [
+      {
+        "limit": 8192,
+        "tokens": 894705,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 8192,
+        "tokens": 894705,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 2048,
+        "tokens": 838376,
+        "chunks_truncated": 78,
+        "chunks_truncated_pct": 2.86,
+        "tokens_saved_vs_max": 56329
+      }
+    ],
+    "wall_seconds_local_only": 5.8
+  },
+  {
+    "repo": "/root/xuwenzheng/ACE/benchmark/langchain",
+    "files_listed": 3123,
+    "files_read": 3080,
+    "files_parsed": 2950,
+    "chunks": 20673,
+    "tokens_total": 4725916,
+    "tokens_per_chunk_mean": 228.6,
+    "token_p50": 129,
+    "token_p90": 474,
+    "token_p99": 1881,
+    "token_max": 7005,
+    "skipped": {
+      "oversize": 43,
+      "binary": 130
+    },
+    "languages": {
+      "python": 2569,
+      "fallback": 326,
+      "markdown": 55
+    },
+    "parse_errors": 0,
+    "parse_error_samples": [],
+    "truncation": [
+      {
+        "limit": 8192,
+        "tokens": 4725916,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 8192,
+        "tokens": 4725916,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 2048,
+        "tokens": 4554901,
+        "chunks_truncated": 160,
+        "chunks_truncated_pct": 0.77,
+        "tokens_saved_vs_max": 171015
+      }
+    ],
+    "wall_seconds_local_only": 37.9
+  }
+]

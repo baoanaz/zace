@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-09-15T03:56:17+0000",
+  "machine": {
+    "cpu_count": 2,
+    "mem_total_gib": 1.9,
+    "kernel": "5.15.0-187-generic",
+    "proxy": "(none)",
+    "measured_bandwidth_note": "见 TASK-049 §8.1：本机 2.9–4.8 MB/s（走本机代理）"
+  },
+  "repo": "/root/xuwenzheng/ACE/benchmark/langchain",
+  "sample": 4000,
+  "sample_tokens_total": 1181442,
+  "model": "voyage-4-lite",
+  "base_url": "https://api.voyageai.com",
+  "results": [
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 1,
+        "max_input_tokens": 32000
+      },
+      "chunks": 4000,
+      "tokens_raw": 1181442,
+      "tokens_effective": 1181442,
+      "elapsed_s": 33.62,
+      "walls_s": [
+        33.62
+      ],
+      "m_tok_per_min": 2.108,
+      "chunk_per_s": 119.0,
+      "requests": 13,
+      "response_mb": 48.67,
+      "response_MB_per_s": 1.45,
+      "status_counts": {
+        "200": 13
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=1 batch=500 budget=300000"
+    },
+    {
+      "config": {
+        "batch_size": 500,
+        "token_budget": 300000,
+        "concurrency": 8,
+        "max_input_tokens": 32000
+      },
+      "chunks": 4000,
+      "tokens_raw": 1181442,
+      "tokens_effective": 1181442,
+      "elapsed_s": 21.66,
+      "walls_s": [
+        21.66
+      ],
+      "m_tok_per_min": 3.272,
+      "chunk_per_s": 184.6,
+      "requests": 13,
+      "response_mb": 48.67,
+      "response_MB_per_s": 2.25,
+      "status_counts": {
+        "200": 13
+      },
+      "error": null,
+      "label": "maxTok=32000 conc=8 batch=500 budget=300000"
+    }
+  ]
+}
