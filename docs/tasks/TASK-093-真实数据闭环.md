@@ -1,6 +1,6 @@
 # TASK-093：真实使用数据采集闭环（TASK-023 + TASK-050 的合并落地）
 
-> 状态：pending ｜ 阶段：Phase 2（M2b）｜ 硬依赖：TASK-084（审计表已合并）、TASK-091（标尺）
+> 状态：pending（依赖已解除，可开工）｜ 阶段：Phase 2（M2b）｜ 硬依赖：TASK-084（✅ 已合并）、TASK-091（✅ 已合并）
 > 建议分支：`feature/task-093-telemetry_<你的缩写><MMDD>`
 > 交付物所有权：
 > - `service/zace_service/metadb.py`（审计表的**读取侧**聚合，如需）

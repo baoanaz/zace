@@ -1,282 +1,79 @@
 # zace 任务板
 
-> 这是实施 AI 的唯一入口清单。状态值：`pending / in_progress / review / done / blocked`。
-> 规则：认领与回填流程见 `docs/plan/orchestration.md` §2；完成报告模板见同文 §3；契约纪律见 §4。
-> 更新要求：改状态必须同时改本表与对应任务卡文头"状态"行。
-
-## Phase 0 — 公共底座（编排者执行）
-
-| # | 内容 | 状态 |
-|---|---|---|
-| P0-1 | monorepo 骨架 + 工具链 + CI（含依赖方向检查脚本） | done |
-| P0-2 | 设计文档迁入 `docs/design/`（MANIFEST.sha256 防漂移）+ 决策登记（D-39 定稿 / D-44 / D-45） | done |
-| P0-3 | 契约冻结（`docs/contracts/*` + `zace_core/{types,interfaces,hashing}.py`） | done |
-| P0-4 | 编排体系（orchestration / roadmap / contracts / 本任务板 / 任务卡） | done |
-| P0-5 | benches 骨架（格式定义 + 样例） | done |
-
-## Phase 1 — zace-core 最小闭环（M1）
-
-| 卡 | 标题 | 硬依赖 | soft 依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|---|
-| [TASK-001](TASK-001-存储层.md) | 存储层：SQLite schema / FTS5 / jieba 预分词 | — | — | `core/zace_core/{storage,text}/` | done |
-| [TASK-002](TASK-002-Parser基座与Python.md) | Parser 基座 + Python 抽取器 | — | — | `core/zace_core/parsing/` | done |
-| [TASK-003](TASK-003-C抽取器.md) | C 抽取器（include / static / 函数指针 / 宏） | TASK-002 | — | `core/zace_core/parsing/c.py` 等 | done |
-| [TASK-004](TASK-004-Cpp抽取器.md) | C++ 抽取器（尽力而为 + 诚实标注） | TASK-003 | — | `core/zace_core/parsing/cpp.py` 等 | done |
-| [TASK-005](TASK-005-Markdown-SpecBlock.md) | Markdown SpecBlock 抽取（doctype / 标题树 / mentioned） | — | — | `core/zace_core/parsing/markdown.py` 等 | done |
-| [TASK-006](TASK-006-Chunk模型与解析.md) | Chunk 模型 + unresolved 两阶段解析 + 配置指纹 | TASK-001 | TASK-002..005 | `core/zace_core/chunking/` | done |
-| [TASK-007](TASK-007-索引流水线.md) | 索引流水线：ChangeSet → 增量失效 → 向量对账 | TASK-001, TASK-006 | TASK-008, TASK-009 | `core/zace_core/pipeline/` | done |
-| [TASK-008](TASK-008-Embedding双实现.md) | Embedding Provider 双实现（本地 ONNX 默认 + API） | — | — | `core/zace_core/embedding/` | done |
-| [TASK-009](TASK-009-向量存储.md) | 向量存储（LanceDB）+ hash 复用对账 | — | — | `core/zace_core/vectors/` | done |
-| [TASK-010](TASK-010-检索通道与RRF.md) | 检索通道（Exact/BM25/Vector）+ RRF + 降级 | TASK-001 | TASK-008, TASK-009 | `core/zace_core/retrieval/{exact,bm25,vector,rrf,fusion}.py` | done |
-| [TASK-011](TASK-011-图扩展与Rerank.md) | 图扩展（calls + spec_references）+ 确定性 rerank | TASK-010 | — | `core/zace_core/retrieval/{expand,rerank}.py` | done |
-| [TASK-012](TASK-012-ContextPack组装.md) | ContextPack 组装 + Markdown 渲染 | TASK-010, TASK-011 | — | `core/zace_core/contextpack/` | done |
-| [TASK-013](TASK-013-CLI与Eval.md) | core CLI + engine 装配 + golden runner | TASK-007, TASK-012 | — | `core/zace_core/{cli,engine}.py`、`benches/run.py` | done |
-| [TASK-014](TASK-014-Golden集与基线.md) | golden set 扩充 + 基线报告（中英混合 50+） | TASK-013 | — | `benches/golden/`、`benches/results/` | done |
-| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（**仅模型选型**；禁碰排序与装填参数） | TASK-013 | — | `benches/bakeoff/` | review |
-| [TASK-016](TASK-016-BM25多词召回修复.md) | BM25 多词召回语义修复（OR + 列权重）+ 跨模块 E2E 回归 | — | — | `core/zace_core/storage/store.py`(fts_search)、`core/zace_core/retrieval/bm25.py`、`core/tests/{storage,retrieval,integration}` | done |
-| [TASK-017](TASK-017-证据块行序修复.md) | ContextPack 证据块行序单调与 elided 计数修复（R12） | TASK-012 | — | `core/zace_core/contextpack/` | done |
-| [TASK-018](TASK-018-兜底行号与ID唯一性修复.md) | 兜底切分行号修复（U1，阻断 M1）+ chunk id 唯一性防御 + 单文件失败隔离 | — | — | `parsing/fallback.py`、`chunking/`、`pipeline/` | done |
-| [TASK-019](TASK-019-spec保底重复装填修复.md) | spec 保底块重复装填修复（U2） | TASK-017 | — | `core/zace_core/contextpack/` | done |
-| [TASK-020](TASK-020-BM25判别力修复.md) | BM25 查询侧噪声 token 过滤（IDF 重排已实测否决） | TASK-016 | — | `retrieval/bm25.py` | done |
-| [TASK-021](TASK-021-装填层Code-Docs平衡.md) | 装填层 Code/Docs 平衡（R21，基线头号质量问题） | TASK-014 | — | `core/zace_core/contextpack/assembly.py` | done |
-| [TASK-022](TASK-022-answerable判定收紧.md) | answerable/confidence 判定收紧（负例诚实性，R22） | TASK-021（同文件串行） | — | `core/zace_core/contextpack/assembly.py` | done |
-
-## Phase 2 — MCP 端到端闭环（M2）
-
-> 顺序依据：用户拍板 R32「先搭整体，再基于真实数据优化检索」。
-> 详细分解见 `docs/plan/phase2-roadmap.md`（M2a 本地跑通 → M2b 质量数据 → M2c 多用户）。
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-030](TASK-030-service骨架.md) | service 骨架（FastAPI / 配置 / JSON 日志 / 错误信封 / healthz / CF-05 路径快照） | — | `service/zace_service/{app,config,logging,errors,__main__}.py`、`routers/` | done |
-| [TASK-031](TASK-031-core接入.md) | core 接入（EngineManager + BlobSource + 项目 API + `ingest(source=)` 契约实现） | TASK-030 | `service/zace_service/{runtime,blobstore,sync_state,deps}.py`、`core/zace_core/engine.py` | done |
-| [TASK-032](TASK-032-查询API.md) | 查询 API（search 渲染 + ask 降级包 + `meta` 字段集冻结给 client） | TASK-031 | `service/zace_service/{routers/query,packmeta}.py` | done |
-| [TASK-033](TASK-033-同步API.md) | 同步 API（batch-upload / checkpoint / deletions / status；CF-05 幂等语义） | TASK-032 | `service/zace_service/routers/sync.py` | done |
-| [TASK-035](TASK-035-provider健康与错误映射.md) | provider 健康与错误映射（503 语义 + 409 误导修复 + 私有调用收敛） | TASK-033 | `service/zace_service/{errors,runtime,routers}/*.py`、`core/zace_core/engine.py` | review |
-| [TASK-034](TASK-034-本地单用户模式.md) | 本地单用户模式（attach 本地仓库 + 一键起 + 后台索引进度 + 懒重扫） | TASK-035 | `service/zace_service/{runtime,indexer,__main__,config}.py` | review |
-| [TASK-040](TASK-040-service侧MCP端点.md) | **service 侧 MCP 端点**（Streamable HTTP）+ 编辑器配置输出（**demo 收口**） | TASK-034 | `service/zace_service/{mcp,cli_hint,app,__main__}.py` | review |
-| [TASK-045](TASK-045-M2a验收手册.md) | M2a 验收手册与彩排脚本（用户照做即可跑起来） | TASK-040 | `docs/plan/m2a-acceptance.md`、`scripts/demo-rehearsal.sh` | review |
-
-| 波次 | 泳道 | 任务卡 | 说明 |
-|---|---|---|---|
-| M2a-1 | `zace-lane-a` | TASK-030 → TASK-031 → TASK-032 → TASK-033 | service 骨架 + core 接入 + 查询/同步 API —— **已完成** |
-| M2a-2 | `zace-lane-a` | TASK-035 → TASK-034 → TASK-040 → TASK-045 | 错误映射 → 本地模式 → **MCP 端点（demo 收口）** → 验收手册 —— **已完成** |
-| M2b-1 | `zace-lane-b` | TASK-015A | embedding 模型选型（长任务，可与 M2a 并行）—— **已完成**（结论：沿用 e5-small） |
-| M2b-2 | `zace-lane-c` | TASK-036 | 多仓库规模自举 —— **已完成** |
-| **W6（已完成）** | `zace-lane-{a,b,c}` | A: TASK-037 ｜ B: TASK-046 ｜ C: TASK-047 | **环境切换后重定向**：索引范围修复 / 云端 embedding 接入 / 新靶场 hello-agents —— **三张卡已合并进 main**；性能基准见 `benches/results/index-performance-w6.md` |
-| **W7（已完成）** | `zace-lane-a` | TASK-049 | **embedding 架构整理**：参数配置化（批/并发/上限按模型）+ provider 解耦，换模型只改配置 |
-| M2b-3 | 视情况 | TASK-023 → TASK-050 | 真实数据采集 → 质量调优 |
-| M2c | 视情况 | TASK-040R（Rust client）+ TASK-060 → 063 | 远端场景：Rust client（扫描/哈希/上传）+ 多用户 + 部署 |
-| **M2c 前置** | `zace-lane-d` | [TASK-051](TASK-051-云端MCP就绪度与远端身份预研.md) | 云端 MCP 就绪度盘点 + 远端身份预研（只出文档，为 TASK-040R 开卡）—— **review（2026-09-13）** |
-| **M2c** | `zace-lane-d` | [TASK-040R](TASK-040R-client骨架与同步代理.md) | **zace-client（Rust MCP stdio + 本地同步代理）**——MCP 最终形态（R38）；含跨语言身份一致性与端到端验收 —— **review（2026-09-13）** |
-| **M2c** | `zace-lane-d` | [TASK-052](TASK-052-npm分发.md) | **npm 分发**（`npx zace-client`）+ 二进制级 stdio 测试 + 五平台 release CI——供 Codex/Claude Code/pi 接入 —— **review（2026-09-13）** |
-| **Phase 3/4（本波，2026-09-13 开卡）** | `docs/cards-phase3_xwz0913` | TASK-060 → 061 → 062 → 064 ‖ **TASK-070（web，并行）** | 用户拍板：WebUI 先行。后端缺口（鉴权/token、租户、索引统计、查询用量）开成卡交编排者派活；`web/` 由本会话独占实现。**TASK-070 只依赖已 done 的端点，可与 060-064 并行**。详见下文「Phase 3 后端缺口卡片」与「Phase 4 卡片」 |
-
-> **当前质量参数冻结**（R30）：`docs_ratio=0.10`、`CONSENSUS_SCORE_RATIO=2.15`、`rerank` 权重等
-> 均为 smoke 集上的拟合值，**未经真实数据校准**，在 TASK-050 前不再调整。
-
-### Phase 3 后端缺口卡片（2026-09-13 开卡，为 WebUI 的登录/统计/用量页提供后端）
-
-> 背景：用户要求 Web 具备「登入 / 注册 / 初始化账户 / API Key 管理 / 索引成功与失败次数 / 平均耗时 / 用量」等能力。
-> 现状盘点（`main` @ `42587cf`）：`/api/auth/*` 与 `/api/usage/projects/{id}` **全部是 501 占位**，
-> 索引统计**只存在于内存**（无 job 表、无历史），CF-05 **没有任何初始化账户入口**。
-> 另据 TASK-051 实测（`docs/evidence/task-051-cloud-mcp-readiness.md` §1 A1）：非本地模式下**完全无鉴权**——
-> 这是 Rust client 上云的**阻断级前置**，与本组卡片是同一件事。
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-060](TASK-060-鉴权与token.md) | **鉴权**（session + API token + 首个用户 bootstrap + `/healthz` 诚实性自检）；**修 TASK-051 A1** | TASK-030 | `service/zace_service/{auth,routers/auth,metadb}.py` | pending |
-| [TASK-061](TASK-061-租户双层.md) | 租户双层：token→user→owns project（D-36 逻辑授权层） | TASK-060 | `service/zace_service/{metadb,deps,routers}/*.py` | **review**（2026-09-13，补做完成；MCP 面归属未接，见卡内未决问题 1） |
-| [TASK-062](TASK-062-索引job与统计.md) | **索引 job 落库与统计**（成功/失败次数、平均耗时、历史） | TASK-034, TASK-060 | `service/zace_service/{metadb,indexer,runtime,routers}/*.py` | **review**（2026-09-23，TASK-085 补做完成） |
-| [TASK-064](TASK-064-查询审计与用量.md) | **查询审计与用量端点**（`/api/usage/**` 替换 501） | TASK-060 | `service/zace_service/{audit,metadb,routers}/*.py` | **review**（读取口/建表/聚合已合并；写入侧 `audit.py`+接线由 [TASK-084](TASK-084-查询审计接线.md) 补做，见卡内“补做记录”） |
-
-> **串行约束**：060 → 061 → 062 → 064。**060、061、062、064 均改 `service/zace_service/metadb.py`**（新建后共用），
-> 同一时间只允许一张 in_progress；061 必须从 060 的分支串联创建。
-> **契约影响均为 L2**：需新增 `/api/auth/me`、`/api/auth/bootstrap`、`/api/meta`、`/api/projects/{id}/index-{runs,stats}`、
-> `/api/index-stats`、`/api/usage/**`，并补全 `/api/auth/*` 的请求/响应形状——**由编排者先更新 `docs/contracts/openapi.yaml`**，
-> 实施 AI 不得直接改契约（各卡内已逐条列明）。
-
-### Phase 4 卡片（WebUI）
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-070](TASK-070-web骨架与Playground.md) | **zace-web 账户 console**（登录/注册/初始化 + 账户面板 + API Key + 历史记录 + Playground + 三按键接入指南） | 无（依赖 TASK-060/062/064 已合并） | `web/**` | **done**（已合并 `7e51802`；746 pytest + 29 单测 + lint/build 全绿） |
-| [TASK-080](TASK-080-接入指南两卡牌.md) | **接入指南重做**：两卡牌（npm 下载 + Agent 接入）+ 配置必带 `--token` | 无 | `web/src/app/connect-info.{ts,test.ts}`、`web/src/pages/ConnectPage.tsx`、`npm/README.md` | **review**（`feature/task-080-connect_xwz0923`；已合并） |
-| [TASK-081](TASK-081-密码长度放宽.md) | 密码长度下限 8 → **3**（含测试与文案同步） | 无 | `service/zace_service/routers/auth.py`、`service/tests/test_auth.py`、`web/src/api/client.ts` | **review**（`feature/task-081-password_xwz0923`；已合并） |
-| [TASK-082](TASK-082-删除Playground与项目页.md) | **删除 Playground 与项目管理页**（导航/路由/死链/测试一并清理；仪表盘保留项目列表） | 无 | `web/src/app/{App,Layout}.tsx`、`web/src/pages/{Playground,Projects,ProjectDetail}*`、`DashboardPage.tsx`、`HistoryPage.tsx`、`e2e.test.tsx`、`web/src/api/client.ts` | **review**（`feature/task-082-remove-pages_xwz0923`；lint/test/build 全绿，26 passed） |
-| [TASK-083](TASK-083-空态与错误态.md) | **空态/加载态/错误态统一**（`EmptyState` 组件 + 各页替换） | **TASK-082** | `web/src/components/ui.tsx`、`HistoryPage.tsx`、`DashboardPage.tsx`、`ApiKeysPage.tsx` | **review**（`feature/task-083-empty-states_xwz0913`；lint 绿、34 passed、build 绿；另修 3 处“把故障伪装成空数据”） |
-| [TASK-084](TASK-084-查询审计接线.md) | **查询审计接线**（补 TASK-064）：`record_query` 零调用 → `/api/usage/**` 有真实数据 | TASK-060 | `service/zace_service/audit.py`(新建)、`routers/query.py`、`service/tests/test_usage_api.py`(新建) | **review**（本地模式端到端 `total` 0→3；云端 summary 待 TASK-061 归属写入，见卡内未决问题） |
-| [TASK-085](TASK-085-索引统计接上传路径.md) | **索引统计接上客户端上传路径**（补 TASK-062）：`npx zace-client` 索引后面板不再恒为 0 | TASK-060/062 | `service/zace_service/runtime.py`、`service/tests/test_index_stats.py`(新建) | **review**（2026-09-23） |
-| [TASK-086](TASK-086-导航与首页重排.md) | **导航与首页重排 + 全局背景纹理**（接入指南移到第二位；账户→控制台；删「最近索引记录」；浅蓝灰网格底） | 无 | `web/src/app/Layout.tsx`、`web/src/pages/DashboardPage.tsx`、`web/src/index.css`、`web/tailwind.config.js` | review |
-
-### Phase 3 补充（2026-09-14：把 ContextPack 的信号真正交给 Agent）
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-087](TASK-087-ContextPack渲染补齐.md) | **ContextPack 渲染补齐**：`next_queries` 渲染进正文 + `answerable=false` 短路为结构化降级包（D-24） | 无 | `core/zace_core/contextpack/render.py`、`service/routers/query.py`(ask 分支) | **review**（2026-09-14） |
-| [TASK-088](TASK-088-LLM总结接入.md) | **ask_project 接入 LLM 总结**（可配置 `ANSWER_*` + Grounded Prompt 七条 + Citation 回验 + 设置页展示） | 无 | `service/zace_service/{answer,config}.py`、`routers/{query,ops}.py`、`web/src/pages/SettingsPage.tsx` | **review**（2026-09-14；真实 LLM 调用验收由用户补） |
-
-### Phase 5 — 上线与质量（2026-09-14 开卡，用户拍板）
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-089](TASK-089-MCP面归属校验.md) | **MCP 面归属校验**（上云前最后越权口；不含改 CF-06） | TASK-061 | `service/zace_service/{mcp,deps}.py`、`service/tests/` | **review**（2026-09-14，泳道 C） |
-| [TASK-090](TASK-090-请求日志与trace查询.md) | **请求日志持久化 + trace id 查询**（用户报错可追溯，有界窗口保留） | TASK-084 | `service/zace_service/{logging,requestlog,metadb,config,routers/ops}.py`、`.env.example` | **review**（2026-09-14，泳道 D） |
-| [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（三仓库 60 题事实审计 + v2 多语言/完整证据指标；为 TASK-050 建立可信标尺） | 无 | `benches/**` | **review**（2026-09-15；18 tests，v2 三仓实测完成） |
-| [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
-| [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
-| [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
-| [TASK-101](TASK-101-检索修复与跨主机基准.md) | **检索质量修复与跨主机基准复现**（字面量通道 / 查询覆盖率缺口 / `--project-id` 放行 / 离线回放 `--replay` / 工具分工文案 / `.zaceignore` 去回音）；cockpit 靶场 R5 0.733→**0.767**、MRR 0.408→**0.505** | 无 | `core/zace_core/{retrieval,storage,engine,cli}/`、`benches/`、`scripts/bench-bundle.sh`、`service/zace_service/mcp.py`(仅文案)、`.zaceignore` | **review**（2026-09-15，泳道 B） |
-| [TASK-102](TASK-102-embedding索引耗时模型.md) | **embedding 索引耗时模型与设备绑定基准**（`company-wsl`）：`耗时 ≈ chunk 数 × 21 ms`；瓶颈是**下载向量响应体**（21.3 KB/chunk）而非 TPM；实测推翻"2048 截断提速"与"并发 3 提速 3×"；免费 bge-m3 `conc=1` 是唯一安全档（langchain conc=3 **429 整次失败**） | 无（soft: TASK-049） | `benches/embed-bench/`、`benches/results/index-cost-model-company-wsl.md`、`benches/targets-benchmark.md` | **review**（2026-09-15，泳道 B） |
-| [TASK-104](TASK-104-同符号定义块优先聚合.md) | **同符号定义块优先聚合**（C/C++ 声明与定义去重时保留函数体；修复 leveldb L-09 pack miss） | TASK-103 | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/test_assembly.py` | **review**（2026-09-15，泳道 B） |
-| [TASK-105](TASK-105-Rerank语义特征与基准分修正.md) | **Rerank 语义相关性特征与基准分修正**（新增向量 rank 特征 + `RRF_BASE_SCALE` 100→25；修复"多通道沾边"压过"语义最相关"）leveldb R@5 0.737→**0.947**、MRR 0.545→**0.708** | TASK-104 | `core/zace_core/retrieval/rerank.py`、`core/tests/retrieval/test_rerank.py` | **review**（2026-09-15，泳道 B） |
-| [TASK-108](TASK-108-真实接入验证缺陷修复.md) | **真实接入验证缺陷修复**（client 契约 `answer` 必填 bug／装填闸门 0.50→0.40／测试夹具常态抑制／控制台模型元数据与历史页 Tool 输出）；三仓合计 R@5 0.895→**0.912**、MRR 0.746→**0.756** | TASK-107 | `client/src/{remote,tools}.rs`、`core/zace_core/{retrieval/rerank.py,contextpack/{assembly,render}.py}`、`service/zace_service/**`、`web/src/**`、`docs/handbook/部署指南.md` | **review**（2026-09-15） |
-| [TASK-109](TASK-109-EvidenceGap二轮补检.md) | **Evidence-Gap 二轮补检（D-19 落地）**——把设计 §4.7 的 G1/G2/G3 规则表实现为 search/ask 共用的定向补检；解决 S1/S2/S3 的"候选已索引但未召回" | TASK-108 | `core/zace_core/retrieval/gap.py`（新建）、`core/zace_core/engine.py` | **pending**（**下一轮重点**，已建档待讨论） |
-| [TASK-103](TASK-103-C与Cpp局部解析容错.md) | **C/C++ 局部解析容错**（保留正常符号 + 错误区间 fallback + parser 指纹升级） | TASK-091 | `core/zace_core/parsing/{base,c,cpp}.py`、`core/zace_core/chunking/fingerprint.py`、`core/tests/{parsing,chunking}/` | **review**（2026-09-15，泳道 B） |
-
-### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）
-
-> **由来**：编排者在真实仓库 `cockpit-agents-py`（287 文件 / 3416 chunks）上跑真实问题，
-> 发现返回结构平铺、测试文件挤占首位、预算控制失效（超 30%）、next_queries 生成口径粗糙。
-> 用户拍板：按分数（相对阈值）而非条数截断；分组呈现；next_queries 改从缺口出发且仅证据不足时生成。
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-095](TASK-095-返回分组与分数阈值.md) | **返回结构分组（Code 内分 Core/Related/Tests）+ 分数相对阈值截断** | 无 | `core/zace_core/contextpack/{render,assembly}.py`、`core/tests/contextpack/` | **review**（2026-09-14） |
-| [TASK-096](TASK-096-预算计量与next_queries.md) | **预算计量修复（框架开销未计入 + 中文估算偏差）+ next_queries 从缺口出发** | 无（soft: TASK-095，同改 assembly.py） | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/` | **review**（2026-09-14） |
-| [TASK-097](TASK-097-索引白名单.md) | **索引白名单**（第 0 层，强制包含 AI 指令文档 + `skills/` 目录；不影响内置剪枝） | TASK-037 ✅ | `core/zace_core/pipeline/ignore.py`、`parsing/markdown.py`、`client/src/ignore.rs`、`docs/handbook/` | **review**（2026-09-14，lane H） |
-
-### Phase 4 补充（2026-09-14：WebUI 视觉改版）
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-098](TASK-098-WebUI复古风格改版.md) | **WebUI 复古博物院风格**（老纸底 `#f3e4c7` + 侧边栏布局 + 登录页双栏） | 无（soft: TASK-094，同改两页） | `web/src/{index.css,tailwind.config.js}`、`web/src/app/Layout.tsx`、`web/src/pages/LoginPage.tsx`、`web/src/components/ui.tsx` | review |
-
-### Phase 4 补充（2026-09-14：调用链埋点 + 用户级 LLM）
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-099](TASK-099-调用链埋点与用户级LLM配置.md) | **调用链埋点（callId 关联 N 次初始化 + 1 次检索）+ LLM 答案落库 + 用户级 LLM 配置** | 无（soft: TASK-100 前端已就绪） | `client/src/{remote,tools}.rs`、`service/zace_service/{metadb,runtime,mcp,config,llmconfig}.py`、`service/zace_service/routers/{sync,query,ops,auth}.py`、`service/tests/` | review |
-
-> **补充说明**：TASK-100 为 WebUI 精简与调用链展示（含合并历史表、项目页、时间范围、服务模型卡）；
-> 本表未单独列卡（它由多轮用户反馈驱动，代码已落地，待总体验收后回填状态）。
-
-> **串行建议**：两卡都改 `core/zace_core/contextpack/assembly.py`——095 改装填闸门与 `render.py`，
-> 096 改 token 计量与 `next_queries`。建议 **095 → 096 串行**（096 依赖 095 的最终装填逻辑）。
-> 若并行，则 095 不再碰 `assembly.py` 的 token 计量部分、096 不碰 `render.py`。
-
-### 用户后续人工任务（非 AI 卡片，记录在案）
-
-> 用户 2026-09-14 明确：
-> 1. **打磨两个工具的返回内容**（人工）——依赖 TASK-087/088 落地后；
-> 2. **补全多个真实问题 + 打磨 benchmark 设计**（人工 + TASK-091/093）；
-> 3. **架构稳定后**：用户请求 LOG 缓存窗口机制（→ TASK-090）；
-> 4. **全部稳定后**：VPS 部署 + 公网 IP 发布（→ TASK-092）；
-> 5. **tool 与质量做好后**：发布给其他人使用并压测（→ TASK-092 之后）。
-> 质量参数解冻（R29/R30）需要用户单独授权 + TASK-093 的数据充分 —— **TASK-050 暂不开卡**。
-
-> **由来**（编排者实测，2026-09-14）：`ContextPack` 产出 8 类信号，但 Agent 实际只看到 5 类——
-> `next_queries` 已生成却不渲染、`answerable` 未用于分支、LLM 总结从未实现（`ANSWER_*` 配置全仓不存在）。
-> 设计依据：`docs/design/Module/04-AI总结.md` §2/§3/§4/§5/§6/§8（已定稿，本波是补实现）。
-
-> **TASK-084/085 的由来**（编排者实测，2026-09-13）：TASK-062/064 的**建表与方法已实现**，
-> 但（a）`record_query()` 全仓零调用、`audit.py` 不存在；（b）索引 run 记录只覆盖本地 attach 路径，
-> 客户端上传路径（Agent 实际用的）不记录。两张卡要求的验收测试文件也不存在。
-> 因此 WebUI 的「使用记录」与「索引统计」在真实场景下**恒为空**——本波是补做，不是新功能。
-
-> TASK-070 的未就绪页（登录/注册/初始化/token/用量/设置）**显式标注依赖卡号**，不用假数据填充；
-> 后端落地后另开 TASK-071 补齐这六页（卡内已列为 soft 依赖）。
-> 参考项目只借信息架构（LiteLLM Keys/Usage/Logs、Supabase 清单+抽屉、E2B 引导流），**代码全部自研**（用户 2026-09-13 拍板；E2B `dashboard-ee` 为专有许可，仅只读参考产品形态）。
-
-### M2b 卡片
-
-| 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
-|---|---|---|---|---|
-| [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | done |
-| [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | done |
-| [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **done（W6-lane A，已合并；§C/§D 测量缺口见备注）** |
-| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/getting-started/cloud-embedding.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
-| [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **done（W6-lane C，已合并）** |
-| [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— TASK-046 漏接的配置路径 | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done（编排者直接完成） |
-| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数按模型配置化 + provider 解耦 + 并发 + 切换手册） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/operations/embedding-provider切换.md` | **done（核心已合并；手册与 `.env.example` 待补）** |
-| [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— **已由编排者直接完成**（TASK-046 漏接的配置路径） | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done |
-| [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
-| [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |
-| TASK-050 | 质量调优（R21/R24/rerank/装填参数，**必须基于 TASK-023 真实数据**） | TASK-023 | — | 未开卡 |
-
-> **TASK-037 的硬依赖已改**：原卡写 `TASK-036`（要求用其规模数字做前后对照），但 TASK-036 已完成
-> 且其靶场（hmi / systemservice / Trellis）**在当前环境不存在**；改以 `hello-agents` + `zace` 自身
-> 作前后对照靶场（理由与替代口径见 `docs/plan/phase2-m2b-w6.md` §3.1）。
-> **TASK-037 的已知缺口（编排者评审记录，2026-09-13）**：代码与语义对齐已验证（725 passed；
-> 与 ripgrep / `ignore` crate 语义一致），但实施 AI **未回填任务卡“执行记录”、未落盘 §C 前后对照表与 §D 检索回归**。
-> 编排者已独立复核：忽略规则在新靶场上使候选文件 1862 → 1825（-37），阈值层另跳过 389 个二进制/超限文件；
-> 完整 ingest 实测 1436 文件 / 9389 chunks / 230.9s。**一个已确认的语义分歧**：对 git **已跟踪**文件，
-> zace 与 `git check-ignore` 不一致（36 个 / 1.9%，因 zace 按 `ignore` crate 语义、不豁免 tracked 文件）；
-> 契约（R42 / Module 05 §3.1）要求的是 `ignore` crate 语义，故**实现合规**，但该差异需在产品文档中说明。
-> **TASK-038 的降级依据**：用户 2026-09-13 拍板当前全程用云端 embedding、本地 ONNX 暂缓（U1/U2），
-> 保留卡但不派活。
-
-### 开卡批次历史（并行安全）
-
-1. 批 1（W1）：TASK-001、002、005、008、009 → 002 之后接 003、004
-2. 批 2（W2）：TASK-006 → 007；TASK-010 → 011 → 012
-3. 批 3（W3a）：TASK-016（BM25 修复）、TASK-017（行序修复）、TASK-013（CLI + eval）
-4. 批 4（W3c）：TASK-018（lane A）、TASK-019（lane C）—— **已完成**（阻断解除）
-5. 批 5（W3d）：TASK-020（lane B，零成本版）、TASK-014（lane F，基线）—— 已完成
-6. 批 6（W4a，**质量修复**）：TASK-021 → TASK-022（lane A，同文件串行）—— 基线暴露的头号质量问题
-7. 批 8（W5a，Phase 2 M2a-1）：TASK-030 → 031 → 032 → 033（lane A 串联；service 外壳 + core 接入 + 查询/同步 API）—— **已完成**
-8. 批 9（W5b，M2a-2，**demo 收口波**）：TASK-035 → TASK-034 → TASK-040 → TASK-045（lane A 串行）—— **已完成**
-9. 批 10（W5c，**整夜并行三泳道**）：lane A TASK-034→040→045（demo 收口）；lane B TASK-015A（模型选型）；lane C TASK-036（规模自举）—— **均已完成**（夜里机器重启，成果未丢）
-10. 批 11（W6，**环境切换后重定向**，`docs/plan/phase2-m2b-w6.md`）：lane A TASK-037（索引范围）；lane B TASK-046（云端 embedding 接入）；lane C TASK-047（新靶场 hello-agents + golden 重建 + 冒烟脚本）—— **已完成并合并**
-11. 批 12（W7，**embedding 架构整理**）：lane A TASK-049（参数配置化 + provider 解耦 + 并发）—— **已完成并合并**
-12. 批 13（**云端 MCP 波次**，lane D）：TASK-051（就绪度盘点）→ TASK-040R（Rust client）→ TASK-052（npm 分发）—— **均 review**
-13. 批 14（**WebUI 波次**，用户拍板）：lane A TASK-060 → 061 → 062 → 064（后端缺口：鉴权/租户/索引统计/查询用量，串行共用 `metadb.py`）；lane W **TASK-070**（`web/**` 独占，与 lane A **零文件重叠**，可完全并行）—— **开卡完成，待派活**
-14. 批 15（M2b）：TASK-023（真实数据采集）→ TASK-050（质量调优）
-
-> **用户方向（2026-09-13）**：**不妥协，直奔最终版本**——MCP 的最终形态是本地 Rust client（stdio + 远端 sync，
-> 依 `docs/design/Background/01-notace-tool-rs.md`），本地 MCP（service 直出 Streamable HTTP，R38）**仅作短期验证**。
-> TASK-051 是其前置诊断，TASK-040R 已交付可用的 `client/`（33 单测 + 真实 service 端到端）。
-> **上线硬前置**：服务端鉴权（TASK-060/061，见就绪度报告 A1——当前非本地模式无鉴权）。
-
-> **本波次的并行安全论证**：TASK-070 只消费已 done 的端点（projects/query/healthz），
-> 文件所有权限定在 `web/**`；TASK-060..064 只改 `service/**`。两者无交集，且 web 端的
-> 未就绪页已显式标注依赖卡号，不会把“后端已支持”写错。
+> **实施 AI 的唯一入口清单。** 状态值：`pending / in_progress / review / done / blocked`。
+> 规则：认领与回填流程见 [`../plan/orchestration.md`](../plan/orchestration.md) §2；
+> 完成报告模板见同文 §3；契约纪律见 §4。
 >
-> **两条波次的关系（2026-09-13 核对）**：批 13（云端 MCP，`zace-lane-d`）与批 14（WebUI）**互不重叠**：
-> 前者只碰 `client/**`、`npm/**`、`server.json`、`scripts/check-version.sh`，后者只碰 `web/**`、`service/**`。
-> **交集只有 `docs/tasks/README.md`（本文件）**，已在合并时两边保留。
+> **2026-09-15 重建**：历史任务卡（TASK-001 ~ TASK-108）已全部归档到
+> [`archive/`](archive/)，**不再逐卡维护状态**——它们的代码均已合并进 `main`，
+> 逐条判定"代码已合并但卡文头停在 review"的成本高于收益。
+> 需要追溯某张卡的设计与偏差时，直接去 `archive/` 找。
 
-> **编号说明（2026-09-13 修正）**：历史列表里出现过重复行（两次 W5b、两次 M2b 规划行），已去重；
-> 原先“云端 embedding 接入（R44-R46）”的引用已改为具体卡号：**R44 被 TASK-034 的 attach 端点占用**
-> （见 `docs/contracts/openapi.yaml`），且 R45/R46 **从未存在**；新增裁定的编号在 W6 收口时统一登记。
+## 当前活跃任务（只有这几个）
 
-> 教训：W3a 的 TASK-013 自举直接暴露了两个缺陷（U1 阻断、U2 预算浪费）——**“能跑通全仓测试”不等于“能在真实仓库跑通”**，
-> 自举（dogfooding）从现在起列入每波收尾动作。
+| 卡 | 标题 | 阶段 | 硬依赖 | 状态 |
+|---|---|---|---|---|
+| [TASK-110](TASK-110-邀请码与身份分级.md) | **邀请码注册 + 身份分级（管理员/内测/公测）+ 头衔编号 + 管理员后台** | Phase 4+（增长运营） | TASK-060/061/094 ✅ | pending |
+| [TASK-109](TASK-109-EvidenceGap二轮补检.md) | **Evidence-Gap 二轮补检**（D-19 落地：候选已索引但没召回） | Phase 5+（质量） | TASK-108 ✅ | pending |
+| [TASK-093](TASK-093-真实数据闭环.md) | 真实使用数据采集闭环 | Phase 2（M2b） | TASK-084 ✅ / TASK-091 ✅ | pending |
+| [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（**由 TASK-093 落地**） | Phase 2 | TASK-040 ✅ | pending |
 
-### 已指定的评测靶场
+### 推荐顺序
 
-| repo_hint | 路径 | commit | 用途 |
-|---|---|---|---|
-| `hello-agents` | `/home/xuwenzheng/github/hello-agents` | `4f7682c` | **当前主靶场**（W6 起）：Python Agent 教程项目，976 有效文件（227 md + 749 py），文档与代码逐章对应（中英双文档） |
-| `aibox-super-sdk` | `/home/xuwenzheng/4_AIBOX/gitlab/minicpm/aibox-super-sdk` | `debf8a32` | TASK-014 外部评测主靶场（文档密度高，spec 检索）—— **靶场在当前环境不存在，用例保留但暂停** |
-| `linux-mtk-mw-cameraservice` | `/home/xuwenzheng/0_project/main/linux-mtk-mw-cameraservice` | `3fb0b2d6` | TASK-014 自选 C++ 靶场 —— **同样不可得，用例保留但暂停** |
+```text
+TASK-109（检索质量，用户点名“下一轮重点”）
+   ↓
+TASK-110（邀请码与身份分级，四期：P1 邀请码注册 → P2 自定义 Key → P3 后台 → P4 前端）
+   ↓
+TASK-093（把真实使用数据接成闭环）
+   ↓
+TASK-023（随 TASK-093 落地回填，不单独开工）
+```
 
-**靶场变更（2026-09-13）**：用户更换开发环境（家里 WSL2），上述两个旧外部靶场不在本机，
-因此历史基线数字**无法复现**；新靶场与重建口径见 `docs/tasks/TASK-047-新靶场与golden重建.md`。
-历史报告（`benches/results/*`）保留，但注意其靶场已不可得。
+**彼此独立**：109 解决“搜得不够全”，110 解决“谁能用、能用多少”，093 解决“量不准”，可并行。
 
-详情（规模、负例口径、为何选它）见 `benches/README.md` 的“已指定的评测仓库”节。
+## 已明确不做 / 暂不做
 
-### 耗时基准靶场（2026-09-15 新增）
+| 项 | 决定 | 理由与出处 |
+|---|---|---|
+| TASK-050（质量调优） | **不开卡** | 必须基于 TASK-023/093 的真实数据才有意义（HANDOFF §3） |
+| Docker Compose 部署 | **不做** | VPS 实际用 `systemd + nginx + 静态产物`；2C4G 内存不足以再叠容器（TASK-092 执行记录、[部署手册](../handbook/deployment/vps.md)） |
+| k8s / 多机集群 / 负载均衡 | **V1 不做** | 上限是单机 compose（Module/06 §4-A） |
+| CI/CD 自动部署 | **V1 不做** | 手动升级即可，见 [vps.md](../handbook/deployment/vps.md) §9 |
+| 数据库外部化 | **不做** | SQLite 单机足够（Module/06 §4-A） |
+| 邮箱/短信验证、付费充值 | **不做** | 邀请码已足够；额度固定不可购买（TASK-110 §8） |
+| Cross-Encoder / LLM rerank | **V1.5 再做** | 见 TASK-109 §"明确不做" |
+| HyDE / Multi-Query 查询改写 | **不做** | 需额外 LLM 调用，违反 R1 延迟预算 |
+| 2-hop 常规图扩展 | **不做** | 只在 G1 触发时按需做（TASK-011 已定） |
 
-与上述**质量**靶场分开：这三个用于**索引耗时**基准（三档规模 + 两种语言），只读外部目录
-`/home/xuwenzheng/2_github/AI/ACE/benchmark/`。登记见 `benches/targets-benchmark.md`，
-基准数字见 `benches/results/index-cost-model-company-wsl.md`。
+## 任务卡模板与惯例
 
-| 档 | 仓库 | chunks | tokens | 路径 | commit |
-|---|---|---|---|---|---|
-| 小 | `leveldb` | 1,898 | 0.26M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/leveldb` | `7ee830d` |
-| 中 | `HelloAgents` | 2,729 | 0.89M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/HelloAgents` | `93e77ea` |
-| 大 | `langchain` | 20,673 | 4.73M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/langchain` | `41d3572` |
+- 新卡：复制 [`TASK-TEMPLATE.md`](TASK-TEMPLATE.md)，按 §1-§5 结构填写
+  （背景 / 目标 / 输入 / 设计要点 / 验收标准 / 明确不做 / 执行记录）；
+- **文件所有权**：每张卡必须在文头列"交付物所有权"清单，清单外文件不改；
+- **完成后**：回填"执行记录"（日期 + 分支 + 验收命令与结果 + 与设计的偏差 + 未决问题）；
+- **归档**：合并进 `main` 后，把卡移到 `archive/`，本表删除对应行。
 
-可复制提示词、用户操作循环与报告模板见 `docs/plan/dispatch.md`。
+> 本表**只列未完成的卡**。已完成的不在此表——去 `archive/` 找。
+
+## 历史卡索引（按阶段）
+
+| 阶段 | 卡范围 | 位置 |
+|---|---|---|
+| Phase 0 | 公共底座（P0-1 ~ P0-5） | 无独立卡 |
+| Phase 1 | TASK-001 ~ TASK-022 | [`archive/`](archive/) |
+| Phase 2 | TASK-030 ~ TASK-052 | [`archive/`](archive/) |
+| Phase 3 | TASK-060 ~ TASK-064、TASK-097 | [`archive/`](archive/) |
+| Phase 4 | TASK-070 ~ TASK-099 | [`archive/`](archive/) |
+| Phase 5+（质量） | TASK-101 ~ TASK-108 | [`archive/`](archive/) |
+| Phase 4+（增长运营） | TASK-110（进行中） | 本目录 |
+
+已归档卡的**执行记录里保留了当时的实测证据与设计偏差**，是回溯决策的首选来源。
+
+## 相关文档
+
+- 编排规程与报告模板 → [`../plan/orchestration.md`](../plan/orchestration.md)
+- 工作区隔离纪律 → [`../plan/multi-ai-worktrees.md`](../plan/multi-ai-worktrees.md)
+- 冻结契约与决策登记 → [`../contracts/PROCESS.md`](../contracts/PROCESS.md)
+- 设计意图与决策 → [`../design/INDEX.md`](../design/INDEX.md)
+- 操作手册（部署/基准/隐私） → [`../handbook/README.md`](../handbook/README.md)

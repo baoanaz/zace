@@ -1,6 +1,6 @@
 # TASK-023：真实场景用例采集（检索质量优化的唯一依据）
 
-> 状态：pending ｜ 阶段：**Phase 2**（与 service/client 同期建设）｜ 硬依赖：TASK-040（service 骨架，提供落库位置）
+> 状态：pending（**由 TASK-093 落地，不单独开工**）｜ 阶段：**Phase 2**（与 service/client 同期建设）｜ 硬依赖：TASK-040（service 骨架，提供落库位置）
 > 建议分支：`feature/task-023_<你的缩写><MMDD>`
 > 交付物所有权：`service/zace_service/telemetry/`（新建）、`core/zace_core/contextpack/assembly.py`（仅追加审计字段，不改判定逻辑）、
 > `docs/plan/real-eval.md`（新建，采集口径与隐私边界）、`benches/real/`（采集产物，**.gitignore 排除**）
