@@ -8,6 +8,9 @@
 > 对 Agent 只暴露两个工具：`search_context`（Fast，不调 LLM）/ `ask_project`（Deep，grounded answer + citation 回验）。
 
 > **新人/新会话先读 [`HANDOFF.md`](HANDOFF.md)**：项目现状、下一步任务、环境事实、协作纪律与已知缺口，一份读完即可开工。
+>
+> **要用三靶场（`leveldb` / `HelloAgents` / `langchain`）跑基准**：先读 [`benches/README.md`](benches/README.md) 的「新会话从这里开始」——
+> 索引已持久化在 `/root/.zace/bench/voyage-4-lite-d1024`，**复用即可，不要再 ingest**（清单见 `benches/results/raw/ingest-vps/INDEXES.json`）。
 
 ## 仓库布局（monorepo，D-35）
 
@@ -20,7 +23,7 @@
 | `client/` | **zace-client**（Rust，Module/05）：MCP stdio + 本地同步代理 | 可用 |
 | `npm/` | 分发包装器：`npx zace-client` 按平台取二进制并拉起 | 已发布 `zace-client@0.0.1` |
 | `web/` | **zace-web** SPA（Module/07）：管理面 + Playground，只消费 service 的 REST API | 骨架（Phase 4） |
-| `benches/` | golden 集与基准跑分（`golden/` 用例、`bakeoff/` 模型选型、`results/` 历史报告） | — |
+| `benches/` | golden 集与基准跑分（`golden/` 用例、`bakeoff/` 模型选型、`embed-bench/` 索引计量、`results/` 报告与证据） | — |
 | `docs/design/` | 设计文档（`INDEX.md` 为入口，决策以 §3 决策登记表为准） | 活文档 |
 | `docs/contracts/` | 冻结契约（DDL / JSON schema / OpenAPI / MCP tools）——变更须走编排流程 | 冻结 |
 | `docs/plan/` | roadmap / 编排流程 / 契约清单 / 云端 MCP 就绪度报告 | — |

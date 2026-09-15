@@ -14,7 +14,8 @@
 #   EMBED_MODEL            默认 voyage-4-lite
 #   EMBED_BASE_URL         默认 https://api.voyageai.com
 #   EMBED_API_KEY          必填（默认从未传入时读 /etc/zace/zace.env，密钥不进仓库）
-#   EMBED_CONCURRENCY      默认 8（registry 推荐）；≤2 GiB 小机器建议 4（见报告"内存"一节）
+#   EMBED_CONCURRENCY      默认 4（**本机 VPS 冻结值**，2026-09-15 基线 v1）；
+#                          换更大内存的机器可回调 8（registry 的厂商推荐值），见报告"内存"一节
 #   EMBED_BATCH_SIZE       默认 500（实测 1000 条会因响应体过大被对端断连）
 #   EMBED_BATCH_TOKEN_BUDGET 默认 300000
 #   EMBED_MAX_INPUT_TOKENS 默认 32000（只影响截断，不进指纹）
@@ -48,7 +49,7 @@ done
 export EMBED_MODE="${EMBED_MODE:-api}"
 export EMBED_MODEL="${EMBED_MODEL:-voyage-4-lite}"
 export EMBED_BASE_URL="${EMBED_BASE_URL:-https://api.voyageai.com}"
-export EMBED_CONCURRENCY="${EMBED_CONCURRENCY:-8}"
+export EMBED_CONCURRENCY="${EMBED_CONCURRENCY:-4}"  # VPS 冻结值：链路 96% 饱和 + 2 GiB 内存安全线
 export EMBED_BATCH_SIZE="${EMBED_BATCH_SIZE:-500}"
 export EMBED_BATCH_TOKEN_BUDGET="${EMBED_BATCH_TOKEN_BUDGET:-300000}"
 export EMBED_MAX_INPUT_TOKENS="${EMBED_MAX_INPUT_TOKENS:-32000}"

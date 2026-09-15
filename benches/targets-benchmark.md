@@ -76,6 +76,9 @@ uv run zace-core search "<query>" --project-id ca2050db0db5b1e2 \
   chunk、峰值 ~1.19 GB 并触发 cgroup 回收，langchain 7 分钟都跑不完）；吞吐几乎无损
   （conc=4 → 4.46 MB/s，conc=8 → 4.48 MB/s）；
 - 三个索引合计：25,300 chunk、4.58 M API token（bge-m3 口径 5.88 M）、响应体 307.8 MB。
+- **耗时归因**：冷启动 = 本地 2/3 + 网络 1/3（langchain：84.6s 本地 + 37.1s 网络 = 115.9s），
+  瓶颈是 2 vCPU 而非带宽；TPM 用不满是结构性上限（跑满 16 M 需 18.5 MB/s，本机链路只有 9.2–11.6 MB/s）。
+  实测见 `benches/results/index-cost-model-vps.md` §3。
 
 ## 未做的事
 

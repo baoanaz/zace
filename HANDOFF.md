@@ -2,6 +2,8 @@
 
 > **给接手 AI 的第一份文档**。读完这一份，你就知道：项目是什么、做到哪了、下一步做什么、别踩哪些坑。
 > 详细任务清单在 `docs/tasks/README.md`；协作流程在 `docs/plan/orchestration.md` 与 `docs/plan/multi-ai-worktrees.md`。
+> **跑基准前先读 [`benches/README.md`](benches/README.md)「新会话从这里开始」**：三靶场（`leveldb`/`HelloAgents`/`langchain`）的索引已持久化在 `/root/.zace/bench/voyage-4-lite-d1024`，**复用即可、不要再 ingest**；
+> 设备绑定纪律与报告索引见 `benches/results/README.md`。
 >
 > 当前基线：`main @ d5f7eb4` ｜ ruff ✅ ｜ 依赖方向 ✅ ｜ **878 passed, 2 skipped** ｜ web **41 passed** + build ✅
 >

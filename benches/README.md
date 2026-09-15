@@ -2,6 +2,23 @@
 
 > 用途：把"检索质量"变成可回归的数字（Module/02 §7-1）。Phase 1 的 M1 验收与 TASK-015 的校准都依赖本目录。
 
+## 新会话从这里开始（30 秒导航）
+
+本目录混了**两类**东西：① 检索质量回归（golden 用例）② 索引耗时/吞吐基准。
+先对号入座，不要通读：
+
+| 我要… | 入口 |
+|---|---|
+| 跑检索质量回归（eval） | 本文件「靶场」「运行」两节 + `benches/run.py --list-targets` |
+| **复用三靶场持久索引**跑基准（**不要重新索引**） | `targets-benchmark.md` §持久索引 + `results/raw/ingest-vps/INDEXES.json` |
+| 看索引耗时/内存/带宽/TPM 的结论与留档 | `results/README.md`（报告索引）→ `results/index-cost-model-vps.md` |
+| 改维度 / chunk 切分前，先看冻结配置与基线 | **`results/baseline-v1.md`** |
+| 改计量脚本 / 查指标口径定义 | `embed-bench/README.md` |
+| 找某个数字的原始证据 | `results/README.md` §4 `raw/` 证据索引 |
+
+> **设备绑定纪律**：`results/` 里的每个数字只对产它的设备成立（VPS 生产 `vps-la-2c2g` vs 公司 WSL `company-wsl`），
+> 引用时必须带设备标识与日期；跨设备直接比大小是错的。
+
 ## 目录约定
 
 | 路径 | 内容 |
@@ -11,6 +28,9 @@
 | `run.py` | 统一入口：`--target <靶场名>` 展开 `--golden`/`--project-id`，其余参数原样转给 `zace-core eval` |
 | `test_targets.py` | 清单与入口的单元测试（不在根 `pyproject.toml` 的 `testpaths` 里，跑法见"运行"） |
 | `results/*.md` | 报告产物：当前口径的原始报告 + 整理过的基线/选型报告 |
+| `results/README.md` | **报告与原始证据索引**（哪份是当前口径、哪份是历史留档、数字出处在哪） |
+| `targets-benchmark.md` | **耗时基准靶场登记**：`benchmark/{leveldb,HelloAgents,langchain}` 三档规模与持久索引 |
+| `embed-bench/` | 索引耗时/吞吐计量脚本（含指标口径定义与内存纪律），见其 `README.md` |
 | `bakeoff/` | embedding 选型脚本（TASK-015A；一次性方法学工具，不是用例集） |
 
 ## 用例格式（JSONL，一行一条）

@@ -50,6 +50,48 @@ from zace_core.pipeline.indexer import _embed_window_size  # noqa: E402
 from zace_core.storage import Store  # noqa: E402
 
 
+def union_seconds(intervals: Sequence[tuple[float, float]]) -> float:
+    """区间并集：**至少有一个请求在飞**的墙钟时间（并发下不能用求和，会重复计时）。"""
+    if not intervals:
+        return 0.0
+    ordered = sorted(intervals)
+    total = 0.0
+    cur_start, cur_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start > cur_end:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+        else:
+            cur_end = max(cur_end, end)
+    return total + (cur_end - cur_start)
+
+
+class UpsertMeter:
+    """给 ``VectorStore.upsert`` 计时（进程内打桩，不改 core 实现）。"""
+
+    def __init__(self) -> None:
+        self.total_s = 0.0
+        self.calls = 0
+        self.rows = 0
+
+    def patch(self) -> None:
+        from zace_core.vectors import VectorStore  # noqa: PLC0415
+
+        original = VectorStore.upsert
+        meter = self
+
+        def timed(target: Any, rows: Sequence[Any]) -> int:
+            started = time.perf_counter()
+            try:
+                return original(target, rows)
+            finally:
+                meter.total_s += time.perf_counter() - started
+                meter.calls += 1
+                meter.rows += len(rows)
+
+        VectorStore.upsert = timed  # type: ignore[method-assign]
+
+
 def machine_info() -> dict[str, Any]:
     """设备指纹：VPS 与公司 WSL 的数据不能混（TASK-102 §8.1）。"""
 
@@ -60,17 +102,35 @@ def machine_info() -> dict[str, Any]:
             return ""
 
     mem_kb = 0
+    mem_available_kb = 0
+    swap_total_kb = 0
+    swap_free_kb = 0
     try:
         for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal"):
-                mem_kb = int(line.split()[1])
-                break
+            key, _, rest = line.partition(":")
+            if key == "MemTotal":
+                mem_kb = int(rest.split()[0])
+            elif key == "MemAvailable":
+                mem_available_kb = int(rest.split()[0])
+            elif key == "SwapTotal":
+                swap_total_kb = int(rest.split()[0])
+            elif key == "SwapFree":
+                swap_free_kb = int(rest.split()[0])
     except OSError:
         pass
+    # 运行时快照：同一配置在这台 2 vCPU 共享 VPS 上实测有 ~20% 波动（本地段），
+    # 不记负载/内存就无法判断两次跑批的数字能不能直接比（见 results/baseline-v1.md）。
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except OSError:
+        load1 = load5 = load15 = -1.0
     return {
         "cpu_count": os.cpu_count(),
         "mem_total_gib": round(mem_kb / 1024 / 1024, 1),
         "kernel": sh("uname", "-r"),
+        "loadavg": [round(load1, 2), round(load5, 2), round(load15, 2)],
+        "mem_available_mb": round(mem_available_kb / 1024, 1),
+        "swap_used_mb": round((swap_total_kb - swap_free_kb) / 1024, 1),
         "cpu_model": next(
             (
                 line.split(":", 1)[1].strip()
@@ -105,6 +165,7 @@ class CountingClient(httpx.Client):
         self.embedding_requests = 0
         self.api_tokens = 0
         self.request_sizes: list[dict[str, Any]] = []
+        self.embedding_intervals: list[tuple[float, float]] = []
 
     def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         started = time.perf_counter()
@@ -122,6 +183,7 @@ class CountingClient(httpx.Client):
         if request.url.path.endswith("/embeddings") and response.status_code == 200:
             self.embedding_requests += 1
             self.request_sizes.append({"bytes": payload, "elapsed_s": round(elapsed, 3)})
+            self.embedding_intervals.append((started, time.perf_counter()))
             try:
                 usage = json.loads(response.content).get("usage") or {}
                 self.api_tokens += int(usage.get("total_tokens") or 0)
@@ -212,6 +274,8 @@ def main() -> int:
     client = CountingClient(timeout=httpx.Timeout(60.0, connect=10.0))
     provider = create_provider(cfg, client=client)
     counted = TokenCountingProvider(provider, tokenizer)
+    upsert_meter = UpsertMeter()
+    upsert_meter.patch()
     engine = Engine.open(data_root, provider=counted)
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -281,6 +345,9 @@ def main() -> int:
             "peak_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
             "embed_window_chunks": _embed_window_size(provider),
             "embedding_window_s": round(counted.window_s, 2),
+            "network_busy_s": round(union_seconds(client.embedding_intervals), 2),
+            "upsert_total_s": round(upsert_meter.total_s, 2),
+            "upsert_calls": upsert_meter.calls,
             "batches": counted.batches,
             "requests_total": client.request_count,
             "requests_embeddings": client.embedding_requests,
@@ -293,8 +360,10 @@ def main() -> int:
             "tokens_sent_tokenizer": counted.tokens_sent if tokenizer is not None else None,
             "tokenizer": args.tokenizer if tokenizer is not None else None,
             "tokenizer_error": tokenizer_error,
-            "api_mb_per_s_over_embedding_window": (
-                round(response_mb / counted.window_s, 2) if counted.window_s else None
+            "api_mb_per_s_network_busy": (
+                round(response_mb / union_seconds(client.embedding_intervals), 2)
+                if client.embedding_intervals
+                else None
             ),
             "api_mb_per_s_over_wall": round(response_mb / wall_s, 2) if wall_s else None,
             "api_tokens_per_min_over_wall": (
@@ -311,6 +380,8 @@ def main() -> int:
     m = payload["provider_meter"]
     fp = payload["fingerprint"]
     profile_line = fp["embedding_profile"] if fp else "?"
+    wall_s = payload["ingest"]["wall_s"]
+    net_share = 100 * m["network_busy_s"] / wall_s if wall_s else 0
     parser_line = fp["parser_config_hash"][:12] if fp else "?"
     print(
         f"\n{repo.name}\n"
@@ -327,8 +398,9 @@ def main() -> int:
         f"  响应体         = {m['response_mb']} MB"
         f"（{m['response_kb_per_chunk']} KB/chunk）\n"
         f"  API 计费 token = {m['api_total_tokens']:,}\n"
-        f"  API→本机速率   = {m['api_mb_per_s_over_embedding_window']} MB/s（嵌入窗口内）"
-        f" / {m['api_mb_per_s_over_wall']} MB/s（含解析入库）\n",
+        f"  网络在飞       = {m['network_busy_s']}s（占比 {net_share:.0f}%）"
+        f"  →  API→本机 {m['api_mb_per_s_network_busy']} MB/s\n"
+        f"  入库(upsert)   = {m['upsert_total_s']}s / {m['upsert_calls']} 次\n",
         flush=True,
     )
     return 0

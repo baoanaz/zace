@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "tag": "measure-phases",
+  "started_at": "2026-09-15T05:08:22+0000",
+  "machine": {
+    "cpu_count": 2,
+    "mem_total_gib": 1.9,
+    "kernel": "5.15.0-191-generic",
+    "cpu_model": "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz"
+  },
+  "repo": "/root/xuwenzheng/ACE/benchmark/HelloAgents",
+  "repo_commit": "93e77ea60c13436636c9b39b6761ff8dfe940ba2",
+  "identity": {
+    "identity_key": "721a91d1b5394dc1c9b6f304d26510596e458129554db50c6e5737b0e927b60e",
+    "display_name": "HelloAgents",
+    "remote_url": "https://github.com/jjyaoao/HelloAgents.git",
+    "repo_path": ""
+  },
+  "project_id": "06078cc80c7ce7d7",
+  "project_created": true,
+  "data_root": "/tmp/measure/HelloAgents",
+  "index_dir": "/tmp/measure/HelloAgents/projects/06078cc80c7ce7d7",
+  "fingerprint": {
+    "parser_config_hash": "76741bca6f8eed43ce6bb84b6a1f43be0e01f4049afce592f283a1cb84b5998b",
+    "embedding_model": "api:voyage-4-lite",
+    "embedding_dim": 1024,
+    "embedding_profile": "api:voyage-4-lite@1024"
+  },
+  "embedding": {
+    "mode": "api",
+    "model": "api:voyage-4-lite",
+    "dim": 1024,
+    "base_url": "https://api.voyageai.com",
+    "transport": "voyage",
+    "batch_size": 500,
+    "batch_token_budget": 300000,
+    "concurrency": 4,
+    "max_input_tokens": 32000
+  },
+  "ingest": {
+    "mode": "incremental",
+    "wall_s": 20.9,
+    "report": {
+      "added": 236,
+      "modified": 0,
+      "deleted": 0,
+      "chunks_new": 2729,
+      "chunks_reused": 0,
+      "chunks_removed": 0,
+      "unresolved_resolved": 13,
+      "errors": [],
+      "invalidation": "none",
+      "files_parsed": 236,
+      "vectors_upserted": 2729,
+      "vectors_deleted": 0,
+      "edges_retargeted": 1309,
+      "spec_refs": 2324,
+      "ambiguous_refs": 572,
+      "skipped_files": [
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/dml-main.xsd",
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/sml.xsd",
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/wml.xsd",
+        "uv.lock"
+      ],
+      "skip_reasons": [
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/dml-main.xsd:oversize:152039",
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/sml.xsd:oversize:242277",
+        "skills/docx/ooxml/schemas/ISO-IEC29500-4_2016/wml.xsd:oversize:171367",
+        "uv.lock:oversize:225325"
+      ],
+      "orphan_files": [],
+      "languages": [
+        "fallback",
+        "markdown",
+        "python"
+      ]
+    }
+  },
+  "provider_meter": {
+    "peak_rss_mb": 852.6,
+    "embed_window_chunks": 2000,
+    "embedding_window_s": 9.27,
+    "network_busy_s": 5.07,
+    "upsert_total_s": 0.51,
+    "upsert_calls": 2,
+    "batches": 2,
+    "requests_total": 11,
+    "requests_embeddings": 11,
+    "status_counts": {
+      "200": 11
+    },
+    "response_mb": 33.21,
+    "response_kb_per_chunk": 12.46,
+    "api_total_tokens": 738653,
+    "tokens_sent_tokenizer": 894705,
+    "tokenizer": "BAAI/bge-m3",
+    "tokenizer_error": null,
+    "api_mb_per_s_network_busy": 6.54,
+    "api_mb_per_s_over_wall": 1.59,
+    "api_tokens_per_min_over_wall": 2120119.0
+  }
+}

@@ -1,0 +1,65 @@
+[
+  {
+    "schema": 1,
+    "tag": "local-only-floor",
+    "generated_at": "2026-09-15T05:19:19+0000",
+    "machine": {
+      "cpu_count": 2,
+      "mem_total_gib": 1.9,
+      "kernel": "5.15.0-191-generic"
+    },
+    "repo": "/root/xuwenzheng/ACE/benchmark/leveldb",
+    "project_id": "3ed886ce58bc0e47",
+    "provider": "stub:instant（零网络、零计算）",
+    "dim": 1024,
+    "local_ingest_s": 5.39,
+    "resolve_s": 0.01,
+    "chunks_new": 1898,
+    "vectors_upserted": 1898,
+    "edges_retargeted": 867,
+    "spec_refs": 239,
+    "peak_rss_mb": 293.3
+  },
+  {
+    "schema": 1,
+    "tag": "local-only-floor",
+    "generated_at": "2026-09-15T05:19:34+0000",
+    "machine": {
+      "cpu_count": 2,
+      "mem_total_gib": 1.9,
+      "kernel": "5.15.0-191-generic"
+    },
+    "repo": "/root/xuwenzheng/ACE/benchmark/HelloAgents",
+    "project_id": "06078cc80c7ce7d7",
+    "provider": "stub:instant（零网络、零计算）",
+    "dim": 1024,
+    "local_ingest_s": 11.34,
+    "resolve_s": 0.01,
+    "chunks_new": 2729,
+    "vectors_upserted": 2729,
+    "edges_retargeted": 1309,
+    "spec_refs": 2324,
+    "peak_rss_mb": 321.0
+  },
+  {
+    "schema": 1,
+    "tag": "local-only-floor",
+    "generated_at": "2026-09-15T05:21:02+0000",
+    "machine": {
+      "cpu_count": 2,
+      "mem_total_gib": 1.9,
+      "kernel": "5.15.0-191-generic"
+    },
+    "repo": "/root/xuwenzheng/ACE/benchmark/langchain",
+    "project_id": "ca2050db0db5b1e2",
+    "provider": "stub:instant（零网络、零计算）",
+    "dim": 1024,
+    "local_ingest_s": 84.57,
+    "resolve_s": 0.01,
+    "chunks_new": 20673,
+    "vectors_upserted": 20673,
+    "edges_retargeted": 9834,
+    "spec_refs": 15409,
+    "peak_rss_mb": 502.8
+  }
+]
