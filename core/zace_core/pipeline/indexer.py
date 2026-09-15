@@ -18,6 +18,8 @@ R4（``FileDelta`` 三集合）、R8（imports 边缘）、R10（向量相似度
 - **三档执行**（``check_fingerprint`` 驱动，D-07）：
   ``none`` → 常规增量（只嵌 ``FileDelta.new``）；``reembed`` → 重建向量表并重嵌**存量** chunk
   （不写 SQLite）；``full_reparse`` → 遍历 provider 全部文件重跑增量 + 重建向量表。
+- **向量阶段分窗（内存护栏）**：``_embed_and_upsert`` 按 ``批大小 × 并发`` 开窗、逐窗嵌入与
+  落库，不把整仓 chunk 的向量一次性常驻内存（理由与量级见 ``_embed_window_size``）。
 - **向量清理**：``FileDelta.removed_chunk_ids`` 直接删；整文件删除用 Indexer 进程内记录过的
   chunk id 清理（见 ``orphan_files`` 与执行记录"未决问题"：``Store`` 目前没有"按文件列 chunk id"
   或"``apply_deletions`` 返回被删 id"的原语，跨进程删除会留孤儿向量——检索侧会跳过、下一次全量
@@ -64,7 +66,15 @@ from zace_core.storage import Store
 from zace_core.types import ChangeSet, ChunkDef, ParsedFile, VectorRow
 from zace_core.vectors import VectorStore
 
-__all__ = ["CPP_EXTENSIONS", "H_EXTENSION", "LANGUAGES_KEY", "Indexer", "IngestReport"]
+__all__ = [
+    "CPP_EXTENSIONS",
+    "DEFAULT_EMBED_WINDOW",
+    "H_EXTENSION",
+    "LANGUAGES_KEY",
+    "MAX_EMBED_WINDOW",
+    "Indexer",
+    "IngestReport",
+]
 
 #: ``index_config`` 中记录"仓库已见语言集合"的键（R1 抬升的持久化依据）。
 LANGUAGES_KEY = "indexed_languages"
@@ -74,6 +84,30 @@ H_EXTENSION = ".h"
 CPP_EXTENSIONS = frozenset(
     extension for extension, language in EXTENSION_LANGUAGE.items() if language == "cpp"
 )
+
+#: 向量阶段窗口的兜底值（chunk 数）：provider 未声明 ``batch_size`` 时使用。
+DEFAULT_EMBED_WINDOW = 512
+#: 向量阶段窗口上限（chunk 数）：兜住"批大小 × 并发"被调到极端值的情况（防再次吃到 GB 级内存）。
+MAX_EMBED_WINDOW = 4_000
+
+
+def _embed_window_size(embedding: EmbeddingProvider) -> int:
+    """一次 ``embed`` + ``upsert`` 处理的 chunk 数（内存安全的上界）。
+
+    为什么需要上界：``embed()`` 返回 ``list[list[float]]``，1024 维向量在 CPython 里约 33 KB
+    （24 B/float + 8 B/指针 + 列表头），且下游 ``VectorRow`` / ``upsert`` 还会各复制一份。
+    把整仓 chunk 一次性交出去，20k chunk 的仓库仅向量就要 ~1 GB 常驻内存——2026-09-15 在本机
+    （2 GiB VPS）实测把机器拖到失联；15.6 GiB 的开发机掩盖了这个问题。
+
+    窗口取 ``批大小 × 并发``：刚好让 provider 跑满**一轮**并发（不牺牲吞吐），常驻向量量压到
+    ``窗口 × 33 KB``（Voyage 默认 500×8 → ~130 MB），并用 ``MAX_EMBED_WINDOW`` 兜住极端配置。
+    """
+    batch = getattr(embedding, "batch_size", None)
+    if not batch:
+        return DEFAULT_EMBED_WINDOW
+    concurrency = getattr(embedding, "concurrency", None)
+    window = max(1, int(batch)) * max(1, int(concurrency or 1))
+    return min(window, MAX_EMBED_WINDOW)
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,16 +520,20 @@ class Indexer:
         ordered = [by_id[chunk_id] for chunk_id in pending]
         if not ordered:
             return
-        vectors = self._embedding.embed([embedding_text(chunk) for chunk in ordered])
-        if len(vectors) != len(ordered):
-            raise RuntimeError(
-                f"embedding 返回行数不匹配：期望 {len(ordered)}，实际 {len(vectors)}"
-            )
-        rows = [
-            VectorRow(chunk_id=chunk.id, content_hash=chunk.content_hash, vector=list(vector))
-            for chunk, vector in zip(ordered, vectors, strict=True)
-        ]
-        acc.vectors_upserted += self._vectors.upsert(rows)
+        window_size = _embed_window_size(self._embedding)
+        for start in range(0, len(ordered), window_size):
+            window = ordered[start : start + window_size]
+            texts = [embedding_text(chunk) for chunk in window]
+            vectors = self._embedding.embed(texts)
+            if len(vectors) != len(window):
+                raise RuntimeError(
+                    f"embedding 返回行数不匹配：期望 {len(window)}，实际 {len(vectors)}"
+                )
+            rows = [
+                VectorRow(chunk_id=chunk.id, content_hash=chunk.content_hash, vector=list(vector))
+                for chunk, vector in zip(window, vectors, strict=True)
+            ]
+            acc.vectors_upserted += self._vectors.upsert(rows)
 
     # ------------------------------------------------------------------ 二阶段解析
 

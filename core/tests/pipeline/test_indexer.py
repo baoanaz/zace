@@ -6,6 +6,7 @@ spec 引用 stale、同变更集二次 ingest 零成本、指纹两档失效、�
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,6 +15,11 @@ from zace_core.chunking import PARSER_CONFIG_KEY, embedding_text, split_file
 from zace_core.interfaces import EmbeddingProfile
 from zace_core.parsing.registry import get_parser
 from zace_core.pipeline import LANGUAGES_KEY, DirectorySource, Indexer, IngestReport
+from zace_core.pipeline.indexer import (
+    DEFAULT_EMBED_WINDOW,
+    MAX_EMBED_WINDOW,
+    _embed_window_size,
+)
 from zace_core.storage import Store
 from zace_core.text import segment
 from zace_core.types import ChangeSet, ParsedFile
@@ -502,3 +508,77 @@ def test_embedding_inputs_match_embedding_text(
     assert set(embedding.texts) == expected
     assert any("def helper" in text for text in embedding.texts)
     assert any("class Service" in text for text in embedding.texts)
+
+
+# ---------------------------------------------------------------------------
+# 向量阶段分窗（内存护栏）
+# ---------------------------------------------------------------------------
+
+
+class WindowedEmbedding(CountingEmbedding):
+    """带批量参数的替身：让"分窗嵌入"可被观测（窗口 = ``batch_size × concurrency``）。"""
+
+    batch_size = 2
+    concurrency = 3
+
+
+def _many_functions(count: int) -> str:
+    """生成 ``count`` 个顶层函数的模块（每个函数≈1 chunk，用来撑过窗口）。"""
+    return "\n\n\n".join(
+        f'def f{index}(value: int) -> int:\n    """函数 {index}。"""\n    return value + {index}'
+        for index in range(count)
+    )
+
+
+def test_embed_upsert_windows_batch_size_times_concurrency(
+    store: Store, vectors: VectorStore, repo: Path, change_set: ChangeSetFactory
+) -> None:
+    """向量阶段按 ``批大小 × 并发`` 分窗：超过一个窗口的仓库必须分多次 embed + upsert。
+
+    背景（2026-09-15）：原来把**整仓** chunk 一次性交给 ``embed()``，而 1024 维向量在 CPython
+    里约 33 KB/条（24 B/float + 8 B/指针 + 列表头），20k chunk 的仓库仅向量就常驻 ~1 GB——
+    在 2 GiB VPS 上实测把机器拖到失联。本用例锁住分窗行为，防止回归。
+    """
+    embedding = WindowedEmbedding()
+    indexer = Indexer(store, embedding, vectors, DirectorySource(repo))
+    source = _many_functions(20)
+    report = _ingest_files(indexer, change_set, {"pkg/many.py": source}, repo)
+
+    total = _chunk_count("pkg/many.py", source)
+    window = WindowedEmbedding.batch_size * WindowedEmbedding.concurrency
+    assert total > window  # 用例前提：chunk 数确实超过一个窗口
+    assert embedding.calls == math.ceil(total / window)
+    assert max(len(batch) for batch in embedding.batches) <= window
+    # 分窗不改变结果：所有 chunk 都有向量
+    assert report.vectors_upserted == total
+    assert vectors.count() == total
+
+
+def test_embed_window_size_falls_back_and_caps() -> None:
+    """窗口 = 批大小 × 并发；provider 未声明批量能力时兜底，极端配置封顶。"""
+
+    class Anonymous:
+        """自定义 provider：既不声明 ``batch_size`` 也不声明 ``concurrency``。"""
+
+    class LocalLike:
+        """本地 ONNX provider 形态：只有 ``batch_size``（无并发）。"""
+
+        batch_size = 16
+
+    class VoyageLike:
+        """Voyage 默认形态：批 500 × 并发 8。"""
+
+        batch_size = 500
+        concurrency = 8
+
+    class Extreme:
+        """把批与并发都调到极端：必须被上限削掉，否则又回到 GB 级内存。"""
+
+        batch_size = 1000
+        concurrency = 32
+
+    assert _embed_window_size(Anonymous()) == DEFAULT_EMBED_WINDOW
+    assert _embed_window_size(LocalLike()) == 16
+    assert _embed_window_size(VoyageLike()) == 4_000
+    assert _embed_window_size(Extreme()) == MAX_EMBED_WINDOW
+    assert MAX_EMBED_WINDOW < 1000 * 32
