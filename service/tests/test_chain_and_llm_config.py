@@ -38,6 +38,7 @@ from tests.conftest import (
     TARGET_SYMBOL,
     DeterministicBigramEmbedding,
     make_client,
+    register_with_invite,
     upload_files,
 )
 from tests.test_answer import ANSWERABLE_QUERY, FakeAnswerProvider
@@ -346,12 +347,9 @@ def test_call_timeline_is_scoped_to_owner(tmp_path: Path) -> None:
             "/api/auth/bootstrap", json={"name": "alice", "password": "pw1"}
         )
         assert alice.status_code == 201, alice.text
-        bob = client.post(
-            "/api/auth/register", json={"name": "bob", "password": "pw1"}
-        )
-        assert bob.status_code == 201, bob.text
+        bob = register_with_invite(client, app, "bob", "pw1")
         db = app.state.meta_db
-        bob_id = bob.json()["userId"]
+        bob_id = bob["userId"]
         alice_id = alice.json()["userId"]
         alice_project = manager.resolve_project("identity:a", "a").project_id
         bob_project = manager.resolve_project("identity:b", "b").project_id

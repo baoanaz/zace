@@ -276,21 +276,27 @@ def test_three_state_boundaries(used: int, limit: int, expected: str) -> None:
 
 
 def test_warning_and_exceeded_markdown_differ(env: Env) -> None:
-    """DoD：``warning`` 与 ``exceeded`` 的**文案不同**（exceeded 必须说清"不阻断"）。"""
+    """DoD：``warning`` 与 ``exceeded`` 的**文案不同**（exceeded 必须说清上传会被拒）。
+
+    TASK-110 改口径（用户 2026-09-15 拍板）：超限时**检索照常、上传被拒**，因此
+    exceeded 分支必须写明"已有项目的使用不受影响"与"新的索引上传会被拒绝"——
+    只说前半句会让 Agent 转述成"一切正常"，而用户下一批上传会直接拿 413。
+    """
     used = _usage_bytes(env)
     assert used > 0, "夹具项目应当有真实的索引占用（否则下面的额度没有意义）"
 
     env.relaunch(storage_limit_per_project_bytes=env.limit_for_ratio(0.8))
     warning = warning_for(env.manager, env.settings, project_id=env.project_id)
     assert warning is not None and warning.startswith(STORAGE_WARNING_HEADING)
-    assert "不阻断" not in warning
+    assert "上传会被拒绝" not in warning
     assert "请提醒用户" in warning
 
     env.relaunch(storage_limit_per_project_bytes=max(1, used // 2))
     exceeded = warning_for(env.manager, env.settings, project_id=env.project_id)
     assert exceeded is not None and exceeded.startswith(STORAGE_WARNING_HEADING)
     assert "已超出上限" in exceeded
-    assert "不阻断" in exceeded, "超限必须写明仍会照常索引/检索（告警不阻断，用户拍板）"
+    assert "上传会被拒绝" in exceeded, "超限必须写明上传会被拒（TASK-110 硬拒新索引）"
+    assert "检索" in exceeded and "不受影响" in exceeded
     assert "删除" in exceeded and "源码文件不受影响" in exceeded
     assert exceeded != warning
 
@@ -447,8 +453,12 @@ def test_warning_appears_in_mcp_tool_content(env: Env) -> None:
     assert text.index("### Meta") < text.index(STORAGE_WARNING_HEADING)
 
 
-def test_exceeded_still_serves_and_says_it_does_not_block(env: Env) -> None:
-    """DoD：≥100% → ``exceeded``（文案不同）+ **仍放行**（告警不阻断，用户拍板）。"""
+def test_exceeded_still_serves_and_warns_about_uploads(env: Env) -> None:
+    """DoD：≥100% → ``exceeded``（文案不同）且**检索仍放行**；告警明确说上传会被拒。
+
+    TASK-110 改口径：**检索**不阻断（它不会让占用变大，拒绝它毫无意义）——这是本条的可观察
+    证据；而**上传**硬拒由 :func:`test_exceeded_rejects_upload` 守。
+    """
     used = _usage_bytes(env)
     env.relaunch(storage_limit_per_user_bytes=max(1, used // 2))
 
@@ -456,14 +466,17 @@ def test_exceeded_still_serves_and_says_it_does_not_block(env: Env) -> None:
 
     assert STORAGE_WARNING_HEADING in text
     assert "已超出上限" in text
-    assert "不阻断" in text
-    # 检索结果**照常**返回（这是"不阻断"的可观察证据）。
+    assert "上传会被拒绝" in text
+    # 检索结果**照常**返回（这是"检索不受影响"的可观察证据）。
     assert f"{SAMPLE_MODULE_PATH}:" in text
     assert "## Relevant Context" in text
 
 
-def test_exceeded_does_not_reject_upload(env: Env) -> None:
-    """DoD：超限**不拒绝**索引上传（"告警不阻断"在写路径上的可观察证据）。"""
+def test_exceeded_rejects_upload(env: Env) -> None:
+    """DoD（TASK-110 用户拍板）：超限时**拒绝**新的索引上传（413 ``quota_exceeded``）。
+
+    这是与 TASK-094 的"告警不阻断"的**唯一行为差异**：写路径硬拒，读路径不变。
+    """
     env.relaunch(storage_limit_per_user_bytes=1, storage_limit_per_project_bytes=1)
 
     content = b"x = 1\n"
@@ -480,8 +493,11 @@ def test_exceeded_does_not_reject_upload(env: Env) -> None:
             ],
         },
     )
-    assert response.status_code == 200, response.text
-    assert response.json()["accepted"]
+    assert response.status_code == 413, response.text
+    assert response.json()["error"]["code"] == "quota_exceeded"
+    # 拒绝必须发生在**写入之前**：账本里不该出现这个文件（否则会把索引搞成半成品）。
+    _blobs, state = env.manager.project_paths(env.project_id)
+    assert "src/extra.py" not in state.files
 
 
 def test_ask_project_tool_also_carries_warning(env: Env) -> None:

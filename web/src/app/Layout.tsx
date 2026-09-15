@@ -12,6 +12,9 @@
  * TASK-100：新增「项目」页（用户 2026-09-14 要求放在控制台下面，与控制台同级）；
  * 删掉页脚版本说明文案（用户："用户不需要知道这些"）。
  *
+ * TASK-110：新增「账户」页；「后台」入口**只对管理员显示**（入口由
+ * ``account.capabilities.isAdmin`` 决定，不在这里写 ``role === "admin"``）。
+ *
  * 窄屏（<768px）：侧边栏变成**抽屉**，由顶栏的汉堡按钮开关，点导航后自动关闭
  * （用户 2026-09-14 拍板；不引任何库）。
  */
@@ -34,8 +37,17 @@ const NAV = [
   { to: "/connect", label: "接入指南", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
+  { to: "/account", label: "账户", end: false },
   { to: "/settings", label: "设置", end: false },
 ];
+
+/**
+ * 管理员专属导航（TASK-110）：只有 ``capabilities.isAdmin`` 为真时才出现在侧边栏。
+ *
+ * 为什么单独一条而不是把 ``NAV`` 写成带条件的数组：管理员条目在**末位且视觉上分开**
+ * （它是运营工具，不是日常页面），把条件塞进同一个数组会让导航顺序变得难读。
+ */
+const ADMIN_NAV = { to: "/admin", label: "后台", end: false };
 
 export function Layout({
   account,
@@ -101,6 +113,22 @@ export function Layout({
               {item.label}
             </NavLink>
           ))}
+          {account?.capabilities?.isAdmin && (
+            <NavLink
+              to={ADMIN_NAV.to}
+              end={ADMIN_NAV.end}
+              onClick={() => setDrawerOpen(false)}
+              className={({ isActive }) =>
+                `mt-2 block rounded border-t border-dashed border-ink-line px-3 py-2 pt-3 ${
+                  isActive
+                    ? "bg-accent-seal font-medium text-white"
+                    : "text-ink-muted hover:bg-paper-base hover:text-ink-primary"
+                }`
+              }
+            >
+              {ADMIN_NAV.label}
+            </NavLink>
+          )}
         </nav>
 
         <div className="border-t border-ink-line px-5 py-4 text-xs text-ink-muted">
@@ -108,7 +136,17 @@ export function Layout({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="text-ink-primary">{account.name}</span>
               {account.isLocal && <span>（本地）</span>}
-            </div>
+              {/* TASK-110 §1.3/§1.4：身份徽章（拓荒者 #0027）。本地模式无身份体系，不显示。 */}
+              {!account.isLocal && (
+                <span
+                  data-testid="sidebar-title"
+                  className="rounded-full border border-ink-line bg-paper-base px-2 py-0.5 text-[11px] text-ink-muted"
+                >
+                  {account.earlyMemberNo === null
+                    ? account.title
+                    : `${account.title} #${String(account.earlyMemberNo).padStart(3, "0")}`}
+                </span>
+              )}            </div>
           )}
           {account && !account.isLocal && (
             <button

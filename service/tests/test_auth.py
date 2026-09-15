@@ -25,6 +25,15 @@ from tests.conftest import DeterministicBigramEmbedding, make_client
 PASSWORD = "correct-horse-battery"
 
 
+def _invite(ns, kind: str = "C") -> str:
+    """造一个邀请码（TASK-110：注册必须有码）。"""
+    from zace_service.invites import generate_code
+
+    code = generate_code(kind)
+    ns.app.state.meta_db.create_invite(code, kind)
+    return code
+
+
 def _make(tmp_path: Path, *, local_mode: bool = False) -> SimpleNamespace:
     """构造一个 app（非本地模式 = 云端形态，鉴权生效）。"""
     settings = Settings(
@@ -169,12 +178,21 @@ def test_bootstrap_unavailable_in_local_mode(tmp_path: Path) -> None:
 
 
 def test_register_conflict_is_409(tmp_path: Path) -> None:
-    """每次部署都可注册；同名 → 409 name_taken。"""
+    """每次部署都可注册（凭邀请码）；同名 → 409 name_taken。
+
+    TASK-110：两次注册各用一张**独立**的码——重名失败时事务回滚，但一个用例只想验证
+    "第二次因重名被拒"，让它的码还没被消耗才能把它与邀请码问题彻底分开。
+    """
     ns = _make(tmp_path)
     with ns.client:
         for _ in range(2):
             response = ns.client.post(
-                "/api/auth/register", json={"name": "bob", "password": PASSWORD}
+                "/api/auth/register",
+                json={
+                    "name": "bob",
+                    "password": PASSWORD,
+                    "inviteCode": _invite(ns),
+                },
             )
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "name_taken"
@@ -313,7 +331,8 @@ def test_public_paths_do_not_require_credentials(cloud) -> None:
         assert cloud.client.get(path).status_code == 200, path
 
     register = cloud.client.post(
-        "/api/auth/register", json={"name": "x", "password": PASSWORD}
+        "/api/auth/register",
+        json={"name": "x", "password": PASSWORD, "inviteCode": _invite(cloud)},
     )
     assert register.status_code == 201
     assert register.json()["name"] == "x"

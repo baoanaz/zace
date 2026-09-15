@@ -43,7 +43,7 @@ from zace_service.requestlog import (
 )
 from zace_service.runtime import EngineManager
 
-from tests.conftest import DeterministicBigramEmbedding, make_client
+from tests.conftest import DeterministicBigramEmbedding, make_client, make_invite
 
 PASSWORD = "correct-horse-battery"
 #: 真形态假 key（脱敏断言用；与 ``test_usage_api`` 同一形态）。
@@ -114,7 +114,14 @@ def cloud_env(tmp_path: Path):
         assert boot.status_code == 201, boot.text
         ns.alice_id = boot.json()["userId"]
         ns.alice = _token(ns.client, "alice-key")
-        reg = ns.client.post("/api/auth/register", json={"name": "bob", "password": PASSWORD})
+        reg = ns.client.post(
+            "/api/auth/register",
+            json={
+                "name": "bob",
+                "password": PASSWORD,
+                "inviteCode": make_invite(ns.app),
+            },
+        )
         assert reg.status_code == 201, reg.text
         ns.bob_id = reg.json()["userId"]
         ns.bob = _token(ns.client, "bob-key")

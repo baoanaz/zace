@@ -66,7 +66,7 @@ from zace_core.types import ContextPack
 
 from zace_service import audit
 from zace_service.answer import AnswerError, answer_question
-from zace_service.auth import llm_owner
+from zace_service.auth import llm_owner, quota_identity
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import (
     CODE_EMBEDDING_UNAVAILABLE,
@@ -315,13 +315,19 @@ def _storage_warning(
 
     身份与元数据库都从 ``request`` 取（与审计的归属口径一致）：云端按当前用户的项目求和，
     本地模式（无账户，R34）按全量口径。
+
+    TASK-110：上限走 ``auth.quota_identity`` 解析出的**角色配额**，与上传硬拒同一个口径——
+    否则告警里的数字与实际拦住上传的那根线不一致。
     """
+    user_id, role, override = quota_identity(request)
     return warning_for(
         manager,
         get_settings(request),
         project_id=project_id,
         db=_meta_db(request),
-        user_id=_user_id(request),
+        user_id=user_id,
+        role=role,
+        override=override,
     )
 
 
@@ -525,7 +531,12 @@ def _meta_db(request: Request) -> MetaDB | None:
 
 
 def _user_id(request: Request) -> str | None:
-    """当前用户 id（本地模式为 ``None``——无账户体系，R34）。"""
+    """当前已认证用户的 id（**审计归属**用）。
+
+    与 :func:`zace_service.auth.quota_identity` 的区别：这里在本地模式返回 ``None``，
+    因为审计表里"本地"不是一个真实用户（TASK-061/064 的旧口径，逐字不变）；
+    而配额归属在本地模式仍需要一个 id 才能把项目算进同一个账户（TASK-094 的口径）。
+    """
     return getattr(getattr(request.state, "zace_user", None), "id", None)
 
 

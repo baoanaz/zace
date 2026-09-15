@@ -31,12 +31,53 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
+import { type Account } from "../api/client";
 import { Layout } from "./Layout";
 
-function renderLayout(initialPath = "/") {
+/** 一个**普通（公测）用户**的完整账户（TASK-110 后 Account 带身份与能力位）。 */
+const PUBLIC_ACCOUNT: Account = {
+  userId: "u1",
+  name: "owner",
+  createdAt: 1789300000,
+  isLocal: false,
+  via: "session",
+  role: "public" as const,
+  title: "旅人",
+  earlyMemberNo: null,
+  capabilities: { canCustomKey: false, quotaBytes: 500 * 1024 * 1024, earlyMemberNo: null, isAdmin: false },
+};
+
+/** 内测用户的账户（带编号；用于徽章与"页面确实不同"的断言）。 */
+const BETA_ACCOUNT: Account = {
+  ...PUBLIC_ACCOUNT,
+  role: "beta",
+  title: "拓荒者",
+  earlyMemberNo: 27,
+  capabilities: {
+    canCustomKey: true,
+    quotaBytes: 1024 * 1024 * 1024,
+    earlyMemberNo: 27,
+    isAdmin: false,
+  },
+};
+
+/** 管理员的账户（后台入口的依据）。 */
+const ADMIN_ACCOUNT: Account = {
+  ...PUBLIC_ACCOUNT,
+  role: "admin",
+  title: "执炬者",
+  capabilities: {
+    canCustomKey: true,
+    quotaBytes: 5 * 1024 * 1024 * 1024,
+    earlyMemberNo: null,
+    isAdmin: true,
+  },
+};
+
+function renderLayout(initialPath = "/", account: Account | null = null) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <Layout account={null} onSignedOut={() => {}} />
+      <Layout account={account} onSignedOut={() => {}} />
     </MemoryRouter>,
   );
 }
@@ -51,6 +92,31 @@ function navLinks() {
   return screen.getByRole("navigation", { name: "主导航" }).querySelectorAll("a");
 }
 
+/**
+ * 导航标签（TASK-110 后普通用户为 7 项；管理员多一项「后台」）。
+ *
+ * 把期望写成常量而不是散在各用例：导航顺序是**用户指定的信息架构**（TASK-086/100），
+ * 新增一项时必须在这里显式改一次（而不是让某条断言“恰好也过了”）。
+ */
+const NAV_LABELS = [
+  "控制台",
+  "项目",
+  "接入指南",
+  "API Key",
+  "历史记录",
+  "账户",
+  "设置",
+];
+const NAV_HREFS = [
+  "/",
+  "/projects",
+  "/connect",
+  "/keys",
+  "/history",
+  "/account",
+  "/settings",
+];
+
 /** 取某个导航项的高亮 class；找不到就抛出（而不是断言非空）。 */
 function navLinkClass(label: string): string {
   const link = [...navLinks()].find((item) => item.textContent === label);
@@ -59,30 +125,16 @@ function navLinkClass(label: string): string {
 }
 
 describe("主导航（TASK-086 §1 / TASK-088 §F / TASK-100 §需求4）", () => {
-  it("顺序为 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 设置", () => {
-    renderLayout();
+  it("顺序为 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 账户 → 设置", () => {
+    renderLayout("/", PUBLIC_ACCOUNT);
 
-    expect([...navLinks()].map((link) => link.textContent)).toEqual([
-      "控制台",
-      "项目",
-      "接入指南",
-      "API Key",
-      "历史记录",
-      "设置",
-    ]);
+    expect([...navLinks()].map((link) => link.textContent)).toEqual(NAV_LABELS);
   });
 
   it("插入项目项后，其余各项的路径一个都没变", () => {
-    renderLayout();
+    renderLayout("/", PUBLIC_ACCOUNT);
 
-    expect([...navLinks()].map((link) => link.getAttribute("href"))).toEqual([
-      "/",
-      "/projects",
-      "/connect",
-      "/keys",
-      "/history",
-      "/settings",
-    ]);
+    expect([...navLinks()].map((link) => link.getAttribute("href"))).toEqual(NAV_HREFS);
   });
 
   it("控制台仍指向 / 且 end 生效：/connect 时它不高亮", () => {
@@ -113,21 +165,46 @@ describe("主导航（TASK-086 §1 / TASK-088 §F / TASK-100 §需求4）", () =
   it("账户名与登出仍在侧边栏底部（TASK-098 §C）", () => {
     render(
       <MemoryRouter initialEntries={["/"]}>
-        <Layout
-          account={{
-            userId: "u1",
-            name: "owner",
-            createdAt: 1789300000,
-            isLocal: false,
-            via: "session",
-          }}
-          onSignedOut={() => {}}
-        />
+        <Layout account={PUBLIC_ACCOUNT} onSignedOut={() => {}} />
       </MemoryRouter>,
     );
 
     const sidebar = screen.getByTestId("sidebar");
     expect(sidebar.textContent).toContain("owner");
     expect(sidebar.textContent).toContain("登出");
+  });
+});
+
+describe("身份分级（TASK-110）", () => {
+  it("普通（公测）用户看不到「后台」入口", () => {
+    renderLayout("/", PUBLIC_ACCOUNT);
+    expect([...navLinks()].map((link) => link.textContent)).not.toContain("后台");
+  });
+
+  it("内测用户也看不到「后台」入口（它不是管理员）", () => {
+    renderLayout("/", BETA_ACCOUNT);
+    expect([...navLinks()].map((link) => link.textContent)).not.toContain("后台");
+  });
+
+  it("管理员能看到「后台」入口且指向 /admin", () => {
+    renderLayout("/", ADMIN_ACCOUNT);
+    const admin = [...navLinks()].find((link) => link.textContent === "后台");
+    expect(admin).toBeDefined();
+    expect(admin?.getAttribute("href")).toBe("/admin");
+  });
+
+  it("内测用户的编号展示为 拓荒者 #027（三位补零）", () => {
+    renderLayout("/", BETA_ACCOUNT);
+    expect(screen.getByTestId("sidebar-title").textContent).toBe("拓荒者 #027");
+  });
+
+  it("无编号的用户只展示头衔", () => {
+    renderLayout("/", PUBLIC_ACCOUNT);
+    expect(screen.getByTestId("sidebar-title").textContent).toBe("旅人");
+  });
+
+  it("本地模式不展示身份徽章（它没有身份体系）", () => {
+    renderLayout("/", { ...PUBLIC_ACCOUNT, isLocal: true });
+    expect(screen.queryByTestId("sidebar-title")).toBeNull();
   });
 });

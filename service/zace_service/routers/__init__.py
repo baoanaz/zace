@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from zace_service.routers import auth, ops, projects, query, sync
+from zace_service.routers import admin, auth, ops, projects, query, sync
 
 __all__ = ["all_routers"]
 
 
 def all_routers() -> tuple[APIRouter, ...]:
     """返回全部路由（``create_app`` 的唯一挂载点）。"""
-    return (ops.router, auth.router, projects.router, sync.router, query.router)
+    return (ops.router, auth.router, admin.router, projects.router, sync.router, query.router)

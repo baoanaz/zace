@@ -68,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine_manager = None  # TASK-031 懒构造/测试注入
     # TASK-060：云瑞形态才需要元数据库；本地模式不建库（R34：无账户体系）。
     app.state.meta_db = MetaDB.open(resolved.meta_db_path) if resolved.auth_required else None
+    _promote_admin(app.state.meta_db, resolved)
 
     install_error_handlers(app)
     # 中间件**由内向外**装配：``@app.middleware`` 是「后注册者在外层」，因此下面两个调用的
@@ -92,6 +93,28 @@ PUBLIC_PATHS = (
     "/api/auth/bootstrap",
     "/api/auth/logout",
 )
+
+
+def _promote_admin(db: MetaDB | None, settings: Settings) -> None:
+    """启动时把 ``Settings.admin_name`` 指定的账户提为管理员（TASK-110 §7.1）。
+
+    为什么在**启动**做而不是只放在迁移里：目标账户可能在首次启动时还不存在
+    （全新部署先把库建出来、再用已属管理员的 bootstrap 建首个账户），也可能被删了重建。
+    每次启动幂等地补一刀，比"迁移跑一次、之后改名就再也没人提得上"可靠。
+
+    为什么按名字而不是"最早创建者"：真实部署里先建的未必是负责人（先来试手的同事、
+    迁移前的临时账号）。定名字可预测（卡内 §7.1 用户拍板）。
+
+    找不到该名字时**只记一行日志**，不报错：空库时它本来就还不存在
+    （那个路径由 ``POST /api/auth/bootstrap`` 直接授予管理员）。
+    """
+    if db is None or not settings.admin_name:
+        return
+    promoted = db.promote_first_admin(settings.admin_name)
+    if promoted is None:
+        logger.info("未找到指定的管理员账户（可能尚未注册）：name=%s", settings.admin_name)
+    elif promoted.role == "admin":
+        logger.info("管理员账户已就绪：name=%s", promoted.name)
 
 
 def _install_auth(app: FastAPI, settings: Settings) -> None:

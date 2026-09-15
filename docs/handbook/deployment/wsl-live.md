@@ -97,6 +97,10 @@ ANSWER_PROVIDER=DeepSeek
 ANSWER_MAX_CONTEXT_TOKENS=1048576
 EMBED_TPM=16000000
 EMBED_RPM=2000
+
+# TASK-110 §7.1：首个管理员按**名字**指定（默认值就是 xuwenzheng，显式写出便于换部署人）。
+# 服务启动时把它提为 role='admin'；账户不存在时只记一行日志，不报错。
+ZACE_ADMIN_NAME=xuwenzheng
 EOF
 chmod 600 ~/.config/zace/live.env
 ```
@@ -105,7 +109,7 @@ chmod 600 ~/.config/zace/live.env
 
 ```bash
 ls -l ~/.config/zace/live.env
-grep -E '^(ZACE_DATA_ROOT|ANSWER_MODEL)=' ~/.config/zace/live.env
+grep -E '^(ZACE_DATA_ROOT|ANSWER_MODEL|ZACE_ADMIN_NAME)=' ~/.config/zace/live.env
 ```
 
 > 隐私包里已带这份文件的模板与恢复脚本，见

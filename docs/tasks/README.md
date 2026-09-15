@@ -13,7 +13,7 @@
 
 | 卡 | 标题 | 阶段 | 硬依赖 | 状态 |
 |---|---|---|---|---|
-| [TASK-110](TASK-110-邀请码与身份分级.md) | **邀请码注册 + 身份分级（管理员/内测/公测）+ 头衔编号 + 管理员后台** | Phase 4+（增长运营） | TASK-060/061/094 ✅ | pending |
+| [TASK-110](TASK-110-邀请码与身份分级.md) | **邀请码注册 + 身份分级（管理员/内测/公测）+ 头衔编号 + 管理员后台** | Phase 4+（增长运营） | TASK-060/061/094 ✅ | **review** |
 | [TASK-109](TASK-109-EvidenceGap二轮补检.md) | **Evidence-Gap 二轮补检**（D-19 落地：候选已索引但没召回） | Phase 5+（质量） | TASK-108 ✅ | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | 真实使用数据采集闭环 | Phase 2（M2b） | TASK-084 ✅ / TASK-091 ✅ | pending |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（**由 TASK-093 落地**） | Phase 2 | TASK-040 ✅ | pending |
@@ -66,7 +66,7 @@ TASK-023（随 TASK-093 落地回填，不单独开工）
 | Phase 3 | TASK-060 ~ TASK-064、TASK-097 | [`archive/`](archive/) |
 | Phase 4 | TASK-070 ~ TASK-099 | [`archive/`](archive/) |
 | Phase 5+（质量） | TASK-101 ~ TASK-108 | [`archive/`](archive/) |
-| Phase 4+（增长运营） | TASK-110（进行中） | 本目录 |
+| Phase 4+（增长运营） | TASK-110（**review**，P1–P4 已实现） | 本目录 |
 
 已归档卡的**执行记录里保留了当时的实测证据与设计偏差**，是回溯决策的首选来源。
 

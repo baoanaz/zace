@@ -38,6 +38,9 @@ from tests.conftest import make_app, make_client
 #: - TASK-090：按 trace id 查请求日志（只读；只查自己的）。
 #: - TASK-099 §B/§C：一次 Tool 调用的时间线（``/api/calls/{callId}``，客户端经
 #:   ``X-Request-Id`` 头承载 callId）与**用户级 LLM 配置**的写入/删除。
+#: - TASK-110：管理员后台五模块（``/api/admin/*``）。它们的**形态**是冻结的（路径 + 方法），
+#:   本卡同时把它们写进了 ``docs/contracts/openapi.yaml``（用户 2026-09-15 拍板：
+#:   开发期不做向后兼容妥协，直接按最终形态改契约）。
 #:
 #: TASK-099 的两个/三个新路径已列入任务卡 §D 的 **L2 契约申请**，等编排者把它写入
 #: ``docs/contracts/openapi.yaml``（实施 AI 不动契约文件）；本白名单与实现同步先行，
@@ -57,6 +60,13 @@ TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
         "/api/usage/summary",
         "/api/calls/{callId}",
         "/api/request-log/{requestId}",
+        "/api/admin/users",
+        "/api/admin/users/{userId}",
+        "/api/admin/invites",
+        "/api/admin/invites/{code}",
+        "/api/admin/projects",
+        "/api/admin/stats",
+        "/api/admin/system",
     }
 )
 

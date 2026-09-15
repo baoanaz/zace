@@ -30,9 +30,11 @@ from pydantic import BaseModel
 
 from zace_service.auth import (
     SESSION_COOKIE,
+    TOKEN_PREFIX,
     authenticate,
     create_api_token,
     get_meta_db,
+    hash_api_token,
     hash_password,
     integrity_is_unique,
     issue_session,
@@ -44,6 +46,7 @@ from zace_service.auth import (
 )
 from zace_service.deps import get_settings
 from zace_service.errors import ApiError
+from zace_service.invites import InviteRejected, is_well_formed, normalize_code
 from zace_service.llmconfig import (
     SOURCE_SERVER,
     SOURCE_USER,
@@ -51,7 +54,14 @@ from zace_service.llmconfig import (
     resolve_llm_config,
 )
 from zace_service.logging import get_logger
-from zace_service.metadb import MetaDB
+from zace_service.metadb import MetaDB, User
+from zace_service.quota import effective_user_limit_bytes
+from zace_service.roles import (
+    CAN_CUSTOM_KEY,
+    ROLE_ADMIN,
+    normalize_role,
+    title_for,
+)
 
 router = APIRouter(tags=["auth"])
 
@@ -62,21 +72,43 @@ MIN_PASSWORD_CHARS = 3
 MAX_PASSWORD_CHARS = 200
 #: 账户名长度上限。
 MAX_NAME_CHARS = 64
+#: 自定义 Key 的正文最小长度（TASK-110 §3.4：**禁止短于 16 字符**——用户自选 Key 的熵
+#: 远低于服务端 256 位随机串，16 字符是这个数量级下的**下限**而不是推荐值）。
+MIN_CUSTOM_KEY_CHARS = 16
+#: 自定义 Key 的正文长度上限（防超长输入；与随机 Key 的体量同量级）。
+MAX_CUSTOM_KEY_CHARS = 128
+#: 自定义 Key 正文的允许字符集（URL-safe base64 子集 + ``-``/``_``：能安全放进场景里的
+#: 各种配置与命令行，不需要额外转义）。
+CUSTOM_KEY_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
 #: LLM 配置字段的长度上限（防超长输入：URL/模型名/Key 都是小串）。
 MAX_LLM_FIELD_CHARS = 2048
 
 
 class Credentials(BaseModel):
-    """注册/登录/初始化的请求体（CF-05 的 ``{name, password}``）。"""
+    """注册/登录/初始化的请求体（CF-05 的 ``{name, password}``）。
+
+    ``inviteCode``（TASK-110 §1.1）：**注册必填**（登录/初始化不用它——它们校验的是
+    已有账户）。为什么不是一个独立端点：注册表单本来就在提交这三个值，拆成
+    "先验码再注册"会多一次往返，且中间失败时用户会以为码已被消耗。
+    """
 
     name: str = ""
     password: str = ""
+    inviteCode: str = ""
 
 
 class TokenRequest(BaseModel):
-    """创建 API Key 的请求体（``name`` 可省略）。"""
+    """创建 API Key 的请求体。
+
+    ``key``（TASK-110 §3.4）：自定义 Key 的**明文**（拓荒者/管理员特权）。空串 = 让服务端
+    随机生成（默认行为，逐字不变）。非特权用户传非空值 → 403（不是静默忽略：静默会让用户
+    以为自定义成功了）。
+    """
 
     name: str = ""
+    key: str = ""
 
 
 class LlmConfigRequest(BaseModel):
@@ -303,21 +335,53 @@ def _embedding_missing(config: Any) -> list[str]:
 
 @router.post("/api/auth/register", status_code=201)
 def register(payload: Credentials, request: Request, response: Response) -> dict[str, Any]:
-    """注册账户；完整服务模式始终可用。"""
+    """注册账户（TASK-110 §1.1：**必须有邀请码**）。
+
+    流程：校验字段 → 核销邀请码并原子建账户（``MetaDB.create_user_with_invite``，
+    一个事务里完成，不会出现"码耗了但账户没建"）→ 按码的类型授予角色/头衔/编号 → 签会话。
+
+    错误码：
+
+    - ``invalid_invite`` 400：无码、形状不对、不存在、已失效、已过期、已用尽**同一文案**
+      （注册是未登录端点，区分原因会变成"这个码存不存在"的探测面；细因只进日志）；
+    - ``name_taken`` 409：重名（此时事务已回滚，**码不会被浪费**）；
+    - ``invalid_name`` / ``invalid_password`` 400。
+    """
     settings = get_settings(request)
     _require_remote(settings.local_mode)
     name, password = _validate_credentials(payload)
+    code = normalize_code(payload.inviteCode)
+    if not code:
+        raise ApiError(
+            code="invalid_invite",
+            message="注册需要邀请码：请在注册页填入收到的 6 位邀请码",
+            status=400,
+        )
+    if not is_well_formed(code):
+        raise ApiError(
+            code="invalid_invite",
+            message="邀请码格式不正确（应为 6 位字母，如 A7K2M9）",
+            status=400,
+        )
     db = get_meta_db(request)
     try:
-        user = db.create_user(name, hash_password(password))
+        user, _kind = db.create_user_with_invite(name, hash_password(password), code=code)
+    except InviteRejected as exc:
+        logger.info("注册被拒（邀请码）：code=%s reason=%s", exc.code, exc.reason)
+        raise ApiError(
+            code="invalid_invite",
+            message="邀请码无效、已失效或已用尽：请确认后重试，或联系管理员获取新的邀请码",
+            status=400,
+        ) from None
     except sqlite3.IntegrityError as exc:
         if integrity_is_unique(exc):
             raise ApiError(
                 code="name_taken", message=f"账户名已被占用：{name}", status=409
             ) from None
         raise
+    logger.info("注册成功：name=%s role=%s no=%s", user.name, user.role, user.early_member_no)
     _set_session_cookie(response, issue_session(db, user.id), settings)
-    return {"userId": user.id, "name": user.name, "createdAt": user.created_at}
+    return {**user.to_json(quota_bytes=_quota_for(settings, user)), "via": "session"}
 
 
 @router.post("/api/auth/bootstrap", status_code=201)
@@ -326,6 +390,11 @@ def bootstrap(payload: Credentials, request: Request, response: Response) -> dic
 
     为什么保留：它为首个账户提供原子初始化语义，避免并发部署时产生多个首任账户。
     已有用户时返回 403，**不得**用它创建第二个账户，也不得覆盖第一个。
+
+    TASK-110 §7.1：这条路径建的账户**直接是管理员**（``role='admin'``）。
+    否则是死锁——邀请码只能由管理员创建，而空库里没有任何管理员。
+    与之呼应：**已有库**里谁是管理员由 ``Settings.admin_name`` 指定（见 ``app.py`` 启动提升），
+    不依赖"最早创建者"。
     """
     settings = get_settings(request)
     _require_remote(settings.local_mode)
@@ -338,21 +407,27 @@ def bootstrap(payload: Credentials, request: Request, response: Response) -> dic
             status=403,
         )
     try:
-        user = db.create_user(name, hash_password(password))
+        user = db.create_user(
+            name, hash_password(password), role=ROLE_ADMIN
+        )
     except sqlite3.IntegrityError as exc:  # 并发初始化：另一个请求已经建好了
         if integrity_is_unique(exc):
             raise ApiError(
                 code="already_initialized", message="已存在账户，初始化接口已关闭", status=403
             ) from None
         raise
-    logger.info("初始化首个账户：%s", user.name)
+    logger.info("初始化首个账户：%s（管理员）", user.name)
     _set_session_cookie(response, issue_session(db, user.id), settings)
-    return {"userId": user.id, "name": user.name, "createdAt": user.created_at}
+    return {**user.to_json(quota_bytes=_quota_for(settings, user)), "via": "session"}
 
 
 @router.post("/api/auth/login")
 def login(payload: Credentials, request: Request, response: Response) -> dict[str, Any]:
-    """登录（签发 httpOnly session cookie）。账户不存在与密码错误**同一文案**。"""
+    """登录（签发 httpOnly session cookie）。账户不存在与密码错误**同一文案**。
+
+    TASK-110：**已封禁的账户**用同一句 401 文案拒绝（不告诉对方"你被封了"——
+    那会让他知道账户确实存在且是我们封的；排查靠日志）。
+    """
     settings = get_settings(request)
     _require_remote(settings.local_mode)
     name = payload.name.strip()
@@ -363,8 +438,11 @@ def login(payload: Credentials, request: Request, response: Response) -> dict[st
             code="unauthorized", message="账户名或密码不正确", status=401
         )
     user = found[0]
+    if user.banned:
+        logger.warning("已封禁账户尝试登录：user=%s", user.id)
+        raise ApiError(code="unauthorized", message="账户名或密码不正确", status=401)
     _set_session_cookie(response, issue_session(db, user.id), settings)
-    return {"userId": user.id, "name": user.name, "createdAt": user.created_at}
+    return {**user.to_json(quota_bytes=_quota_for(settings, user)), "via": "session"}
 
 
 @router.post("/api/auth/logout")
@@ -380,9 +458,16 @@ def logout(request: Request, response: Response) -> Response:
 
 @router.get("/api/auth/me")
 def me(request: Request) -> dict[str, Any]:
-    """当前身份（web 每次加载据此判断"登录了没、我是谁"）。
+    """当前身份（web 每次加载据此判断"登录了没、我是谁、我能做什么"）。
 
     本地模式返回隐式账户（``isLocal=true``），因此 web 首屏不必特判。
+
+    TASK-110 §3.3：在原有字段之上追加 ``role`` / ``title`` / ``earlyMemberNo`` / ``capabilities``。
+    能力位由 ``roles.capabilities_for`` 生成（**后端是唯一事实源**）：前端的"拓荒者特权"提示
+    直接读它，不在 React 里另写一份角色判断——两处各写一份必然会漂移。
+
+    本地模式的隐式账户是公测档（无账户体系就谈不上特权），但它不是管理员：
+    因此 ``/api/admin/*`` 在本地模式下仍然 403（诚实性：不假装本地就拥有一切权限）。
     """
     principal = require_user(request)
     user = principal.user
@@ -392,20 +477,66 @@ def me(request: Request) -> dict[str, Any]:
         "createdAt": user.created_at,
         "isLocal": user.is_local,
         "via": principal.via,
+        "role": normalize_role(user.role),
+        "title": title_for(user.role),
+        "earlyMemberNo": user.early_member_no,
+        "capabilities": user.to_json(quota_bytes=_quota_for(get_settings(request), user))[
+            "capabilities"
+        ],
     }
 
 
 @router.post("/api/auth/tokens")
 def create_token(payload: TokenRequest, request: Request) -> dict[str, Any]:
-    """创建 API Key（**明文仅此一次返回**）。"""
+    """创建 API Key（**明文仅此一次返回**）。
+
+    TASK-110 §3.4：``key`` 非空 = **自定义 Key**（拓荒者/管理员特权）。规则：
+
+    - 必须以 ``zace_`` 开头（用户要求"保证 zace_ 固定开头"，客户端配置与文档都按它识别）；
+    - 正文长度 16~128，字符集 ``[A-Za-z0-9_-]``；
+    - 无特权用户传非空值 → **403 + 明确文案**（不是静默忽略：静默会让用户以为自定义成功了，
+      拿到手的却是随机 Key）；
+    - 与既有 Key 冲突 → 409（唯一索引，与随机 Key 同一条路径）。
+
+    自定义与随机**共用全部下游逻辑**（存储、校验、撤销、列表）：差异只是"明文谁选的"，
+    因此没有任何理由做成分支式的第二套逻辑。
+    """
     principal = require_user(request)
     _require_remote(get_settings(request).local_mode)
-    raw, digest, prefix = create_api_token()
+    custom = payload.key.strip()
+    if custom:
+        _validate_custom_key(custom, user=principal.user)
+        raw = custom
+        digest = hash_api_token(raw)
+        prefix = raw[: len(TOKEN_PREFIX) + 6]
+        is_custom = True
+    else:
+        raw, digest, prefix = create_api_token()
+        is_custom = False
     db = get_meta_db(request)
-    token_id = db.create_token(
-        principal.user.id, token_hash=digest, prefix=prefix, name=payload.name.strip()
-    )
-    return {"id": token_id, "token": raw, "prefix": prefix, "name": payload.name.strip()}
+    try:
+        token_id = db.create_token(
+            principal.user.id,
+            token_hash=digest,
+            prefix=prefix,
+            name=payload.name.strip(),
+            is_custom=is_custom,
+        )
+    except sqlite3.IntegrityError as exc:
+        if integrity_is_unique(exc):
+            raise ApiError(
+                code="key_taken",
+                message="这个 Key 已被使用：换一个（Key 的哈希在库里唯一，重复的明文必须唯一）",
+                status=409,
+            ) from None
+        raise
+    return {
+        "id": token_id,
+        "token": raw,
+        "prefix": prefix,
+        "name": payload.name.strip(),
+        "isCustom": is_custom,
+    }
 
 
 @router.get("/api/auth/tokens")
@@ -508,6 +639,61 @@ def _validate_llm_config(model: str, base_url: str, api_key: str) -> None:
         raise ApiError(
             code="invalid_llm_config",
             message="baseUrl 必须以 http:// 或 https:// 开头（请填 OpenAI 兼容的 /v1 地址）",
+            status=400,
+        )
+
+
+def _quota_for(settings: Any, user: User) -> int:
+    """该用户实际生效的索引空间上限（展示与硬拒**共用**这一个口径）。"""
+    return effective_user_limit_bytes(settings, role=user.role, override=user.quota_bytes)
+
+
+def _validate_custom_key(raw: str, *, user: User) -> None:
+    """自定义 Key 的准入校验（TASK-110 §3.4）。**先判特权，再判格式**。
+
+    顺序有意如此：无特权用户任何输入都该得到 403（"这是拓荒者特权"），
+    而不是在他面前把格式规则一条条校验一遍——先讲格式会把"你没这个权限"变成"你格式错了"，
+    用户会一直换格式试（卡内明确要求"不是静默忽略，而是明确说明这是拓荒者特权"）。
+    """
+    if normalize_role(user.role) not in CAN_CUSTOM_KEY:
+        raise ApiError(
+            code="custom_key_forbidden",
+            message=(
+                "自定义 API Key 是【拓荒者】特权（内测玩家与管理员可用）："
+                "当前身份不支持自定义，请让服务端随机生成（不传 key 即可）"
+            ),
+            status=403,
+        )
+    if not raw.startswith(TOKEN_PREFIX):
+        raise ApiError(
+            code="invalid_custom_key",
+            message=f"自定义 Key 必须以 {TOKEN_PREFIX} 开头（例：{TOKEN_PREFIX}myproject2026）",
+            status=400,
+        )
+    body = raw[len(TOKEN_PREFIX) :]
+    if len(body) < MIN_CUSTOM_KEY_CHARS:
+        raise ApiError(
+            code="invalid_custom_key",
+            message=(
+                f"自定义 Key 的随机部分至少 {MIN_CUSTOM_KEY_CHARS} 个字符"
+                f"（自选 Key 的熵远低于服务端随机串，太短容易被猜中）"
+            ),
+            status=400,
+        )
+    if len(raw) > MAX_CUSTOM_KEY_CHARS:
+        raise ApiError(
+            code="invalid_custom_key",
+            message=f"自定义 Key 过长（上限 {MAX_CUSTOM_KEY_CHARS} 字符）",
+            status=400,
+        )
+    illegal = sorted({char for char in body if char not in CUSTOM_KEY_ALPHABET})
+    if illegal:
+        raise ApiError(
+            code="invalid_custom_key",
+            message=(
+                "自定义 Key 只能用字母、数字、``-`` 与 ``_``"
+                f"（不允许：{' '.join(illegal)}）"
+            ),
             status=400,
         )
 

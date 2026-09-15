@@ -1,12 +1,63 @@
 # Agent 接入手册（API Key + `npx zace-client`）
 
-> 状态：2026-09-14 编排者实测（本机 WSL2，逐条命令真实跑过）。
+> 状态：2026-09-14 编排者实测（本机 WSL2，逐条命令真实跑过）；
+> **2026-09-15 TASK-110 更新：注册改为邀请制，API Key 支持自定义（拓荒者特权）。**
 > 结论：**用户期望的接入形态已经可用**，无需改代码。
 > 配套：`docs/handbook/getting-started/cloud-embedding.md`（embedding 配置）、`docs/handbook/getting-started/M2a-验收手册.md`（本地模式 demo）。
 
 ## 0. 一句话
 
-网页/CLI 建用户 → 建 API Key → 把 `npx zace-client --base-url <URL> --token <KEY>` 填进编辑器 → 即可用真实问题检索。
+管理员发邀请码 → 用户注册 → 建 API Key → 把 `npx zace-client --base-url <URL> --token <KEY>` 填进编辑器 → 即可用真实问题检索。
+
+## 0.1 邀请码与身份分级（TASK-110）
+
+**注册必须有邀请码**（`POST /api/auth/register` 的 `inviteCode` 字段）——不传会得到 400 `invalid_invite`。
+
+码面是 **6 位大写字母/数字**，**首字母即类型**：
+
+| 首字母 | 身份 | 头衔 | 索引空间 | 自定义 Key |
+|---|---|---|---|---|
+| `A` | 管理员 | 执炬者 | 5 GiB | ✅ |
+| `B` | 内测玩家 | 拓荒者（前 100 名**带编号**） | 1 GiB | ✅ |
+| `C` | 公测玩家 | 旅人 | 500 MiB | ❌ |
+
+管理员在后台（`/admin`）的**邀请码**页创建/失效邀请码，可指定类型、可用次数与有效期。
+
+```console
+# 管理员建一张内测码（需管理员 Key 或登录会话）
+$ curl -s -X POST http://127.0.0.1:8787/api/admin/invites \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $ADMIN_KEY" \
+    -d '{"kind":"B","maxUses":1,"expiresInDays":7}'
+{"code":"B3NQ8W","kind":"B","createdAt":1789473787,"maxUses":1,"usedCount":0,"revokedAt":null}
+
+# 用它注册（**必须**带 inviteCode）
+$ curl -s -X POST http://127.0.0.1:8787/api/auth/register \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"early-bird","password":"...","inviteCode":"B3NQ8W"}'
+# → role=beta, title=拓荒者, earlyMemberNo=1, capabilities.canCustomKey=true
+```
+
+**首个账户**不需要邀请码：空库时 `POST /api/auth/bootstrap` 建的账户**直接是管理员**
+（否则是死锁——邀请码只能由管理员创建）。已有库里谁是管理员由 `ZACE_ADMIN_NAME`
+（默认 `xuwenzheng`）在服务启动时按**名字**指定，不依赖"最早创建者"。
+
+### 自定义 API Key（拓荒者 / 管理员）
+
+```console
+$ curl -s -X POST http://127.0.0.1:8787/api/auth/tokens \
+    -H 'Content-Type: application/json' -b cookies.txt \
+    -d '{"name":"my-key","key":"zace_my-project-2026"}'
+{"id":"...","token":"zace_my-project-2026","prefix":"zace_my-pro","isCustom":true}
+```
+
+规则：必须以 `zace_` 开头；其后 **≥16 个字符**，字符集 `[A-Za-z0-9_-]`；与既有 Key 冲突 → 409。
+无特权身份传 `key` → **403 `custom_key_forbidden`**（不是静默忽略——静默会让人以为自定义成功、
+拿到的却是随机 Key）。不传 `key` 时行为与以前**逐字一致**（服务端随机生成）。
+
+### 配额（超限硬拒上传）
+
+索引空间按身份生效（上表）。**超过上限时新的索引上传会被拒绝**（413 `quota_exceeded`），
+**检索与已有项目不受影响**——删掉不再需要的项目即可释放空间。
 
 ## 1. 接入形态（编辑器配置）
 
@@ -53,18 +104,21 @@ $ curl -s http://127.0.0.1:8787/api/meta
 
 ### 3.1 首个用户（bootstrap）
 
-全新部署的网页会自动显示初始化页；bootstrap 用原子方式创建第一个账户。初始化完成后，普通注册仍然可用。
+全新部署的网页会自动显示初始化页；bootstrap 用原子方式创建第一个账户。
+**TASK-110 起该账户直接是管理员**（空库时没有别的方式能造出第一张邀请码）。
 
 ```console
 $ curl -s -X POST http://127.0.0.1:8787/api/auth/bootstrap \
     -H 'Content-Type: application/json' \
     -d '{"name":"me","password":"correct-horse-battery"}' -c cookies.txt
-{"userId":"6dea905f5f061860ccccc713cba8910f","name":"me","createdAt":1789307272}
+{"userId":"6dea905f5f061860ccccc713cba8910f","name":"me","role":"admin","title":"执炬者",...}
 ```
 
 - 字段是 **`name`**（不是 email）；长度 ≤64。
 - 成功即自动登录（写 httpOnly session cookie 到 `cookies.txt`）。
 - 已有用户时返回 403 `already_initialized`——**不会**创建第二个，也不会覆盖。
+
+**后续用户注册必须有邀请码**（见 §0.1）：该账户已是管理员，可立刻去后台建码。
 
 ### 3.2 创建 API Key
 
@@ -147,10 +201,16 @@ tools/call search_context → isError=True
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 401 `unauthorized` | 没带 key / key 错 / key 已撤销 | 检查 `--token`；在控制台重建 key |
+| 401 `unauthorized` | 没带 key / key 错 / key 已撤销 / **账户已被封禁** | 检查 `--token`；在控制台重建 key；若被封禁请联系管理员 |
+| 400 `invalid_invite` | 注册没填邀请码、码形状不对、或码无效/已失效/已用尽 | 向管理员索要新码（**码不存在与已用尽的文案相同**，这是刻意的反枚举设计） |
+| 403 `custom_key_forbidden` | 以公测身份传了自定义 Key | 自定义 Key 是拓荒者特权：不传 `key` 让服务端随机生成，或联系管理员提升身份 |
+| 400 `invalid_custom_key` | 自定义 Key 不以 `zace_` 开头 / 短于 16 字符 / 含非法字符 | 见 §0.1 的格式规则 |
+| 409 `key_taken` | 该 Key 明文已被使用过 | 换一个；随机生成的 Key 不会撞（256 位随机） |
+| 413 `quota_exceeded` | 索引空间超过当前身份的额度 | 在控制台删除不再需要的项目，或联系管理员调整配额 |
+| 403 `admin_required` | 非管理员访问 `/api/admin/*` | 后台仅管理员可用 |
 | 400 `project_id_required` | 非本地模式下检索必须显式给 `projectId` | 这是 R37 的设计（省略仅限本地模式）；client 会先 `resolve` 拿到 id |
 | 403 `local_mode` | 对显式 `local` 命令启动的服务调用账户接口 | 改用普通 `zace-service serve` |
-| 403 `already_initialized` | 已有用户还调 bootstrap | 改用登录或注册 |
+| 403 `already_initialized` | 已有用户还调 bootstrap | 改用登录或注册（注册需邀请码） |
 | `npx zace-client` 无输出 | 它是 **MCP stdio 服务**，等 stdin 上的 JSON-RPC | 正常。用编辑器或 MCP SDK 客户端连它 |
 | client 报 401 但 token 是对的 | Key 已撤销、输错或不属于当前服务 | 在网页控制台重建 Key |
 | 连不上 127.0.0.1 | 本机 `http_proxy` 拦截 | `NO_PROXY=127.0.0.1,localhost` |
@@ -161,9 +221,9 @@ tools/call search_context → isError=True
 |---|---|
 | 浏览器 UI 走完整流程（登录 → 建 key → 复制） | **未验证**（WebUI 在 TASK-070 推进中） |
 | 编辑器（Cursor/Codex/Claude/pi）里真实接入 | **未验证**（本手册用 MCP SDK 模拟了协议层） |
-| 多用户隔离（A 用户的 key 看不到 B 的项目） | **未实现**（TASK-061 租户双层，pending） |
+| 多用户隔离（A 用户的 key 看不到 B 的项目） | **已实现**（TASK-061 租户双层） |
 | TLS / 域名 / 反向代理 | **未实现**（TASK-063 部署，pending） |
 | 远端场景下的完整同步（大仓库首次上传） | 部分验证（client 的 resolve/upload 路径已通，大规模未压测） |
 
-**当前可用的边界**：单用户、HTTP（非 HTTPS）、本机或内网。
-公网部署前必须先做 TASK-061（租户隔离）与 TASK-063（TLS）。
+**当前可用的边界**：HTTP（非 HTTPS）、本机或内网。
+公网部署前必须先做 TASK-063（TLS）。

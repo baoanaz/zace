@@ -343,4 +343,81 @@ CAN_CUSTOM_KEY = {ROLE_ADMIN, ROLE_BETA}   # 自定义 Key 是内测/管理员�
 
 ## 9. 执行记录
 
-（实施 AI 在此填写：日期 + 分支 + 验收命令与结果 + 与设计的偏差 + 未决问题。）
+### 2026-09-15 · lane-c · `feature/task-110-invites-roles_xwz0915`（P1–P4 全部完成）
+
+#### 开工前与用户确认的 5 个决策（本卡 §7 待确认项）
+
+| # | 问题 | 用户拍板 |
+|---|---|---|
+| 1 | 邀请码格式 | **首字母即类型 + 5 位随机**（`A7K2M9`），不是"纯随机 + 类型存字段" |
+| 2 | 实施范围 | **P1–P4 全做** |
+| 3 | `/api/auth/me` 契约变更 | **不做向后兼容妥协**，直接按最终形态改（开发期；后期可重开服务） |
+| 4 | 配额语义 | **超限硬拒新索引**（上传 413；检索仍只告警，读路径不变） |
+| 5 | 项目数上限（卡内 §3.3 的能力位与 §1.5 的矛盾） | **不设项目数上限**（能力位里不出现 `projectLimit`） |
+
+#### 验收命令与结果
+
+```console
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest -o addopts="" -q
+1107 passed, 2 skipped   # 基线 1033 passed（新增 74 条；含 test_invites.py 43 条 + test_admin.py 31 条）
+$ cd web && npx tsc --noEmit && npx eslint src --max-warnings 0 && npm run build
+✅ tsc 无输出 ｜ ✅ eslint 无输出 ｜ ✅ vite build 成功（49 modules）
+$ cd web && npx vitest run
+96 passed, 3 skipped, 1 failed
+     ↑ 唯一失败是 ``History.trace.test.tsx`` 的「查看」弹窗用例，
+       已用 ``git stash`` 在干净 main 上复现（**预先存在**，与本卡无关）。
+       本卡新增：identity.test.tsx 9 条 + App.test.tsx 邀请码 4 条。
+```
+
+#### 真实库迁移实测（卡内 §5 的“迁移路径”验收项）
+
+在本机 live 库的**副本**上跑（不动原库）：
+
+```console
+# 迁移前：xuwenzheng 是 public
+$ sqlite3 /tmp/t110/live-copy.db "select role from users where name='xuwenzheng'"
+# → 读不到 role 列（迁移前表里没有它）
+# 跑 create_app（含迁移 + 启动提升）后：
+me: 200 {'name': 'xuwenzheng', 'role': 'admin', 'title': '执炬者',
+         'capabilities': {'canCustomKey': True, 'quotaBytes': 5368709120, 'isAdmin': True}}
+projects: 200 0
+admin/users: 200          ← 旧 Key zace_123456 现在能访问后台（它属于管理员）
+admin/system: 200 ok
+```
+
+✅ 旧用户默认 `role=public`、旧 Key `zace_123456` **仍可用**（迁移只加列，不改 `token_hash`）。
+⚠️ **待执行**：本机 live 库（`~/.zace/live/zace-meta.db`）**尚未跑迁移**——下次重启服务时
+由 `create_app` 自动完成（幂等）。备份已在 §7.1 记录的 `zace-meta.db.bak-20260915-232108`。
+
+#### 与设计的偏差
+
+| # | 卡内原文 | 实际实现 | 理由 |
+|---|---|---|---|
+| 1 | §7-1 建议"6 位纯随机 + 类型存字段" | 首字母即类型 | **用户 2026-09-15 拍板**（可读性优先；码空间 36⁵≈6.0e7 仍不可盲猜） |
+| 2 | §1.1 散文写"6 位大写字母" | 实际是**大写字母 + 数字**（`[A-Z0-9]`） | 以卡内**示例码面**（`A7K2M9` / `B3NQ8W` / `C05RT2`）为准；用户看着这些示例拍的板 |
+| 3 | §3.3 能力位里有 `projectLimit: 10` | **不输出该字段** | **用户拍板不设项目数上限**；给 0/null 会被误读为“限制 0 个” |
+| 4 | §7-3 建议"先保持告警" | 上传**硬拒**（413 `quota_exceeded`），检索仍只告警 | **用户拍板**；检索不会让占用变大，拒绝它无意义 |
+| 5 | §3.1 "迁移按名字匹配提升为 admin" | 提升放在 **`create_app` 启动时**（不只在迁移里） | 目标账户可能在首次启动时还不存在；每次启动幂等补一刀比“迁移跑一次、改名后再也提不上”可靠 |
+| 6 | §3.5 `GET /api/admin/projects` 数据源仅 `index_runs` | 外加 `projects` 表的归属人与 `quota.project_usage_bytes` 的占用 | "排查异常索引"需要知道是谁的项目、有多大 |
+| 7 | §7-4 `/api/auth/me` 走契约流程 | **未改 `docs/contracts/openapi.yaml`** | 卡头 §“不得改”明令 `docs/contracts/**` 禁改；按 TASK-099 先例用 `test_skeleton.TASK_EXTENSION_PATHS` 白名单 + 本记录声明，**待编排者同步契约文件** |
+
+#### 重要实现细节（后续维护者必读）
+
+1. **核销与建账户在同一事务**（`MetaDB.create_user_with_invite`）：拆成两步一定有一个时刻"码已耗尽、账户还没建"，中间失败就是用户白丢一张码。并发用例 `test_concurrent_use_of_single_use_code_admits_exactly_one` 用 6 个真线程守它。
+2. **`roles.py` 是单一事实源**：`capabilities_for()` 是唯一的特权判定；后端（自定义 Key 准入）与前端展示都读它的输出。前端**不写** `role === "beta"`。
+3. **`quota.effective_user_limit_bytes()` 是唯一额度口径**：展示（`me` / `overview` / 告警）与硬拒（`enforce_upload_limit`）都调它——两处各算一遍必然漂移。
+4. **封禁在 `auth.authenticate` 统一拦截**（session 与 token 两条路）：封禁**立即**对所有凭据生效，且不用逐把撤销 Key。
+5. **`local` 隐式账户不是管理员**：本地模式调 `/api/admin/*` 得到 403（诚实性：本地不等于拥有一切权限）。
+6. **`quota_identity()` 在本地模式返回 `(None, None, None)`**：隐式账户 `"local"` 在 `users` 表里可能根本不存在，拿它去 `list_projects` 会返回空集 → 用量恒为 0 → 告警永不出现（一个静默失灵）。
+
+#### 未决问题 / 交接事项
+
+1. **契约文件待同步**（编排者）：`/api/admin/*` 七个路径 + `/api/auth/me` / `/api/auth/tokens` 的字段变化未写入 `docs/contracts/openapi.yaml`（卡头禁改）。`test_skeleton.TASK_EXTENSION_PATHS` 已列出精确路径集。
+2. **前端后台页未做浏览器实测**：`identity.test.tsx` 用桩 `fetch` 断言了“三身份看到的内容确实不同”，但**没有**对真实服务跑一次 E2E（`web/src/pages/e2e.test.tsx` 需要真实服务）。建议接入验证时补。
+3. **`History.trace.test.tsx` 的预存失败**：与本卡无关（干净 main 上同样失败），但会让 `npm test` 不绿——单独开卡修。
+4. **配额硬拒的 fail-open 选择**：统计失败时**放行**上传（而非拒绝）。理由见 `enforce_upload_limit` 的 docstring；若将来压测发现恶意用户能借此绕过，再改 fail-closed。
+5. **`EARLY_MEMBER_MAX` 之外的编号**：第 101 名起 `early_member_no` 为 `NULL`（卡内要求）。**但**后台把某人升为内测时会用 `_next_member_no` 补一个空缺号——若前 100 个号已发完则不给号。
