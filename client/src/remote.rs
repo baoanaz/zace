@@ -288,13 +288,16 @@ impl RemoteClient {
         Ok(body.markdown)
     }
 
-    /// `POST /api/query/ask`：Phase 2/3 均返回降级包（D-26），服务端已把说明写进 answer。
+    /// `POST /api/query/ask`：四个分支（D-24 短路 / D-26 降级 / TASK-088 LLM）共用同一信封。
+    ///
+    /// 返回 **已经拼好的展示文本**（``AskResponse::into_text``）——调用方不再需要知道
+    /// "这个分支有没有 answer"，四种情况的差别已经在那里处理完了。
     pub async fn ask(
         &self,
         project_id: &str,
         question: &str,
         checkpoint_id: Option<&str>,
-    ) -> Result<(String, String)> {
+    ) -> Result<String> {
         let payload = serde_json::json!({
             "projectId": project_id,
             "question": question,
@@ -304,7 +307,7 @@ impl RemoteClient {
             .request(self.general.post(self.url("/api/query/ask")), &payload)
             .await?;
         let body: AskResponse = response.json().await.context("ask 响应不是合法 JSON")?;
-        Ok((body.status, body.answer))
+        Ok(body.into_text())
     }
 
     fn url(&self, path: &str) -> String {
@@ -407,7 +410,67 @@ struct SearchResponse {
 #[derive(Deserialize)]
 struct AskResponse {
     status: String,
-    answer: String,
+    /// 四个分支共用同一响应信封（CF-05 / openapi.yaml 的 ``AskResponse``）：
+    ///
+    /// - ``answered`` / ``degraded``：有答案正文；
+    /// - ``insufficient_evidence``（D-24 短路）：**没有 ``answer``**，改给
+    ///   ``bestEffortContext`` + ``missingEvidence`` + ``nextQueries``。
+    ///
+    /// 契约（``docs/contracts/openapi.yaml``）明确写了 "insufficient_evidence 时不出现"，
+    /// 因此这里**必须**是 ``Option``——写成必填会让 D-24 短路路径整个反序列化失败，
+    /// 客户端只看到 "missing field `answer`"（真实故障：A2 题连续 3 次失败）。
+    #[serde(default)]
+    answer: Option<String>,
+    /// 证据不足时的尽力而为上下文包（``render_markdown(pack)``）。
+    #[serde(default, rename = "bestEffortContext")]
+    best_effort_context: Option<String>,
+    /// 证据不足时的缺口说明（可读文本，与 ``### Missing Evidence`` 同形）。
+    #[serde(default, rename = "missingEvidence")]
+    missing_evidence: Vec<String>,
+    /// 证据不足时的自愈查询建议。
+    #[serde(default, rename = "nextQueries")]
+    next_queries: Vec<String>,
+}
+
+impl AskResponse {
+    /// 响应 → 展示给 Agent 的文本（**四个分支都要有可用输出**，绝不空手）。
+    ///
+    /// 为什么在客户端拼而不是让服务端只回一个字段：服务端已把结构化缺口给全了，
+    /// 而 Agent 需要的是“一跟就能看懂”的一段文本——把前提、缺口、建议查询拼在一起，
+    /// 比让模型自己去解读 JSON 可靠（也与 ``search_context`` 返回 Markdown 的形态一致）。
+    fn into_text(self) -> String {
+        if let Some(answer) = self.answer {
+            return format!("[zace] status={}\n\n{answer}", self.status);
+        }
+        let mut parts = vec![format!(
+            "[zace] status={}（证据不足：按 D-24 不调用 LLM，以下是尽力而为的上下文）",
+            self.status
+        )];
+        if !self.missing_evidence.is_empty() {
+            parts.push(format!(
+                "## Missing Evidence\n{}",
+                self.missing_evidence
+                    .iter()
+                    .map(|item| format!("- {item}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        if !self.next_queries.is_empty() {
+            parts.push(format!(
+                "## Suggested Next Queries\n{}",
+                self.next_queries
+                    .iter()
+                    .map(|query| format!("- {query}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        if let Some(context) = self.best_effort_context {
+            parts.push(context);
+        }
+        parts.join("\n\n")
+    }
 }
 
 #[derive(Serialize)]
@@ -492,5 +555,51 @@ mod tests {
         assert!(validate_project_root("C:\\Users\\x").is_err());
         let dir = tempfile::tempdir().expect("temp dir");
         assert!(validate_project_root(&dir.path().to_string_lossy()).is_ok());
+    }
+
+    /// 契约回归（TASK-108）：``answer`` 是**可选**的（D-24 短路包不包含它）。
+    ///
+    /// 真实故障：`AskResponse.answer` 曾写成必填 ``String``，于是 ``answerable=false``
+    /// 时整个响应反序列化失败，Agent 只看到 ``missing field `answer` ```——
+    /// 而服务端返回的其实是完整的证据不足说明（契约 ``openapi.yaml`` 明写
+    /// "insufficient_evidence 时不出现"）。四个分支都必须能解出可用输出。
+    #[test]
+    fn ask_response_accepts_every_contract_branch() {
+        // ① answered：有 answer，无 bestEffortContext。
+        let answered: AskResponse = serde_json::from_value(serde_json::json!({
+            "status": "answered",
+            "answer": "结论 [E1]。"
+        }))
+        .expect("answered 分支必须可解");
+        let text = answered.into_text();
+        assert!(text.contains("status=answered"));
+        assert!(text.contains("结论 [E1]。"));
+
+        // ② insufficient_evidence（D-24 短路）：**没有 answer 字段**。
+        let short: AskResponse = serde_json::from_value(serde_json::json!({
+            "status": "insufficient_evidence",
+            "bestEffortContext": "## Relevant Context\n[E1] a.py:1-2",
+            "missingEvidence": ["[unresolved_reference] 缺 X"],
+            "nextQueries": ["X 在哪里实现"]
+        }))
+        .expect("D-24 短路包必须可解（旧实现正是在这里失败）");
+        let text = short.into_text();
+        assert!(text.contains("insufficient_evidence"));
+        assert!(text.contains("缺 X"), "缺口说明要如实转达");
+        assert!(text.contains("X 在哪里实现"), "建议查询要转达给 Agent");
+        assert!(text.contains("[E1] a.py:1-2"), "尽力而为的上下文不能丢");
+
+        // ③ degraded：有 answer（服务端把降级说明写进正文），无短路字段。
+        let degraded: AskResponse = serde_json::from_value(serde_json::json!({
+            "status": "degraded",
+            "answer": "未配置总结模型；以下为检索结果。"
+        }))
+        .expect("degraded 分支必须可解");
+        assert!(degraded.into_text().contains("未配置总结模型"));
+
+        // ④ 空信封：至少不能 panic（缺字段一律走默认）。
+        let bare: AskResponse = serde_json::from_value(serde_json::json!({"status": "answered"}))
+            .expect("缺字段走默认");
+        assert!(bare.into_text().contains("answered"));
     }
 }

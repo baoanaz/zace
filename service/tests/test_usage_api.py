@@ -339,8 +339,20 @@ def test_no_source_content_is_stored(usage: SimpleNamespace) -> None:
 
     evidence = json.loads(rows[0]["evidence_json"])
     assert evidence, "必须有证据元数据（否则统计没有意义）"
+    # TASK-108：字段集扩展了 symbol/group/reason（历史页要展示工具返回的**结构**：
+    # 分组 / 符号名 / 召回依据）。仍然**不含 content**（源码正文）——那是 04 §8 的红线。
     for item in evidence:
-        assert set(item) == {"id", "path", "lines", "tier", "score"}, item
+        assert set(item) == {
+            "id",
+            "path",
+            "lines",
+            "tier",
+            "score",
+            "symbol",
+            "group",
+            "reason",
+        }, item
+        assert "content" not in item
     # 证据里的源码正文（content）绝不在库里：拿一个只可能出现在代码正文的串来钉。
     assert "return \"old\"" not in rows[0]["evidence_json"]
     assert SAMPLE_MODULE_PATH in rows[0]["evidence_json"], "路径是元数据，应当保留"
@@ -459,8 +471,21 @@ def test_usage_and_overview_endpoints_agree(usage: SimpleNamespace) -> None:
 
 
 def test_evidence_meta_field_set_is_frozen() -> None:
-    """``evidence`` 落库字段集是冻结的（04 §8）：只增不改，且不含正文。"""
-    assert tuple(audit.evidence_field_names()) == ("id", "path", "lines", "tier", "score")
+    """``evidence`` 落库字段集是冻结的（04 §8）：只增不改，且不含正文。
+
+    TASK-108 新增 ``symbol``/``group``/``reason``（历史页展示工具返回的结构）。
+    """
+    assert tuple(audit.evidence_field_names()) == (
+        "id",
+        "path",
+        "lines",
+        "tier",
+        "score",
+        "symbol",
+        "group",
+        "reason",
+    )
+    assert "content" not in audit.evidence_field_names(), "绝不存源码正文"
 
 
 def test_record_query_without_db_is_noop() -> None:

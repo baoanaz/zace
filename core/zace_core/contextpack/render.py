@@ -32,7 +32,7 @@ from collections.abc import Sequence
 from zace_core.contextpack.assembly import elision_note, has_elision_note
 from zace_core.types import ContextPack, EvidenceItem, Freshness
 
-__all__ = ["render_evidence_for_prompt", "render_markdown"]
+__all__ = ["evidence_group", "render_evidence_for_prompt", "render_markdown"]
 
 #: TASK-095 §B-2：``#### Core`` 的门槛（``score ≥ top1 × 本值`` 且非 test）。
 #: 与 `assembly.BudgetConfig.score_ratio`（默认 0.50，装填闸门）**同值域但用途不同**：
@@ -41,9 +41,36 @@ __all__ = ["render_evidence_for_prompt", "render_markdown"]
 CORE_SCORE_RATIO = 0.70
 
 #: Code 节内部分组的组名（按渲染顺序；与 §B-1 的示例逐字一致）。
-_CORE_HEADING = "#### Core"
-_RELATED_HEADING = "#### Related"
-_TESTS_HEADING = "#### Tests"
+#:
+#: TASK-108：这三个值同时作为”证据分组“的**对外取值**（历史页要展示工具返回的分组结构，
+#: 而不再是只展示路径）。文案与渲染标题保持一致，但**不带 Markdown 的 ``####`` 前缀**
+#: （历史页存的是结构化字段，不是 Markdown）。
+GROUP_CORE = "Core"
+GROUP_RELATED = "Related"
+GROUP_TESTS = "Tests"
+GROUP_DOCS = "Docs"
+
+_CORE_HEADING = f"#### {GROUP_CORE}"
+_RELATED_HEADING = f"#### {GROUP_RELATED}"
+_TESTS_HEADING = f"#### {GROUP_TESTS}"
+
+
+def evidence_group(
+    item: EvidenceItem, *, top1: float
+) -> str:
+    """单条证据的**分组名**（TASK-108：供历史页与渲染共用同一判定）。
+
+    规则与 :func:`_group_evidence` 逐字一致（Core=非 test 且 score≥top1×0.70；
+    Related=其余非 test；Tests=test；spec 归 Docs）——两处必须同源，否则历史页显示的
+    分组会与 Agent 实际看到的 Markdown 分组不一致。
+    """
+    if item.type == "spec":
+        return GROUP_DOCS
+    if item.type == "test":
+        return GROUP_TESTS
+    if top1 > 0.0 and item.score >= top1 * CORE_SCORE_RATIO:
+        return GROUP_CORE
+    return GROUP_RELATED
 
 
 def render_markdown(pack: ContextPack, *, now: int | None = None) -> str:
@@ -115,17 +142,18 @@ def _group_evidence(
       不另开第四个组（契约 / §B-2 口径不变）。
     """
     top1 = max((item.score for item in evidence), default=0.0)
-    core: list[EvidenceItem] = []
-    related: list[EvidenceItem] = []
-    tests: list[EvidenceItem] = []
+    buckets: dict[str, list[EvidenceItem]] = {
+        GROUP_CORE: [],
+        GROUP_RELATED: [],
+        GROUP_TESTS: [],
+    }
     for item in evidence:
-        if item.type == "test":
-            tests.append(item)
-        elif top1 > 0.0 and item.score >= top1 * CORE_SCORE_RATIO:
-            core.append(item)
-        else:
-            related.append(item)
-    return [(_CORE_HEADING, core), (_RELATED_HEADING, related), (_TESTS_HEADING, tests)]
+        buckets[evidence_group(item, top1=top1)].append(item)
+    return [
+        (_CORE_HEADING, buckets[GROUP_CORE]),
+        (_RELATED_HEADING, buckets[GROUP_RELATED]),
+        (_TESTS_HEADING, buckets[GROUP_TESTS]),
+    ]
 
 
 def _docs_section(pack: ContextPack) -> list[str]:

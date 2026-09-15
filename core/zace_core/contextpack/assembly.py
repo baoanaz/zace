@@ -95,16 +95,22 @@ MODE_DEEP = "deep"
 #: 相邻区间合并的行距阈值（Module/03 §3：同文件两 chunk 行距 ≤10 → 合并）。
 ADJACENT_GAP_LINES = 10
 
-#: TASK-095（用户 2026-09-14 拍板）：相对 top-1 的分数阈值——替代"贪心填满"。
+#: TASK-095（用户 2026-09-14 拍板）：相对 top-1 的分数阈值。
 #: 分数 ≥ ``top1_score × 本值`` 的候选才进装填循环（相对而非绝对：实测同仓库不同查询的
 #: top-1 在 1.2~5.8 之间波动，绝对阈值无法通用；"明显弱于最佳命中"才是噪音的判据）。
-#: 默认 0.50 由**真实查询的分数分布**选定（`cockpit-agents-py` 四个真实查询：0.50 保留
-#: 11/30、1/37、15/29、13/60，含全部核心实现；0.70 在符号查询上只剩 1 条；0.30 在宽泛
-#: 查询上几乎等于没截断）——测量过程见 `docs/tasks/TASK-095-返回分组与分数阈值.md`。
+#:
+#: TASK-108 修正：该闸门必须保留（实测否决了“降级排序”方案）——真实查询的分数是长尾的，
+#: 闸门之后的区域含有大量**与问题无关**的候选：tier3 图扩展邻居恒为固定分（不随相关性变化）、
+#: 以及 0 分/负分的边缘命中。改成“不丢候选、预算允许就装”的结果是包被填满 10K token，
+#: 但后半全是噪音（实测 E29 之后为 0.00 / -0.24 这类分值）。“装的都有用”比“装满”重要。
+#:
+#: 默认值由 0.50 调到 0.40（同一实测：search 题在 0.50/0.40 下都是最低 1.30、无噪音；
+#: ask 题在 0.50 下只装 3 条代码证据（目标符号 InvocationRegistry 被挡），0.40 下装 10 条
+#: 且仍无 0.70 噪音组）——比 0.50 更能覆盖“需要多条证据”的 ask 类问题，又不至于放进无关块。
 #: **不要**用它去拟合 `benches/golden` 的 smoke 集（R29/R30 冻结）。
 #: 覆盖方式：``assemble(config=replace(...))`` 或环境变量 ``ZACE_CONTEXT_SCORE_RATIO``
 #: （**不暴露给 MCP 工具参数**——CF-06 冻结）。
-CONTEXT_SCORE_RATIO = 0.50
+CONTEXT_SCORE_RATIO = 0.40
 
 _AGGREGATION_NOTE = "同符号聚合"
 _MERGE_NOTE = "相邻区间合并"
@@ -512,7 +518,9 @@ def assemble(
 
     # TASK-095 §A：相对分数阈值（自适应查询难度）。“明显弱于最佳命中”才是噪音的判据——
     # 绝对阈值无法通用（实测同仓库不同查询的 top-1 在 1.2~5.8 之间波动）。
-    # 口径：高于等于 top1 × ratio 才进装填循环；低于它**立即停止**（池已按分数降序）。
+    #
+    # TASK-108：语义从“闸内才装填”改为“闸内优先装填”——低于阈值的候选**降级排序**，
+    # 不再被丢弃（见下方 ``pool`` 重排）。阈值仍决定哪些证据优先占预算。
     #
     # 参考分 top1 = **非 spec 候选（含 test）的最高 rerank 分**，不是池总分。两个理由：
     # ① spec 走 docs_ratio 配额这条独立路径，且其分数被 "high-value doctype" 等特征加成抬高；
@@ -520,8 +528,7 @@ def assemble(
     # ② 与 TASK-095 §A-1 的实测表一致：以非 spec 最高分为 100% 时，四个真实查询在
     # ≥70%/≥50%/≥30% 三列上的条数为 2/11/24、1/1/5、7/18/24、16/36/49，与卡内表 12/12 逐项吻合
     # （卡内“总数”列 = 修改前贪心填满的证据条数 30/32/24/55）。
-    # 池里没有任何非 spec 候选（纯文档查询）时闸门**关闭**（不被本机制伤害），
-    # 且保底（code_floor / spec_floor）不走本闸门：保底是“至少给这些”，与“最多给到哪”不冲突。
+    # 池里没有任何非 spec 候选（纯文档查询）时闸门**关闭**（不被本机制伤害）。
     non_spec_scores = [candidate.score for candidate in pool if candidate.kind != _SPEC_KIND]
     top1_score = max(non_spec_scores, default=0.0)
     # ``score_ratio <= 0`` 或池里没有非 spec 候选 → 闸门关闭（score_floor=None）。
@@ -586,9 +593,15 @@ def assemble(
         if candidate.chunk_id in placed_ids:
             omitted += 1  # 同一 chunk 只装一次（与 _place / 保底分支共用同一判重集合）
             continue
-        # TASK-095 §A：低于相对分数阈值的候选不装填。池是分数降序的，越过阈值即可停。
+        # TASK-095 §A：低于相对分数阈值的候选不装填（池已按分数降序，越过阈值即可停）。
         # 先于 `_build_slot` 判定：被分数截掉的候选根本不需要读切片（省 IO，语义更清晰）。
         # 保底（code_floor / spec_floor）不走本闸门：保底是“至少给这些”，与“最多给到哪”不冲突。
+        #
+        # TASK-108 试过把本闸门改成“降级排序”（不丢候选、预算允许就装）——**实测否决**：
+        # 真实查询里分数是长尾的，闸后剩下的区域含有大量**与问题无关**的候选
+        # （tier3 图扩展邻居恒为固定分 0.70，以及 0 分/负分的边缘命中），
+        # 结果是包被填满 10K token，但 E29 之后全是 0.00/-0.24 这类噪音。
+        # “装不装满”不是目标，“装的都有用”才是；阈值的作用必须保留。
         if score_floor is not None and candidate.score < score_floor:
             below_floor += 1
             omitted += 1
@@ -708,7 +721,9 @@ def assemble(
             _place(candidate, slot, tokens)
             code_placed += 1
 
-    truncated = capacity_cut > 0 or below_floor > 0
+    # ``truncated`` 只反映**真的被预算截断**（TASK-108：闸外候选已不再被丢弃，
+    # 它们要么装进包、要么因预算耗尽被 capacity_cut 计数）。
+    truncated = capacity_cut > 0
     flow_tokens = sum(
         estimate_tokens(node.symbol) + estimate_tokens(node.path)
         for flow in flows
@@ -1104,9 +1119,13 @@ def _missing_evidence(
                 symbol=item.stale_refs[0],
             )
         )
-    if truncated:
+    if truncated or docs_capped or score_capped:
         # R21 §C + TASK-095 §A：份额上限 / 相对分数阈值挡下的候选在这里如实说明
         # （CF-03 无新增字段，message 为自由文本）。
+        #
+        # TASK-108：本节的触发条件**不能只跟 ``truncated``**——它现在只反映“真的被预算截断”，
+        # 而闸门/份额挡下的候选另属一类。用 ``truncated or docs_capped or score_capped``
+        # 才能保证两类缺口都如实报告（少任一项就是信息丢失，不是“干净”）。
         reasons: list[str] = []
         if docs_capped:
             reasons.append(f"{docs_capped} 个因 {_DOCS_RATIO_NOTE}让位给代码证据")

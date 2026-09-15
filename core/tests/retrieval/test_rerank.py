@@ -167,10 +167,18 @@ def test_feature_generated_negative_only() -> None:
     assert FEATURE_GENERATED not in _hits(_candidate("src/b.py:g:1", path="src/b.py"), signals)
 
 
-def test_feature_test_fixture_respects_intent() -> None:
+def test_feature_test_fixture_is_suppressed_by_default() -> None:
+    """TASK-108：测试夹具**常态抑制**（不是只在无测试意图时）。
+
+    旧口径只在 ``not test_intent`` 时扣分，于是无测试意图的查询不会降测试，
+    实测导致测试函数名（含 retry/idempotency 等自然语言词）挤占实现证据。
+    新口径：默认降；**只有查询明示测试意图时**才不降（那时用户要的就是测试）。
+    """
     test_candidate = _candidate("core/tests/test_a.py:t:1", kind="test",
                                 path="core/tests/test_a.py")
-    assert _hits(test_candidate) == {FEATURE_TEST_FIXTURE: -0.5}
+    # 无信号（查询未明示测试意图）→ 抑制生效。
+    assert _hits(test_candidate) == {FEATURE_TEST_FIXTURE: -1.5}
+    # 查询明示测试意图 → 不抑制。
     with_intent = RerankSignals(test_intent=True)
     assert FEATURE_TEST_FIXTURE not in _hits(test_candidate, with_intent)
 

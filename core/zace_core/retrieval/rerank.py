@@ -15,7 +15,7 @@
 | doctype ∈ HIGH_VALUE_DOCTYPES | +0.8 | classify_doctype（索引侧同一函数） |
 | 入口点 / 被导出符号 | +0.2 | symbols.is_exported + 无内部调用者 |
 | generated 文件 | −1.0 | signals.generated_paths（见下） |
-| test fixture（非测试意图查询） | −0.5 | candidate.kind=test + 查询意图 |
+| test fixture（常态抑制，测试仅作参考） | −1.5 | candidate.kind=test；查询明示测试意图时不降 |
 | stale spec 引用 | −0.8 | spec_references.stale |
 | fallback_block | −0.5 | chunks.symbol_kind |
 | 图距离 2 跳 | −0.3 | candidate.graph_depth |
@@ -105,7 +105,7 @@ FEATURE_GRAPH_1HOP = "graph connected to top-1 seed (1 hop)"
 FEATURE_DOCTYPE = "high-value doctype"
 FEATURE_ENTRY_POINT = "entry point / exported symbol"
 FEATURE_GENERATED = "generated file"
-FEATURE_TEST_FIXTURE = "test fixture (non-test intent)"
+FEATURE_TEST_FIXTURE = "test fixture (suppressed; tests are reference only)"
 FEATURE_STALE_SPEC = "stale spec reference"
 FEATURE_FALLBACK = "fallback_block"
 FEATURE_GRAPH_2HOP = "graph distance 2 hops"
@@ -187,7 +187,17 @@ class RerankWeights:
     doctype_high_value: float = 0.8
     entry_point: float = 0.2
     generated: float = -1.0
-    test_fixture: float = -0.5
+    #: 测试夹具降权（TASK-108：从“仅测试意图时生效”改为**常态抑制**）。
+    #:
+    #: 为什么改：原口径是 ``kind=test and not test_intent`` 才扣分，于是无测试意图的查询
+    #: 不会降测试。实测反例（S3：问 Gateway 的幂等/验证/重试实现）：
+    #: 查询词恰好是测试函数名里的高频词（``test_read_only_retry_reuses_identity_and_
+    #: idempotency_key``），BM25 把 20 条测试顶进包，而真正的实现
+    #: （``capability/gateway.py``）**一条都没进**——测试调用的参数名往往比实现的
+    #: 私有方法名更贴近自然语言，这是结构性劣势。
+    #: 现在常态降权（测试仅作参考）；查询**明示**测试意图时（“测试/单测/fixture/用例…”）
+    #: 不降，因为那时用户要的就是测试。
+    test_fixture: float = -1.5
     stale_spec_ref: float = -0.8
     fallback_block: float = -0.5
     graph_2hop: float = -0.3
@@ -308,8 +318,11 @@ def features(
     )
     hit(
         FEATURE_TEST_FIXTURE,
-        weights.test_fixture,
-        candidate.kind == KIND_TEST and not signals.test_intent,
+        # TASK-108：常态抑制（仅查询明示测试意图时不降）——测试仅作参考，
+        # 实现证据优先。取值 -1.5 而非 -0.5：实测 -0.5 不足以把“同名测试”拉下
+        # 实现候选（S3 里测试以 1.84 分位居前列，而实现候选普遍在 1.2-1.4）。
+        0.0 if signals.test_intent else weights.test_fixture,
+        candidate.kind == KIND_TEST,
     )
     hit(FEATURE_STALE_SPEC, weights.stale_spec_ref, candidate.chunk_id in signals.stale_chunk_ids)
     hit(FEATURE_FALLBACK, weights.fallback_block, candidate.kind == KIND_FALLBACK)

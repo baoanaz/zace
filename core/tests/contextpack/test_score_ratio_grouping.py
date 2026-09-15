@@ -58,7 +58,11 @@ def _spec(store, seed_file, *, heading: str = "架构 > 节0", start: int = 10, 
 
 
 def test_candidates_below_score_floor_are_not_placed_nor_rendered(store, seed_file, sym, cand):
-    """§A：低于 ``top1 × 0.50`` 的候选不装填，也不出现在 Markdown 里（如实标注缺口）。"""
+    """§A：低于 ``top1 × score_ratio`` 的候选不装填，也不出现在 Markdown 里（如实标注缺口）。
+
+    TASK-108：本测试**显式给定** ``score_ratio=0.5``（而非依赖默认值）——它测的是
+    “闸门规则本身”，不应随默认值调优而失败。
+    """
     scores = (1.0, 0.8, 0.4)
     for index in range(len(scores)):
         _code(store, seed_file, sym, f"src/f{index}.py", f"f{index}")
@@ -66,7 +70,9 @@ def test_candidates_below_score_floor_are_not_placed_nor_rendered(store, seed_fi
         cand(f"src/f{i}.py", f"f{i}", 1, score=score) for i, score in enumerate(scores)
     ]
 
-    pack = assemble(store, "q", candidates, config=BudgetConfig(**ROOMY))
+    pack = assemble(
+        store, "q", candidates, config=BudgetConfig(**ROOMY, score_ratio=0.5)
+    )
     md = render_markdown(pack)
 
     assert [item.path for item in pack.evidence] == ["src/f0.py", "src/f1.py"]
@@ -74,7 +80,6 @@ def test_candidates_below_score_floor_are_not_placed_nor_rendered(store, seed_fi
     # 不静默丢弃：缺口进 missingEvidence（CF-03 message 为自由文本，不新增字段）。
     message = next(m.message for m in pack.missing_evidence if m.code == "retrieval_truncated")
     assert "低于相对分数阈值" in message and "top1×0.5" in message
-    assert pack.budget.truncated is True
 
 
 def test_threshold_is_relative_to_non_spec_top_not_pool_top(store, seed_file, sym, cand):
@@ -172,13 +177,17 @@ def test_score_ratio_zero_disables_the_gate(store, seed_file, sym, cand):
         cand(f"src/f{i}.py", f"f{i}", 1, score=score) for i, score in enumerate(scores)
     ]
 
-    on = assemble(store, "q", candidates, config=BudgetConfig(**ROOMY, code_floor=0))
+    on = assemble(
+        store, "q", candidates, config=BudgetConfig(**ROOMY, code_floor=0, score_ratio=0.5)
+    )
     off = assemble(
         store, "q", candidates, config=BudgetConfig(**ROOMY, code_floor=0, score_ratio=0.0)
     )
 
     assert len(on.evidence) == 2 and len(off.evidence) == 3  # 0.5 恰在阈值上沿，保留
-    assert on.budget.truncated is True and off.budget.truncated is False
+    # TASK-108：``truncated`` 只反映**真的被预算截断**。闸门挡住的候选已计入
+    # missingEvidence（上一条测试断言了文案），不再冒充“预算不够”。
+    assert off.budget.truncated is False
 
 
 # --------------------------------------------------------------------------- 配置生效
@@ -203,7 +212,7 @@ def test_score_ratio_config_changes_returned_count(store, seed_file, sym, cand):
 def test_env_var_overrides_the_default_ratio(monkeypatch) -> None:
     """环境变量 ``ZACE_CONTEXT_SCORE_RATIO`` 覆盖默认值（CF-06 冻结：不暴露为工具参数）。"""
     assert budget_for("fast").score_ratio == CONTEXT_SCORE_RATIO
-    assert budget_for("fast").score_ratio == 0.50
+    assert budget_for("fast").score_ratio == 0.40
 
     monkeypatch.setenv(SCORE_RATIO_ENV, "0.8")
     assert budget_for("fast").score_ratio == 0.8

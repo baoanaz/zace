@@ -195,9 +195,12 @@ describe("§需求2 合并表格（TASK-100）", () => {
     expect(pres.length).toBe(2);
     expect(pres[0]?.textContent).toContain("令牌在哪里刷新");
     expect(pres[0]?.className).toContain("overflow-auto");
-    // 底层元信息（用户："其他底层有证据数量啊，文档条数这种信息"）。
-    expect(within(dialog).getByText("证据条数")).toBeInTheDocument();
-    expect(within(dialog).getByText("文档条数")).toBeInTheDocument();
+    // 底层元信息（TASK-108 定稿排版：信心 / Token / 证据数量（代码/文档/测试），键值间带冒号）。
+    expect(within(dialog).getByText("信心：")).toBeInTheDocument();
+    expect(within(dialog).getByText("Token：")).toBeInTheDocument();
+    expect(within(dialog).getByText("证据数量（代码/文档/测试）：")).toBeInTheDocument();
+    // 弹窗内只应有一个 Token（表格的「体量」列不在弹窗里渲染）。
+    expect(within(dialog).getAllByText(/^Token$/)).toHaveLength(0);
     // 诚实边界：测试夹具的 answerText 为 null，弹窗要如实说明这条是 search（不调 LLM），
     // 而不是拿证据清单冒充 LLM 输出。
     expect(within(dialog).getByText(/search_context 不调用 LLM|未调用 LLM|调用了 LLM 但失败/)).toBeInTheDocument();

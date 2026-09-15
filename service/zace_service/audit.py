@@ -29,6 +29,8 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from zace_core.contextpack.render import evidence_group
+
 from zace_service.logging import current_request_id, get_logger, redact_text
 from zace_service.metadb import MetaDB
 
@@ -73,7 +75,20 @@ STATUS_INSUFFICIENT = "insufficient_evidence"
 STATUS_DEGRADED = "degraded"
 
 #: ``evidence_json`` 的允许字段（Module/04 §8：**不含源码内容**）。
-EVIDENCE_FIELDS: tuple[str, ...] = ("id", "path", "lines", "tier", "score")
+#:
+#: TASK-108 追加 ``symbol`` / ``group`` / ``reason``：历史页对 search_context 的“Tool 输出”
+#: 要如实展示**工具返回的结构**（分组 / 符号 / 召回依据），而不只是编号与路径。
+#: 仍然**不含 ``content``**（源码正文）——那是 §8 的红线。
+EVIDENCE_FIELDS: tuple[str, ...] = (
+    "id",
+    "path",
+    "lines",
+    "tier",
+    "score",
+    "symbol",
+    "group",
+    "reason",
+)
 
 #: 常见 API Key 的**裸串**形态（前面没有 ``api_key=`` 这类键名，``redact_text`` 的既有规则
 #: 罩不住）。用户完全可能把 key 直接粘进查询框，而查询文本要落 ``query_audit``——于是本模块
@@ -100,11 +115,20 @@ def evidence_meta(pack: Any, *, limit: int | None = None) -> list[dict[str, Any]
 
     ``evidence`` 与 ``docs`` 共用 E 编号空间（D-21），编号即装填顺序，因此合并后按编号排序
     才是真正的"最相关在前"（与 :func:`zace_service.packmeta.evidence_summary` 同一口径）。
+
+    TASK-108：追加 ``symbol`` / ``group`` / ``reason``——历史页要展示工具**返回的结构**
+    （分组 / 符号名 / 召回依据），而不只是编号与路径。分组用 core 的
+    :func:`zace_core.contextpack.render.evidence_group` 判定，与 Agent 实际看到的 Markdown
+    分组**同源**（两处各写一份必然会漂移）。**不含** ``content``（源码正文，§8 红线）。
     """
     items = [*(getattr(pack, "evidence", None) or ()), *(getattr(pack, "docs", None) or ())]
     items.sort(key=_evidence_order)
     if limit is not None:
         items = items[:limit]
+    # 分组基准分 = 包内代码证据的最高分（与 render 的 ``top1`` 同口径）。
+    top1 = max(
+        (item.score for item in items if getattr(item, "type", None) != "spec"), default=0.0
+    )
     return [
         {
             "id": item.id,
@@ -112,6 +136,9 @@ def evidence_meta(pack: Any, *, limit: int | None = None) -> list[dict[str, Any]
             "lines": list(item.lines) if item.lines is not None else None,
             "tier": item.evidence_tier,
             "score": item.score,
+            "symbol": getattr(item, "symbol", None),
+            "group": evidence_group(item, top1=top1),
+            "reason": getattr(item, "reason", ""),
         }
         for item in items
     ]

@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
+  type EvidenceMetaItem,
   type IndexRun,
   type Project,
   type UsageRecord,
@@ -75,7 +76,7 @@ type RunReadFailure = { projectId: string; error: unknown };
  *    - ask：LLM 答案正文 + 证据清单；
  *    - 仓库初始化：解析结果（文件数、chunks）。
  *
- * `metrics` 是底部一行小字（证据条数 / 模式 / 体量 等汇总），不重复块内长文本。
+ * `metrics` 是底部一行小字（信心 / Token / 证据数量（代码/文档/测试）），不重复块内长文本。
  *
  * **为何 search 没有"LLM 答案"**：`search_context` 不调 LLM（它就是检索返回），
  * 所以答案块只对 `ask` 有意义。因此不再单列一块——ask 的答案直接进「Tool 输出」。
@@ -300,19 +301,12 @@ export function HistoryPage() {
          *   因此这里先给计数与模式，并在下方 `note` 如实说明。
          */
         output: record.answerText
-          ? `${record.answerText}\n\n── 证据──\n${evidenceLines(record) || `证据条数：${record.evidenceCount}`}`
-          : [
-              "（search_context 不调用 LLM，输出为检索到的证据清单）",
-              `模式：${record.mode}`,
-              ...(record.confidence ? [`confidence：${record.confidence}`] : []),
-              evidenceLines(record) || `证据条数：${record.evidenceCount}`,
-              `文档条数：${record.docsCount}`,
-            ].join("\n"),
+          ? `${record.answerText}\n\n── 证据──\n${evidenceLines(record)}`
+          : evidenceLines(record),
         metrics: [
-          { label: "证据条数", value: String(record.evidenceCount) },
-          { label: "文档条数", value: String(record.docsCount) },
-          { label: "模式", value: record.mode },
-          ...(record.confidence ? [{ label: "confidence", value: record.confidence }] : []),
+          ...(record.confidence ? [{ label: "信心", value: record.confidence }] : []),
+          { label: "Token", value: String(record.usedTokens) },
+          { label: "证据数量（代码/文档/测试）", value: evidenceBreakdown(record) },
           ...(record.answerStatus ? [{ label: "答案状态", value: record.answerStatus }] : []),
         ],
         note: record.answerText
@@ -557,8 +551,7 @@ function searchState(record: UsageRecord): "ok" | "insufficient" | "failed" | "d
  *   长 query 不再撑爆弹窗，也不用截断（内部出滚动条）；
  * - **标题不再写完整输入**（用户：“标题就不要写输入内容了，太长了”）：
  *   只写类型 + 时间 + 耗时，输入本身在代码块里；
- * - **元信息放在底层**（证据条数/文档条数/模式等）——用户：“其他底层有证据数量啊，
- *   文档条数这种信息”。
+ * - **元信息放在底层**（TASK-108 用户定稿：信心 / Token / 证据数量（代码/文档/测试））。
  *
  * 用原生 `<dialog>`（与 `ConfirmDialog` 同一理由：焦点陷阱、Esc、aria-modal 都是浏览器给的）。
  */
@@ -603,7 +596,7 @@ function DetailDialog({ row, onClose }: { row: ActivityRow | null; onClose: () =
             <CodeBlock label="Tool 输出" text={outputText(row)} />
           </div>
 
-          {/** 底层元信息：证据条数 / 文档条数 / 模式 / confidence / 体量。 */}
+          {/** 底层元信息：信心 / Token / 证据数量（代码/文档/测试）。 */}
           <MetaRow row={row} />
 
           {row.note && <p className="mt-2 text-xs text-ink-muted">{row.note}</p>}
@@ -652,44 +645,101 @@ function outputText(row: ActivityRow): string {
 }
 
 /**
- * 证据清单的可读文本（TASK-107）。
+ * 证据数量按类型拆分（TASK-108，用户定稿排版）：`X/Y/Z` = 代码/文档/测试。
  *
- * 为什么需要它：`search_context` 不调 LLM，它给客户端的"输出"就是证据本身。
- * 只列编号/路径/行号/分层/分数（`evidence_json` 的口径，**无源码正文**），
- * 让用户在历史页能核对"那次检索到底返回了哪几条证据"。
+ * 为什么要拆：只给一个总数看不出包的构成——“37 条”里到底有多少是代码、多少是测试夹具，
+ * 直接决定了回答能不能落到实现上。分组名来自 `evidence[].group`（与 Markdown 同源）。
  *
- * 空清单返回空串（由调用方决定退化成计数文案），不返回一件占位行。
+ * 旧记录（本次改动前落库的）没有 `group` 字段 → 退回总数，不编造拆分。
+ */
+function evidenceBreakdown(record: UsageRecord): string {
+  const items = record.evidence ?? [];
+  if (items.length === 0) return "0/0/0";
+  const hasGroup = items.some((item) => item.group);
+  if (!hasGroup) return `${record.evidenceCount}/${record.docsCount}/—`;
+  const docs = items.filter((item) => item.group === "Docs").length;
+  const tests = items.filter((item) => item.group === "Tests").length;
+  const code = items.length - docs - tests;
+  return `${code}/${docs}/${tests}`;
+}
+
+/**
+ * 证据清单的可读文本（TASK-107/TASK-108）。
+ *
+ * 格式与 Agent 实际收到的 Markdown **同构**（用户 2026-09-14 定稿）：
+ *
+ * ```text
+ * ## Relevant Context
+ * ### Code
+ * #### Core
+ * [E3] AiboxHost.start — src/cvi_agent_product/app/host.py:94-107
+ *      reason: bm25 -15.34 + bm25 rank 24 + vector rank 1
+ * #### Related
+ * [E7] (module) — tests/integration/app/test_host.py:1-10
+ * ### Docs
+ * [E1] docs/internal-design.md > 四、组合根和启动顺序（guide）
+ * ```
+ *
+ * **不含代码正文**（Module/04 §8：审计不存源码内容）——用户明确接受这一取舍，
+ * 但要求把分组、符号、召回依据这些结构信息完整保留（它们才看得出"工具到底返回了什么"）。
  */
 function evidenceLines(record: UsageRecord): string {
   const items = record.evidence ?? [];
-  if (items.length === 0) return "";
-  const lines = items.map((item, index) => {
-    const id = item.id ?? `#${index + 1}`;
-    const path = item.path ?? "(未知路径)";
-    const span = Array.isArray(item.lines) && item.lines.length >= 2
-      ? `:${item.lines[0]}-${item.lines[1]}`
-      : "";
-    const tier = item.tier === undefined ? "" : `  tier=${item.tier}`;
-    const score = item.score === undefined ? "" : `  score=${item.score}`;
-    return `[${id}] ${path}${span}${tier}${score}`;
-  });
-  return [`证据清单（${items.length} 条，不含源码正文）：`, ...lines].join("\n");
+  if (items.length === 0) return "（无证据）";
+
+  // 按工具返回的真实结构渲染：Code（Core/Related/Tests）→ Docs。
+  const groups: [string, string][] = [
+    ["Core", "#### Core"],
+    ["Related", "#### Related"],
+    ["Tests", "#### Tests"],
+  ];
+  const out: string[] = ["## Relevant Context"];
+  const codeItems = items.filter((item) => item.group !== "Docs");
+  const docItems = items.filter((item) => item.group === "Docs");
+
+  if (codeItems.length > 0) {
+    out.push("### Code");
+    for (const [group, heading] of groups) {
+      const bucket = codeItems.filter((item) => (item.group ?? "Related") === group);
+      if (bucket.length === 0) continue;
+      out.push(heading);
+      for (const item of bucket) out.push(evidenceEntry(item));
+    }
+  }
+  if (docItems.length > 0) {
+    out.push("### Docs");
+    for (const item of docItems) out.push(evidenceEntry(item));
+  }
+  return out.join("\n");
+}
+
+/** 单条证据的两行形态：标题行 + 缩进的 reason 行（与 Markdown 返回逐字同构）。 */
+function evidenceEntry(item: EvidenceMetaItem): string {
+  const id = item.id ?? "?";
+  const span = Array.isArray(item.lines) && item.lines.length >= 2
+    ? `:${item.lines[0]}-${item.lines[1]}`
+    : "";
+  // 代码证据带符号名（`符号 — 路径:行号`）；文档只有路径（与 render 的 header 一致）。
+  const header = item.symbol
+    ? `[${id}] ${item.symbol} — ${item.path ?? ""}${span}`
+    : `[${id}] ${item.path ?? ""}${span}`;
+  const reason = item.reason ? `\n     reason: ${item.reason}` : "";
+  return `${header}${reason}`;
 }
 
 /** 底层元信息行：一行小字，不受代码块滚动影响。 */
 function MetaRow({ row }: { row: ActivityRow }) {
+  // TASK-108：弹窗底部**不再**额外渲染 ``row.volume``——表格里的「体量」列仍用它，
+  // 但弹窗内它的内容（token 数）已包含在 metrics 里，两者同时出现会出现两个“Token”
+  // （用户实测指出）。
   return (
     <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-ink-line/60 pt-2">
       {row.metrics.map((item, index) => (
         <div key={`${item.label}-${index}`} className="flex items-baseline gap-1.5">
-          <dt className="text-xs text-ink-muted">{item.label}</dt>
+          <dt className="text-xs text-ink-muted">{item.label}：</dt>
           <dd className="text-xs text-ink-primary">{item.value}</dd>
         </div>
       ))}
-      <div className="flex items-baseline gap-1.5">
-        <dt className="text-xs text-ink-muted">{row.volume.label}</dt>
-        <dd className="text-xs text-ink-primary">{row.volume.value}</dd>
-      </div>
     </dl>
   );
 }

@@ -168,11 +168,10 @@ impl ToolLayer {
         _max_tokens: i64,
     ) -> Result<String, ToolError> {
         let (project_id, checkpoint_id) = self.sync_project(remote, project_root).await?;
-        let (status, answer) = remote
+        remote
             .ask(&project_id, question, checkpoint_id.as_deref())
             .await
-            .map_err(|error| ToolError::Failed(format!("提问失败：{error:#}")))?;
-        Ok(format!("[zace] status={status}\n\n{answer}"))
+            .map_err(|error| ToolError::Failed(format!("提问失败：{error:#}")))
     }
 
     /// 懒同步编排（D-27）：每次 tool call 保证工作区新鲜，返回 `(projectId, checkpointId)`。

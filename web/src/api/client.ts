@@ -419,9 +419,10 @@ export interface UsageRecord {
    */
   answerStatus: string | null;
   /**
-   * 证据清单（TASK-107）：`search_context` 的"Tool 输出"——它工具真实返回了哪些证据。
+   * 证据清单（TASK-107/TASK-108）：`search_context` 的"Tool 输出"。
    *
-   * 只含 `id/path/lines/tier/score`，**不含源码正文**（Module/04 §8：审计不存源码内容）。
+   * 含 `id/path/lines/tier/score/symbol/group/reason`，**不含源码正文**
+   * （Module/04 §8：审计不存源码内容）。`group` 与 Agent 看到的 Markdown 分组同源。
    */
   evidence: EvidenceMetaItem[];
   createdAt: number;
@@ -434,6 +435,12 @@ export interface EvidenceMetaItem {
   lines?: [number, number] | number[];
   tier?: number;
   score?: number;
+  /** 符号名（如 `AiboxHost.start`）；fallback/模块块为 null。 */
+  symbol?: string | null;
+  /** 分组名：Core / Related / Tests / Docs（与 Markdown 渲染同源）。 */
+  group?: string;
+  /** 召回依据（如 `bm25 rank 24 + vector rank 1 + ...`）。 */
+  reason?: string;
 }
 
 export interface UsageSummary {
