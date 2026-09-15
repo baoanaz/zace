@@ -3,8 +3,8 @@
 基类职责：
 
 - grammar 懒加载（每进程每 grammar 一次）与 Parser 实例复用；
-- 语法错误检测：ERROR / MISSING 节点 → 整个文件 ``fallback=True`` + ``parse_errors``
-  （诚实优先：宁可不抽，不抽半可信）；
+- 语法错误检测：ERROR / MISSING 节点进入 ``parse_errors``；默认整文件 fallback，
+  C/C++ 可启用局部恢复并剔除与错误区间相交的抽取结果；
 - 公共工具：UTF-8 字节切片取文本、行号、前序遍历；
 - 结果收口：去重 + 按行号稳定排序，保证同一输入两次 parse 结果逐字节相等。
 
@@ -94,6 +94,20 @@ def collect_parse_errors(
     return errors
 
 
+def collect_error_spans(root: ts.Node) -> tuple[tuple[int, int], ...]:
+    """返回最外层 ERROR/MISSING 节点的 1-based 闭区间，供局部恢复过滤。"""
+    spans: list[tuple[int, int]] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.is_missing or node.is_error:
+            spans.append((line_of(node), max(line_of(node), end_line_of(node))))
+            continue
+        if node.has_error:
+            stack.extend(reversed(node.children))
+    return tuple(sorted(spans))
+
+
 def _text(node: ts.Node, source: bytes) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
@@ -148,6 +162,9 @@ class TreeSitterParser:
     #: grammar 包内取 Language 的函数名
     grammar_function: ClassVar[str] = "language"
 
+    #: 是否保留错误恢复树中不受 ERROR/MISSING 区间污染的抽取结果。
+    recover_syntax_errors: ClassVar[bool] = False
+
     _grammar_cache: ClassVar[dict[str, ts.Language]] = {}
 
     def __init__(self) -> None:
@@ -185,8 +202,7 @@ class TreeSitterParser:
             )
 
         errors = collect_parse_errors(tree.root_node, source)
-        if errors:
-            # 语法错误文件不产半可信符号：整体交 TASK-006 兜底切分
+        if errors and not self.recover_syntax_errors:
             return ParsedFile(
                 path=path,
                 language=language,
@@ -195,16 +211,27 @@ class TreeSitterParser:
             )
 
         ctx = FileContext(path=path, language=language, source=source)
-        out = Extraction()
+        out = Extraction(parse_errors=list(errors))
         try:
             self.extract(tree.root_node, ctx, out)
         except Exception as exc:  # 抽取器缺陷同样不得向上抛
             return ParsedFile(
                 path=path,
                 language=language,
-                parse_errors=(f"extractor failure: {type(exc).__name__}: {exc}",),
+                parse_errors=(*errors, f"extractor failure: {type(exc).__name__}: {exc}"),
                 fallback=True,
             )
+
+        if errors:
+            if self.should_filter_recovered_syntax(tuple(errors)):
+                _filter_recovered_extraction(out, collect_error_spans(tree.root_node))
+            if not out.symbols:
+                return ParsedFile(
+                    path=path,
+                    language=language,
+                    parse_errors=tuple(out.parse_errors),
+                    fallback=True,
+                )
 
         return ParsedFile(
             path=path,
@@ -215,9 +242,53 @@ class TreeSitterParser:
             parse_errors=tuple(out.parse_errors),
         )
 
+    def should_filter_recovered_syntax(self, errors: tuple[str, ...]) -> bool:
+        """局部恢复后是否过滤错误子树；子类可保留已验证的窄容忍形态。"""
+        return True
+
     def extract(self, root: ts.Node, ctx: FileContext, out: Extraction) -> None:
         """子类实现：把符号/边/unresolved 写进 ``out``。"""
         raise NotImplementedError
+
+
+def _filter_recovered_extraction(
+    out: Extraction, error_spans: tuple[tuple[int, int], ...]
+) -> None:
+    """丢弃恢复区间内的结构化事实，保留其余可信抽取结果。"""
+    unsafe_fqns = {
+        symbol.fqn
+        for symbol in out.symbols
+        if symbol.kind != "namespace"
+        and _intersects_any(symbol.start_line, symbol.end_line, error_spans)
+    }
+    out.symbols = [
+        symbol
+        for symbol in out.symbols
+        if symbol.kind == "namespace"
+        or not _intersects_any(symbol.start_line, symbol.end_line, error_spans)
+    ]
+    out.edges = [
+        edge
+        for edge in out.edges
+        if edge.source_fqn not in unsafe_fqns
+        and not _line_intersects(edge.line, error_spans)
+    ]
+    out.unresolved = [
+        ref
+        for ref in out.unresolved
+        if ref.from_fqn not in unsafe_fqns
+        and not _line_intersects(ref.line, error_spans)
+    ]
+
+
+def _line_intersects(line: int | None, spans: tuple[tuple[int, int], ...]) -> bool:
+    return line is not None and _intersects_any(line, line, spans)
+
+
+def _intersects_any(
+    start: int, end: int, spans: tuple[tuple[int, int], ...]
+) -> bool:
+    return any(start <= error_end and end >= error_start for error_start, error_end in spans)
 
 
 def _dedupe(items: list, key) -> list:

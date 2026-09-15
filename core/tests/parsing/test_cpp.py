@@ -11,6 +11,12 @@ from zace_core.types import EdgeDef, ParsedFile, SymbolDef
 SAMPLE_DIR = Path(__file__).parent / "samples" / "cpp"
 SAMPLE_PREFIX = "core/tests/parsing/samples/cpp/"
 SYNTAX_ERROR_SOURCE = '#include "broken.hpp"\n\nnamespace app {\nclass Broken : public {\n'
+PARTIAL_ERROR_SOURCE = """int before() { return 1; }
+struct Broken {
+  int value GUARDED_BY(mu);
+};
+int after() { return 2; }
+"""
 
 
 @pytest.fixture(scope="module")
@@ -155,6 +161,14 @@ def test_macro_generated_declarations_are_unresolved(parser: CppParser) -> None:
     assert "DECLARE_ACCESSOR(width)" in references
     assert "DECLARE_ACCESSOR(size)" in references
     assert all(item.kind == "reference" for item in pf.unresolved if "DECLARE" in item.name)
+
+
+def test_partial_syntax_error_keeps_unaffected_symbols(parser: CppParser) -> None:
+    pf = parser.parse("partial.cpp", PARTIAL_ERROR_SOURCE)
+
+    assert pf.fallback is False
+    assert any("syntax error" in error for error in pf.parse_errors)
+    assert {item.fqn for item in pf.symbols} == {"before", "after"}
 
 
 def test_syntax_error_falls_back(parser: CppParser) -> None:

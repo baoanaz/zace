@@ -58,6 +58,7 @@ from zace_core.storage import Store
 from zace_core.types import (
     Budget,
     Candidate,
+    ChunkDef,
     ContextPack,
     EvidenceItem,
     Flow,
@@ -107,6 +108,20 @@ CONTEXT_SCORE_RATIO = 0.50
 
 _AGGREGATION_NOTE = "同符号聚合"
 _MERGE_NOTE = "相邻区间合并"
+
+_CPP_SOURCE_SUFFIXES = frozenset({
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".ipp",
+    ".tpp",
+})
+_CPP_FUNCTION_KINDS = frozenset({"function", "method"})
 
 
 #: CJK 区段（汉字 / 假名 / CJK 标点 / 全角形式）——这些字符在 BPE 词表里通常 1-2 字符 1 token，
@@ -395,6 +410,79 @@ class _Slot:
         return estimate_render_tokens(self.item)
 
 
+def _is_cpp_definition_chunk(chunk: ChunkDef) -> bool:
+    """判断 C/C++ 函数切片是否包含函数体，而不是只含声明签名。"""
+    suffix = "." + chunk.file_path.replace("\\", "/").rsplit(".", 1)[-1].lower()
+    content = chunk.content.rstrip()
+    return (
+        chunk.symbol_kind in _CPP_FUNCTION_KINDS
+        and suffix in _CPP_SOURCE_SUFFIXES
+        and "{" in content
+        and content.endswith("}")
+    )
+
+
+def _prefer_definition_representatives(
+    store: Store, candidates: Sequence[Candidate]
+) -> tuple[list[Candidate], int]:
+    """同 FQN 同时有声明与定义时，选择可读的 C/C++ 函数体作为代表。
+
+    C/C++ extractor 为声明和类外定义保留同一个 ``symbol_fqn``，而它们的检索分数可能不同。
+    组装层原本按候选到达顺序聚合，容易把更短的 header 声明留在包内。这里只改变这一结构
+    冲突的代表选择；无函数体定义的符号完全保持原有分数优先行为。
+    """
+    groups: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        if candidate.symbol_fqn:
+            groups.setdefault(candidate.symbol_fqn, []).append(candidate)
+
+    if not groups:
+        return list(candidates), 0
+
+    chunks = {
+        chunk.id: chunk
+        for chunk in store.chunks_by_ids([candidate.chunk_id for candidate in candidates])
+    }
+    replacements: dict[str, Candidate] = {}
+    aggregation_counts: dict[str, int] = {}
+    for symbol, group in groups.items():
+        if len(group) < 2:
+            continue
+        definition = None
+        for candidate in group:
+            chunk = chunks.get(candidate.chunk_id)
+            if chunk is not None and _is_cpp_definition_chunk(chunk):
+                definition = candidate
+                break
+        if definition is None or definition is group[0]:
+            continue
+        replacements[symbol] = definition
+        aggregation_counts[symbol] = len(group) - 1
+        note = f"{_AGGREGATION_NOTE}×{aggregation_counts[symbol]}"
+        if note not in definition.reasons:
+            definition.reasons.append(note)
+
+    if not replacements:
+        return list(candidates), 0
+
+    selected: list[Candidate] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        symbol = candidate.symbol_fqn
+        if symbol not in replacements:
+            selected.append(candidate)
+            continue
+        if symbol in seen:
+            continue
+        selected.append(replacements[symbol])
+        seen.add(symbol)
+
+    selected.sort(
+        key=lambda candidate: (-candidate.score, -candidate.rrf_score, candidate.chunk_id)
+    )
+    return selected, sum(aggregation_counts.values())
+
+
 def assemble(
     store: Store,
     query: str,
@@ -414,6 +502,7 @@ def assemble(
     index_signals = signals if signals is not None else IndexSignals()
     fresh = freshness if freshness is not None else store.freshness()
     pool = sorted(candidates, key=lambda c: (-c.score, -c.rrf_score, c.chunk_id))
+    pool, pre_aggregated = _prefer_definition_representatives(store, pool)
 
     # R21：内容预算与 spec 份额上限。池里**存在代码候选**时 docs_ratio 才生效
     # （纯文档问题——如 spec 类查询——不应被本机制伤害）。
@@ -444,7 +533,7 @@ def assemble(
     below_floor = 0
 
     used = active.framework_overhead
-    omitted = 0
+    omitted = pre_aggregated
     capacity_cut = 0
     tier3_used = 0
     spec_used = 0
@@ -853,6 +942,26 @@ def _consensus_count(candidates: Iterable[Candidate]) -> int:
     return sum(1 for candidate in candidates if len(candidate.channel_ranks) >= 2)
 
 
+#: 可读的代码结构切片 kind（TASK-106）：有这些才说明索引里有真实实现证据。
+#: ``Candidate.kind`` 已在 fusion 层按切片类型归一（CF-04 四级）：结构化代码切片
+#: = ``code``（函数/方法/类/类型定义，含 class_skeleton），测试代码 = ``test``；
+#: ``fallback``（文件前导/降级段）与 ``spec``（文档）只证明“仓库里出现过这个词”，
+#: 不证明“这个能力存在”，因此**都不算**可读实现证据。
+_STRUCTURED_CODE_KINDS = frozenset({"code", "test"})
+
+
+def _has_structured_code(candidates: Iterable[Candidate]) -> bool:
+    """共识候选里是否至少有一个结构化代码切片（TASK-106）。
+
+    只看**双通道共识候选**：单通道命中不构成”被交叉印证“，不应作为可答依据。
+    ``kind`` 已由 fusion 层按路径/符号判定写入，此处不重复推断。
+    """
+    return any(
+        len(candidate.channel_ranks) >= 2 and candidate.kind in _STRUCTURED_CODE_KINDS
+        for candidate in candidates
+    )
+
+
 def _consensus_files(candidates: Iterable[Candidate]) -> int:
     """双通道共识候选覆盖的**不同文件**数（R22/TASK-022）。
 
@@ -899,6 +1008,10 @@ def _assess(
       ② 共识候选覆盖 ≥2 个不同文件，且共识最高分 ≥ `CONSENSUS_SCORE_RATIO` × 候选池分数中位数
       （存在显著强于池中位的共识）——堵住"文档密集仓库里文档天然双通道命中"；
     - `answerable=False` 时 `confidence` 一律 `low`（不用中等把握掩盖不可回答）。
+    - **共识必须含可读代码结构**（TASK-106）：双通道共识本身仍可能全部落在文档或
+      文件前导段上。真实反例：问"仓库里 Qdrant 向量库的实现在哪"（该能力**不存在**），
+      README 与 ``.env.example`` 同时被 BM25/Vector 命中 → 旧规则判可答。现在要求共识
+      候选里至少有一个结构化代码切片（函数/方法/类等），把"只有文档和 import 前导段"堵住。
     """
     explicit_hits = sum(1 for candidate in pool if _is_explicit(candidate))
     inferred_hits = sum(1 for candidate in pool if _is_inferred(candidate))
@@ -910,6 +1023,10 @@ def _assess(
         or (median > 0.0 and _consensus_peak(pool) >= CONSENSUS_SCORE_RATIO * median)
     )
     answerable = explicit_hits >= 1 or inferred_hits >= 1 or structural_result or corroborated
+    if answerable and not structural_result and not _has_structured_code(pool):
+        # 旧规则的全部依据都是“文本相似”，没有任何可读代码结构时不足以支撑回答
+        # （文档 + import 前导段也会双通道共识）。显式符号命中仍视为强依据。
+        answerable = explicit_hits >= 1 or inferred_hits >= 1 or structural_result
 
     spec_only = bool(docs) and not evidence
     if not answerable:

@@ -15,6 +15,7 @@ from zace_core.chunking import (
     stored_fingerprint,
     write_fingerprint,
 )
+from zace_core.chunking.fingerprint import PARSER_CONFIG_VERSION
 from zace_core.interfaces import EmbeddingProfile
 from zace_core.storage import Store
 
@@ -42,7 +43,11 @@ def test_written_fingerprint_round_trips(store: Store) -> None:
 def test_parser_change_triggers_full_reparse(store: Store) -> None:
     write_fingerprint(store, _fingerprint())
 
-    assert check_fingerprint(store, _fingerprint(version=2)) is Invalidation.FULL_REPARSE
+    changed_version = PARSER_CONFIG_VERSION + 1
+    assert (
+        check_fingerprint(store, _fingerprint(version=changed_version))
+        is Invalidation.FULL_REPARSE
+    )
 
 
 def test_embedding_model_change_triggers_reembed(store: Store) -> None:

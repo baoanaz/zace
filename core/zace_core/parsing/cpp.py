@@ -27,7 +27,8 @@ V1 明确不做（Module/01 §2.2 与 Background/04 §6 对照表）：两阶段
   unresolved（不硬连边）；
 - 声明位置的 ``MACRO(args)`` 调用语句，以及**类型位置命中本文件宏名**的声明（宏生成代码）→
   unresolved(kind='reference')，不展开；
-- 宏展开后的 MISSING ';'（≤5 处且无 ERROR）不整体兜底：照常抽取 + 错误保留在 parse_errors；
+- ERROR/MISSING 恢复树中，不与最小错误区间相交的符号继续抽取；错误区间由 chunker
+  自动作为 fallback block 保留，且诊断继续写入 ``parse_errors``；
 - include 复用 TASK-003 口径（相对优先 / 唯一同名猜测 / 解不开 unresolved）。
 """
 
@@ -42,9 +43,6 @@ from zace_core.parsing.base import (
     FileContext,
     TreeSitterParser,
     end_line_of,
-    finalize_edges,
-    finalize_symbols,
-    finalize_unresolved,
     line_of,
 )
 from zace_core.parsing.c import (
@@ -54,7 +52,7 @@ from zace_core.parsing.c import (
     parse_include_directive,
     resolve_include,
 )
-from zace_core.types import ParsedFile, SymbolDef
+from zace_core.types import SymbolDef
 
 _CLASS_TYPES = frozenset({"class_specifier", "struct_specifier", "union_specifier"})
 _TAG_TYPES = _CLASS_TYPES | {"enum_specifier"}
@@ -85,57 +83,14 @@ class CppParser(TreeSitterParser):
 
     language = "cpp"
     grammar_module = "tree_sitter_cpp"
+    recover_syntax_errors = True
 
-    #: 容忍的 MISSING 上限：宏展开后的缺分号是 C++ 常态（见模块 docstring 与任务卡口径）
+    #: 宏展开后的少量缺分号是已验证的正常恢复形态，保持 TASK-004 既有语义。
     max_tolerated_missing = 5
 
-    def parse(self, path: str, content: str) -> ParsedFile:
-        """基类行为 + 一条 C++ 专用容忍：**仅** MISSING（无 ERROR）且数量 ≤ 上限时不整体兜底。
-
-        动机：`DECLARE_FOO(x)` 这类宏调用在类体内没有分号，tree-sitter 会报 MISSING ';'；
-        整文件 fallback 会让宏密集的 C++ 仓库丢掉全部符号。容忍时错误仍写进 ``parse_errors``，
-        宏生成声明另外进 ``unresolved(kind='reference')``（不静默丢弃）。
-        """
-        result = super().parse(path, content)
-        if not result.fallback or not _missing_only(result.parse_errors):
-            return result
-        if len(result.parse_errors) > self.max_tolerated_missing:
-            return result
-        return self._parse_tolerating_missing(path, content, result.parse_errors)
-
-    def _parse_tolerating_missing(
-        self, path: str, content: str, errors: tuple[str, ...]
-    ) -> ParsedFile:
-        language = self.language or "fallback"
-        source = content.encode("utf-8")
-        try:
-            tree = self.parser().parse(source)
-        except Exception as exc:
-            return ParsedFile(
-                path=path,
-                language=language,
-                parse_errors=(*errors, f"{type(exc).__name__}: {exc}"),
-                fallback=True,
-            )
-        out = Extraction(parse_errors=list(errors))
-        ctx = FileContext(path=path, language=language, source=source)
-        try:
-            self.extract(tree.root_node, ctx, out)
-        except Exception as exc:  # 抽取器缺陷不得向上抛
-            return ParsedFile(
-                path=path,
-                language=language,
-                parse_errors=(*errors, f"extractor failure: {type(exc).__name__}: {exc}"),
-                fallback=True,
-            )
-        return ParsedFile(
-            path=path,
-            language=language,
-            symbols=finalize_symbols(out.symbols),
-            edges=finalize_edges(out.edges),
-            unresolved=finalize_unresolved(out.unresolved),
-            parse_errors=tuple(out.parse_errors),
-        )
+    def should_filter_recovered_syntax(self, errors: tuple[str, ...]) -> bool:
+        missing_only = all(": missing " in message for message in errors)
+        return not (missing_only and len(errors) <= self.max_tolerated_missing)
 
     def extract(self, root: ts.Node, ctx: FileContext, out: Extraction) -> None:
         pointers = CppPointerMap()
@@ -805,10 +760,6 @@ def _callee_name(node: ts.Node, ctx: FileContext) -> str | None:
                 return _callee_name(inner, ctx)
         return None
     return None
-
-
-def _missing_only(errors: tuple[str, ...]) -> bool:
-    return bool(errors) and all(": missing " in message for message in errors)
 
 
 def _macro_names(node: ts.Node, ctx: FileContext) -> frozenset[str]:

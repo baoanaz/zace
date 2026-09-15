@@ -21,6 +21,7 @@ from zace_core.chunking import (
     split_file,
 )
 from zace_core.hashing import chunk_content_hash
+from zace_core.parsing.cpp import CppParser
 from zace_core.parsing.fallback import FALLBACK_MAX_CHARS, FALLBACK_MAX_LINES
 from zace_core.storage import Store
 from zace_core.types import ParsedFile
@@ -230,6 +231,22 @@ def test_fallback_split_of_large_file(parse_source) -> None:
     for chunk in chunks:
         assert f"line {chunk.start_line}" in chunk.content
         assert f"line {chunk.end_line}" in chunk.content
+
+
+def test_partial_parse_uses_structural_and_fallback_chunks() -> None:
+    source = """int before() { return 1; }
+struct Broken {
+  int value GUARDED_BY(mu);
+};
+int after() { return 2; }
+"""
+    parsed = CppParser().parse("partial.cpp", source)
+    chunks = split_file(parsed, source)
+
+    assert parsed.fallback is False
+    assert [chunk.symbol_fqn for chunk in chunks] == ["before", MODULE_FQN, "after"]
+    assert [chunk.symbol_kind for chunk in chunks] == ["function", FALLBACK_KIND, "function"]
+    assert "GUARDED_BY" in chunks[1].content
 
 
 def test_parse_failure_ignores_symbols_entirely() -> None:

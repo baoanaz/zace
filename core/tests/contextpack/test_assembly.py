@@ -230,6 +230,68 @@ def test_dedup_far_apart_chunks_are_not_merged(store, seed_file, sym, cand) -> N
     assert len(assemble(store, "q", candidates, config=config).evidence) == 2
 
 
+def test_dedup_same_symbol_prefers_cpp_definition_over_declaration(
+    store, seed_file, sym, cand
+) -> None:
+    seed_file(
+        store,
+        path="db/db_impl.h",
+        language="cpp",
+        symbols=[sym("Get", "DBImpl::Get", kind="method", start=10, end=11)],
+        bodies={"DBImpl::Get": "Status Get() override;"},
+    )
+    seed_file(
+        store,
+        path="db/db_impl.cc",
+        language="cpp",
+        symbols=[sym("Get", "DBImpl::Get", kind="method", start=100, end=104)],
+        bodies={
+            "DBImpl::Get": (
+                "Status DBImpl::Get() {\n"
+                "  read_memtable();\n"
+                "  read_immutable();\n"
+                "  return read_version();\n"
+                "}"
+            ),
+        },
+    )
+    candidates = [
+        cand("db/db_impl.h", "DBImpl::Get", 10, score=1.0, end=11),
+        cand("db/db_impl.cc", "DBImpl::Get", 100, score=0.9, end=104),
+    ]
+    config = BudgetConfig(hard_cap=10_000, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "Get 读取顺序", candidates, config=config)
+
+    assert len(pack.evidence) == 1
+    assert pack.evidence[0].path == "db/db_impl.cc"
+    assert pack.evidence[0].lines == (100, 104)
+    assert "同符号聚合×1" in pack.evidence[0].reason
+    assert pack.budget is not None and pack.budget.omitted_count == 1
+
+
+def test_dedup_cpp_declarations_keep_score_order(store, seed_file, sym, cand) -> None:
+    for path in ("include/db_impl.h", "include/db_impl_compat.h"):
+        seed_file(
+            store,
+            path=path,
+            language="cpp",
+            symbols=[sym("Get", "DBImpl::Get", kind="method", start=10, end=11)],
+            bodies={"DBImpl::Get": "Status Get() override;"},
+        )
+    candidates = [
+        cand("include/db_impl.h", "DBImpl::Get", 10, score=1.0, end=11),
+        cand("include/db_impl_compat.h", "DBImpl::Get", 10, score=0.9, end=11),
+    ]
+    config = BudgetConfig(hard_cap=10_000, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "Get", candidates, config=config)
+
+    assert len(pack.evidence) == 1
+    assert pack.evidence[0].path == "include/db_impl.h"
+    assert pack.budget is not None and pack.budget.omitted_count == 1
+
+
 def test_dedup_same_symbol_aggregation(store, seed_file, sym, cand) -> None:
     seed_file(
         store,
@@ -669,6 +731,59 @@ def test_stale_doc_gap_asks_where_the_symbol_is_now(store, seed_file, sym, cand)
     assert pack.answerable is False, "只有文档、无代码命中 → 不可回答"
     stale = next(item for item in pack.missing_evidence if item.code == "stale_doc_reference")
     assert f"{stale.symbol} 现在在哪里实现" in pack.next_queries
+
+
+def test_consensus_without_structured_code_is_not_answerable(store, seed_file, sym, cand) -> None:
+    """TASK-106：双通道共识全落在文档/前导段上时不得判可答。
+
+    真实反例（HelloAgents H-20）：问“仓库里 Qdrant 向量库的实现在哪”而该能力**不存在**，
+    README 与 ``.env.example`` 同时被 BM25/Vector 命中，旧规则因此判 ``answerable=True``。
+    新口径要求共识候选里至少有一个结构化代码切片（``kind=code/test``）。
+    """
+    seed_file(
+        store,
+        path="src/config.py",
+        language="python",
+        symbols=[sym("cfg", "cfg", kind="fallback_block", start=1)],
+    )
+    seed_file(
+        store,
+        path="docs/readme.md",
+        language="markdown",
+        spec_blocks=[_spec_block("docs/readme.md", "Overview")],
+    )
+    consensus_fallback = cand("src/config.py", "(module)", 1, score=1.0, kind="fallback")
+    consensus_fallback.channel_ranks = {"bm25": 1, "vector": 1}
+    consensus_spec = cand("docs/readme.md", "Overview", 1, score=0.9, kind="spec")
+    consensus_spec.channel_ranks = {"bm25": 2, "vector": 2}
+
+    pack = assemble(store, "q", [consensus_fallback, consensus_spec])
+
+    assert pack.answerable is False
+    assert pack.confidence == "low"
+
+
+def test_consensus_with_structured_code_stays_answerable(store, seed_file, sym, cand) -> None:
+    """防修过头：共识里有真实代码切片时仍可答（不能把所有多通道查询都压掉）。"""
+    seed_file(
+        store,
+        path="src/store.py",
+        symbols=[sym("get", "Store.get", kind="method", start=10)],
+    )
+    seed_file(
+        store,
+        path="docs/readme.md",
+        language="markdown",
+        spec_blocks=[_spec_block("docs/readme.md", "Overview")],
+    )
+    code = cand("src/store.py", "Store.get", 10, score=0.8, kind="code")
+    code.channel_ranks = {"bm25": 3, "vector": 3}
+    doc = cand("docs/readme.md", "Overview", 1, score=1.0, kind="spec")
+    doc.channel_ranks = {"bm25": 1, "vector": 1}
+
+    pack = assemble(store, "q", [doc, code])
+
+    assert pack.answerable is True
 
 
 def test_gap_message_lists_unresolved_symbol_names(store, seed_file, sym, cand) -> None:
