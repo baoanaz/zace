@@ -343,5 +343,7 @@ trace.candidates  # ① 索引层：recall → expand → rerank 后的候选池
 | `results/raw-cockpit-baseline.md` / `raw-cockpit-t101-final.md` | 内部靶场（cockpit 32 题）的原始 eval 报告：修复前 / TASK-101 修复后 |
 | `results/raw-zace-t101-final.md` | zace dogfood（20 题）TASK-101 修复后的原始报告 |
 | `results/phase2-helloagents-baseline.md` | hello-agents 靶场基线（recall/MRR，分 category 与语言；含索引范围实测） |
+| `results/index-cost-model-company-wsl.md` | **索引耗时模型 + 设备绑定基准**（`company-wsl`）：`耗时 ≈ chunk 数 × 21 ms`；瓶颈是下载向量响应体而非 TPM；含三靶场基准与并发安全边界 |
+| `targets-benchmark.md` | **耗时基准靶场登记**：`benchmark/{leveldb,HelloAgents,langchain}`（三档规模，2026-09-15 起） |
 | `results/phase1-baseline.md` / `phase2-bakeoff.md` / `index-performance-w6.md` / `robustness-scale.md` | 整理过的历史结论：Phase 1 基线、embedding 选型（D-44 依据）、索引性能、规模与健壮性。旧机器产出，**与当前靶场不可比**，仅作决策依据留档 |
 | 旧靶场的 `raw-*` 报告 | 已于 2026-09-14 删除（历史见 git） |

@@ -1,0 +1,50 @@
+[
+  {
+    "repo": "/home/xuwenzheng/2_github/AI/ACE/benchmark/langchain",
+    "files_listed": 3123,
+    "files_read": 3080,
+    "files_parsed": 2950,
+    "chunks": 20673,
+    "tokens_total": 4725916,
+    "tokens_per_chunk_mean": 228.6,
+    "token_p50": 129,
+    "token_p90": 474,
+    "token_p99": 1881,
+    "token_max": 7005,
+    "skipped": {
+      "oversize": 43,
+      "binary": 130
+    },
+    "languages": {
+      "python": 2569,
+      "fallback": 326,
+      "markdown": 55
+    },
+    "parse_errors": 0,
+    "parse_error_samples": [],
+    "truncation": [
+      {
+        "limit": 8192,
+        "tokens": 4725916,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 8192,
+        "tokens": 4725916,
+        "chunks_truncated": 0,
+        "chunks_truncated_pct": 0.0,
+        "tokens_saved_vs_max": 0
+      },
+      {
+        "limit": 2048,
+        "tokens": 4554901,
+        "chunks_truncated": 160,
+        "chunks_truncated_pct": 0.77,
+        "tokens_saved_vs_max": 171015
+      }
+    ],
+    "wall_seconds_local_only": 17.0
+  }
+]

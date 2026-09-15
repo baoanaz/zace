@@ -1,0 +1,2 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+zace-core: ApiRateLimitError: embedding 被限流（HTTP 429，endpoint=https://api.siliconflow.cn/v1/embeddings，已尝试 3 次）；响应体片段：{"message":"Request was rejected due to rate limiting. Details: TPM limit reached.","data":null}

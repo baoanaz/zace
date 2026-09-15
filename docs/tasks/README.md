@@ -127,6 +127,7 @@
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
 | [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
 | [TASK-101](TASK-101-检索修复与跨主机基准.md) | **检索质量修复与跨主机基准复现**（字面量通道 / 查询覆盖率缺口 / `--project-id` 放行 / 离线回放 `--replay` / 工具分工文案 / `.zaceignore` 去回音）；cockpit 靶场 R5 0.733→**0.767**、MRR 0.408→**0.505** | 无 | `core/zace_core/{retrieval,storage,engine,cli}/`、`benches/`、`scripts/bench-bundle.sh`、`service/zace_service/mcp.py`(仅文案)、`.zaceignore` | **review**（2026-09-15，泳道 B） |
+| [TASK-102](TASK-102-embedding索引耗时模型.md) | **embedding 索引耗时模型与设备绑定基准**（`company-wsl`）：`耗时 ≈ chunk 数 × 21 ms`；瓶颈是**下载向量响应体**（21.3 KB/chunk）而非 TPM；实测推翻"2048 截断提速"与"并发 3 提速 3×"；免费 bge-m3 `conc=1` 是唯一安全档（langchain conc=3 **429 整次失败**） | 无（soft: TASK-049） | `benches/embed-bench/`、`benches/results/index-cost-model-company-wsl.md`、`benches/targets-benchmark.md` | **review**（2026-09-15，泳道 B） |
 
 ### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）
 
@@ -260,5 +261,17 @@
 历史报告（`benches/results/*`）保留，但注意其靶场已不可得。
 
 详情（规模、负例口径、为何选它）见 `benches/README.md` 的“已指定的评测仓库”节。
+
+### 耗时基准靶场（2026-09-15 新增）
+
+与上述**质量**靶场分开：这三个用于**索引耗时**基准（三档规模 + 两种语言），只读外部目录
+`/home/xuwenzheng/2_github/AI/ACE/benchmark/`。登记见 `benches/targets-benchmark.md`，
+基准数字见 `benches/results/index-cost-model-company-wsl.md`。
+
+| 档 | 仓库 | chunks | tokens | 路径 | commit |
+|---|---|---|---|---|---|
+| 小 | `leveldb` | 1,898 | 0.26M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/leveldb` | `7ee830d` |
+| 中 | `HelloAgents` | 2,729 | 0.89M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/HelloAgents` | `93e77ea` |
+| 大 | `langchain` | 20,673 | 4.73M | `/home/xuwenzheng/2_github/AI/ACE/benchmark/langchain` | `41d3572` |
 
 可复制提示词、用户操作循环与报告模板见 `docs/plan/dispatch.md`。

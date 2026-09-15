@@ -1,0 +1,15 @@
+warning: benchmarks/db_bench.cc: L348: syntax error near 'cv'; L349: syntax error near 'total'; L357: missing ;; L358: syntax error near 'num_done'; L359: syntax error near 'start'; L679: syntax error near 'Benchmark::'; L698: syntax error near '->*(arg'; L698: syntax error near ')(thread)'
+warning: benchmarks/db_bench_log.cc: L81: syntax error near 'PRIu64'
+warning: db/c.cc: L269: syntax error near ','; L270: syntax error near ','
+warning: db/db_impl.cc: L1063: syntax error near 'version'; L1064: syntax error near 'mem'; L1065: syntax error near 'imm'
+warning: db/db_impl.h: L113: missing ;; L119: missing ;; L124: missing ;; L127: missing ;; L130: missing ;; L133: missing ;; L135: missing ;; L140: missing ;; L143: missing ;; L144: missing ;; L146: missing ;; L151: missing ;; L176: missing ;; L178: syntax error near 'imm_'; L181: missing ;; L183: syntax error near 'seed_'; L186: syntax error near 'writers_'; L187: syntax error near 'tmp_batch_'; L189: syntax error near 'snapshots_'; L193: missing ;; ... 错误过多，仅回报前 20 条
+warning: 另有 29 条解析/读取告警
+project: 3ed886ce58bc0e47 (created)
+repo: /home/xuwenzheng/2_github/AI/ACE/benchmark/leveldb
+identity: git remote https://github.com/google/leveldb.git (path .)
+mode: full_reparse (invalidation=full_reparse)
+files: added=152 modified=0 deleted=0 parsed=152
+chunks: new=1898 reused=0 removed=0
+vectors: upserted=1898 deleted=0
+graph: edges_retargeted=867 unresolved_resolved=47 spec_refs=239 ambiguous=606
+elapsed: 46.6s

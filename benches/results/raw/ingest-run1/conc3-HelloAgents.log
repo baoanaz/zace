@@ -1,0 +1,11 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+project: 06078cc80c7ce7d7 (created)
+repo: /home/xuwenzheng/2_github/AI/ACE/benchmark/HelloAgents
+identity: git remote https://github.com/jjyaoao/HelloAgents.git (path .)
+mode: full_reparse (invalidation=full_reparse)
+files: added=236 modified=0 deleted=0 parsed=236
+chunks: new=2729 reused=0 removed=0
+vectors: upserted=2729 deleted=0
+graph: edges_retargeted=1309 unresolved_resolved=13 spec_refs=2324 ambiguous=572
+skipped: 4 个二进制/不可解码文件
+elapsed: 44.7s

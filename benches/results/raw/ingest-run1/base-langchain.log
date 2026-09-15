@@ -1,0 +1,11 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+project: ca2050db0db5b1e2 (created)
+repo: /home/xuwenzheng/2_github/AI/ACE/benchmark/langchain
+identity: git remote https://github.com/langchain-ai/langchain.git (path .)
+mode: full_reparse (invalidation=full_reparse)
+files: added=2950 modified=0 deleted=0 parsed=2950
+chunks: new=20673 reused=0 removed=0
+vectors: upserted=20673 deleted=0
+graph: edges_retargeted=9834 unresolved_resolved=462 spec_refs=15409 ambiguous=8604
+skipped: 173 个二进制/不可解码文件
+elapsed: 589.3s

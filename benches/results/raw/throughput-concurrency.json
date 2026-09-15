@@ -1,0 +1,117 @@
+{
+  "generated_at": "2026-09-15T10:23:34+0800",
+  "machine": {
+    "cpu_count": 6,
+    "mem_total_gib": 15.6,
+    "kernel": "5.15.167.4-microsoft-standard-WSL2",
+    "proxy": "http://127.0.0.1:7890",
+    "measured_bandwidth_note": "见 TASK-049 §8.1：本机 2.9–4.8 MB/s（走本机代理）"
+  },
+  "repo": "/home/xuwenzheng/2_github/AI/ACE/benchmark/langchain",
+  "sample": 2000,
+  "sample_tokens_total": 577864,
+  "model": "bge-m3",
+  "base_url": "https://api.siliconflow.cn",
+  "results": [
+    {
+      "config": {
+        "batch_size": 256,
+        "token_budget": 75000,
+        "concurrency": 1,
+        "max_input_tokens": 8192
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 55.03,
+      "walls_s": [
+        55.03
+      ],
+      "m_tok_per_min": 0.63,
+      "chunk_per_s": 36.3,
+      "requests": 9,
+      "response_mb": 41.52,
+      "response_MB_per_s": 0.75,
+      "status_counts": {
+        "200": 9
+      },
+      "error": null,
+      "label": "maxTok=8192 conc=1 batch=256 budget=75000"
+    },
+    {
+      "config": {
+        "batch_size": 256,
+        "token_budget": 75000,
+        "concurrency": 2,
+        "max_input_tokens": 8192
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 45.33,
+      "walls_s": [
+        45.33
+      ],
+      "m_tok_per_min": 0.765,
+      "chunk_per_s": 44.1,
+      "requests": 9,
+      "response_mb": 41.51,
+      "response_MB_per_s": 0.92,
+      "status_counts": {
+        "200": 9
+      },
+      "error": null,
+      "label": "maxTok=8192 conc=2 batch=256 budget=75000"
+    },
+    {
+      "config": {
+        "batch_size": 256,
+        "token_budget": 75000,
+        "concurrency": 4,
+        "max_input_tokens": 8192
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 44.47,
+      "walls_s": [
+        44.47
+      ],
+      "m_tok_per_min": 0.78,
+      "chunk_per_s": 45.0,
+      "requests": 9,
+      "response_mb": 41.51,
+      "response_MB_per_s": 0.93,
+      "status_counts": {
+        "200": 9
+      },
+      "error": null,
+      "label": "maxTok=8192 conc=4 batch=256 budget=75000"
+    },
+    {
+      "config": {
+        "batch_size": 256,
+        "token_budget": 75000,
+        "concurrency": 6,
+        "max_input_tokens": 8192
+      },
+      "chunks": 2000,
+      "tokens_raw": 577864,
+      "tokens_effective": 577864,
+      "elapsed_s": 43.78,
+      "walls_s": [
+        43.78
+      ],
+      "m_tok_per_min": 0.792,
+      "chunk_per_s": 45.7,
+      "requests": 9,
+      "response_mb": 41.51,
+      "response_MB_per_s": 0.95,
+      "status_counts": {
+        "200": 9
+      },
+      "error": null,
+      "label": "maxTok=8192 conc=6 batch=256 budget=75000"
+    }
+  ]
+}
