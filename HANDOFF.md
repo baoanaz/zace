@@ -5,6 +5,18 @@
 > **跑基准前先读 [`benches/README.md`](benches/README.md)「新会话从这里开始」**：三靶场（`leveldb`/`HelloAgents`/`langchain`）的索引已持久化在 `/root/.zace/bench/voyage-4-lite-d1024`，**复用即可、不要再 ingest**；
 > 设备绑定纪律与报告索引见 `benches/results/README.md`。
 >
+> **基准与质量现状（2026-09-15，VPS 生产环境 `vps-la-2c2g`）**：
+> ① 配置已冻结（`voyage-4-lite` / 1024 维 / 并发 4 / batch 500 / budget 300000 / maxTok 32000），
+>    耗时与内存基线（含 ±20% 抖动纪律）见 `benches/results/baseline-v1.md`；
+> ② 三仓库各 20 题（共 60）的**题库 + 人工核实答案 + 建议工具**在 `benches/golden/{leveldb,HelloAgents,langchain}/qa.md`，
+>    首轮质量评测结论见 `benches/results/qa-quality-v1.md`（search recall@5 0.64–0.77；ask 全部作答且证据不足时如实拒绝）。
+> **留给架构优化的已知入口（按性价比排序）**：
+> ① 检索的**符号级定位偏弱**——`.h/.cc` 与同主题 doc 互串（qa-quality §4-1）；
+> ② **负例可回答性阈值偏宽**——名字沾边即判 `answerable`（§4-4）；
+> ③ 本地/网络**未流水线化**——重叠可省 ~26%（`index-cost-model-vps.md` §7-3）；
+> ④ **维度不可配**——API 模式未透传 `output_dimension`（`baseline-v1.md` §5-1）；
+> ⑤ **chunk 参数无 env 入口**，且改动触发 `full_reparse`（必须先换数据根，§5-2）。
+>
 > 当前基线：`main @ d5f7eb4` ｜ ruff ✅ ｜ 依赖方向 ✅ ｜ **878 passed, 2 skipped** ｜ web **41 passed** + build ✅
 >
 > **本轮更新（2026-09-14 晚）**：TASK-087/088/089/090 已合并并端到端验证（真实 LLM 调用、MCP 越权拦截、

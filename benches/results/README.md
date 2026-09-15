@@ -10,6 +10,7 @@
 | 复用三靶场的**持久索引**跑基准（**不要重新索引**） | `../targets-benchmark.md` §持久索引 + `raw/ingest-vps/INDEXES.json` |
 | 当前 VPS（生产）的索引耗时/内存/带宽/TPM 结论 | `index-cost-model-vps.md` |
 | **要改维度 / chunk 切分，找对照点** | **`baseline-v1.md`**（冻结配置、基线数字、必须换数据根的原因） |
+| **要看检索/问答质量**（三仓库 60 题） | **`qa-quality-v1.md`** + `../golden/<repo>/qa.md` |
 | 公司 WSL 的同名结论（对照设备） | `index-cost-model-company-wsl.md` |
 | 检索质量（recall/MRR）当前基线 | `../README.md`「相关报告」表 + `raw-*.md` |
 | 计量脚本与各项指标口径定义 | `../embed-bench/README.md` |
@@ -28,6 +29,7 @@
 |---|---|---|---|
 | `index-cost-model-vps.md` | `vps-la-2c2g` | 2026-09-15 | 冷启动 = 本地 70% + 网络 30%；TPM 受链路限制永远跑不满 16M；并发 4 是甜点；内存是唯一风险 |
 | **`baseline-v1.md`** | `vps-la-2c2g` | 2026-09-15 | **冻结配置 v1 + 三靶场基线**（后续调维度/chunk 的对照点）：含 ±20% 抖动纪律与两个「当前不可配」阻塞项 |
+| **`qa-quality-v1.md`** | `vps-la-2c2g` | 2026-09-15 | **60 题质量首测**：search recall@5 0.64–0.77 / MRR 0.39–0.69；ask 全部作答且证据不足时如实拒绝；失败集中在符号级定位与负例阈值 |
 | `index-cost-model-company-wsl.md` | `company-wsl` | 2026-09-15 | 耗时 ≈ chunk × 21 ms，瓶颈是下载响应体（~1 MB/s），与 TPM 无关 |
 | `phase2-helloagents-baseline.md` | 旧机→当前 | 2026-09-14 | hello-agents 主靶场基线（recall@5 0.586 / recall@10 0.655 / MRR 0.388） |
 | `raw-helloagents-baseline.md` | — | 2026-09-14 | 上表的 **runner 直出**原始产物 |
@@ -59,6 +61,7 @@
 | `throughput-vps-conc-scan.json` | `throughput_probe.py` | §3.2/§4.2 并发扫描（4/8/16/32，16 因 2 vCPU 争抢崩塌） |
 | `repo-profile-vps.json` | `profile_repo.py` | 三靶场画像（文件/chunk/token 分布，免 API） |
 | `baseline-v1/*.json` | `ingest_probe.py` | `baseline-v1.md` 的全部数字（含机器负载快照） |
+| `qa-probe/*.json` | `../golden/qa_probe.py` | `qa-quality-v1.md` 的逐题结果（search 排名 / ask 答案原文） |
 | `ingest-run1/*.log` | `run_targets.sh`（WSL） | WSL 端到端墙钟与峰值（含 429 失败样本） |
 
 > 命名约定：`*.json` = 脚本产出的**原始证据**（不改动）；`raw-*.md` = runner 直出的**报告**；

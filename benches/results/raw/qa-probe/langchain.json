@@ -1,0 +1,339 @@
+{
+  "schema": 1,
+  "golden": "benches/golden/langchain/langchain.jsonl",
+  "project_id": "ca2050db0db5b1e2",
+  "data_root": "/root/.zace/bench/voyage-4-lite-d1024",
+  "counts": {
+    "total": 20,
+    "search": 15,
+    "ask": 5
+  },
+  "search": {
+    "cases": 15,
+    "recall_at_5": 0.6429,
+    "recall_at_10": 0.6429,
+    "mrr": 0.6429,
+    "negatives_passed": 0,
+    "negatives_total": 1,
+    "degraded": 0,
+    "per_case": [
+      {
+        "id": "LC-01",
+        "category": "symbol",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/output_parsers/pydantic.py:57-93 (PydanticOutputParser.parse)",
+          "libs/core/langchain_core/output_parsers/openai_functions.py:256-303 (PydanticOutputFunctionsParser.parse_result)",
+          "libs/partners/anthropic/langchain_anthropic/output_parsers.py:66-70 (ToolsOutputParser._pydantic_parse)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-02",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/text-splitters/langchain_text_splitters/character.py:91-97 (RecursiveCharacterTextSplitter)",
+          "libs/text-splitters/README.md:20-23 (🦜✂️ LangChain Text Splitters > 📖 Documentation)",
+          "libs/text-splitters/langchain_text_splitters/markdown.py:14-16 (MarkdownTextSplitter)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-03",
+        "category": "symbol",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": false,
+        "top3": [
+          "libs/langchain_v1/tests/unit_tests/agents/middleware/implementations/test_summarization.py:1478-1479 (test_and_trigger_conditions.token_counter_low)",
+          "libs/core/langchain_core/messages/utils.py:1970-2138 (_first_max_tokens)",
+          "libs/langchain_v1/tests/unit_tests/agents/middleware/implementations/test_summarization.py:1462-1463 (test_and_trigger_conditions.token_counter_high)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-04",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/prompts/chat.py:1123-1172 (ChatPromptTemplate.from_messages)",
+          "libs/core/langchain_core/prompts/chat.py:794-906 (ChatPromptTemplate)",
+          "openwiki/prompts.md:79-116 (Fundamental Concepts > Prompt Types > ChatPromptTemplate)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-05",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/tools/base.py:433-440 (BaseTool)",
+          "libs/core/langchain_core/tools/convert.py:31-44 (tool)",
+          "libs/core/langchain_core/tools/simple.py:31-43 (Tool)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-06",
+        "category": "path",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "libs/partners/anthropic/tests/unit_tests/middleware/test_prompt_caching.py:539-542 (TestToolCaching.test_does_not_mutate_original_tools.my_tool)",
+          "libs/partners/anthropic/tests/unit_tests/middleware/test_prompt_caching.py:574-577 (TestToolCaching.test_respects_custom_ttl.my_tool)",
+          "libs/partners/anthropic/tests/unit_tests/middleware/test_prompt_caching.py:662-665 (TestBedrockCompatibility.test_tags_tools_for_bedrock.my_tool)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-08",
+        "category": "path",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "openwiki/architecture.md:307-316 (Key Files and Symbols > langchain-core)",
+          "libs/core/langchain_core/load/mapping.py:627-642 (OLD_CORE_NAMESPACES_MAPPING)",
+          "openwiki/source-map.md:180-186 (Common Workflows > Finding Core Abstractions)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-09",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": false,
+        "top3": [
+          "libs/core/langchain_core/caches.py:32-94 (BaseCache)",
+          "libs/standard-tests/langchain_tests/integration_tests/cache.py:16-26 (SyncCacheTestSuite)",
+          "libs/core/langchain_core/caches.py:155-181 (InMemoryCache)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-11",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/embeddings/embeddings.py:8-35 (Embeddings)",
+          "libs/standard-tests/langchain_tests/unit_tests/embeddings.py:15-17 (EmbeddingsTests)",
+          "libs/partners/nomic/langchain_nomic/embeddings.py:13-23 (NomicEmbeddings)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-12",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/documents/base.py:288-310 (Document)",
+          "libs/core/langchain_core/indexing/base.py:496-512 (DocumentIndex)",
+          "libs/langchain/langchain_classic/storage/_lc_store.py:26-32 (_load_document_from_bytes)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-13",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/language_models/chat_models.py:284-397 (BaseChatModel)",
+          "libs/core/tests/unit_tests/language_models/chat_models/test_base.py:242-242 (test_astream_fallback_to_ainvoke.ModelWithGenerate)",
+          "libs/langchain_v1/tests/unit_tests/agents/middleware/implementations/test_summarization.py:708-708 (test_summarization_middleware_full_workflow_async.MockModel)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-15",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/core/langchain_core/tracers/base.py:33-35 (BaseTracer)",
+          "openwiki/callbacks.md:202-216 (LangSmith Integration > Run Collection)",
+          "libs/core/langchain_core/tracers/root_listeners.py:23-28 (RootListenersTracer)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-17",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "libs/text-splitters/langchain_text_splitters/base.py:59-61 (TextSplitter)",
+          "libs/text-splitters/langchain_text_splitters/base.py:107-144 (TextSplitter.create_documents)",
+          "libs/text-splitters/langchain_text_splitters/html.py:398-452 (HTMLSectionSplitter.create_documents)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-19",
+        "category": "path",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": false,
+        "top3": [
+          "libs/langchain/langchain_classic/retrievers/ensemble.py:218-302 (EnsembleRetriever.rank_fusion)",
+          "libs/langchain/langchain_classic/retrievers/ensemble.py:53-72 (EnsembleRetriever)",
+          "libs/langchain/langchain_classic/retrievers/ensemble.py:182-198 (EnsembleRetriever._get_relevant_documents)"
+        ],
+        "error": null
+      },
+      {
+        "id": "LC-20",
+        "category": "negative",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "libs/langchain/langchain_classic/memory/entity.py:347-368 (SQLiteEntityStore)",
+          "libs/core/README.md:13-52 (🦜🍎️ LangChain Core > Quick Install)",
+          "libs/partners/qdrant/README.md:20-23 (langchain-qdrant > 📖 Documentation)"
+        ],
+        "error": null
+      }
+    ]
+  },
+  "ask": {
+    "cases": 5,
+    "answered": 5,
+    "answer_hits": 4,
+    "pack_hits": 5,
+    "per_case": [
+      {
+        "id": "LC-07",
+        "category": "behavior",
+        "question": "自己实现一个向量库（VectorStore 子类）时，最少必须实现哪些方法？add_documents 还需要自己写吗？",
+        "expected": [
+          "libs/core/langchain_core/vectorstores/base.py"
+        ],
+        "pack_rank": 1,
+        "pack_answerable": true,
+        "evidence_count": 9,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 10328.4,
+        "answer_tokens": 1105,
+        "valid_citations": 17,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n最小实现面是 **`add_texts`**，而不是 `add_documents`。基类 `VectorStore.add_documents` 已经写好了适配逻辑：它会检查子类是否覆写了 `add_texts`，只要覆写了，就把 `Document` 拆成 `texts` / `metadatas` / `ids` 转发给 `add_texts`；只有当你 `add_texts` 也没实现时，才抛 `NotImplementedError` [E2]。\n\n所以 **`add_documents` 通常不需要自己写**。子类自己覆写它只是可选的定制/优化手段，例如 `InMemoryVectorStore` 覆写 `add_documents` 以自行调用 embedding 并处理 id 校验与生成 [E6]；测试里的子类也通过覆写它来强制注入 `ids` [E8]。检索器侧的 `add_documents`（如 `VectorStoreRetriever` [E1]、`TimeWeightedVectorStoreRetriever` [E3]、`ParentDocumentRetriever` [E4]）都是转调 `self.vectorstore.add_documents(...)`，并不改变这个结论。\n\n## Code Flow\n`VectorStore.add_documents(documents, **kwargs)` [E2]:\n1. 判断 `type(self).add_texts != VectorStore.add_texts`（即子类是否覆写了 `add_texts`）[E2:247]\n2. 若 `kwargs` 中没有 `ids`，收集 `doc.id`，当至少有一个非空 id 时填入 `kwargs[\"ids\"]`（kwargs 中的 ids 优先）[E2:248-254]\n3. 取 `texts = [doc.page_content ...]`、`metadatas = [doc.metadata ...]` [E2:256-257]\n4. `return self.add_texts(texts, metadatas, **kwargs)` [E2:258]\n5. 否则抛出 `NotImplementedError`，消息为 \"`add_documents` and `add_texts` has not been implemented for {class}\" [E2:259-263]\n\n## Key Evidence\n- [E2] `libs/core/langchain_core/vectorstores/base.py:234-263`：基类 `add_documents` 的分支逻辑与 `add_texts` 转发；未实现时的报错文本。\n- [E5] `libs/core/langchain_core/vectorstores/base.py:43-45`：`class VectorStore(ABC)` — 说明是抽象基类。\n- [E6] `in_memory.py:187-221`：子类选择覆写 `add_documents`（embedding + id 生成）的示例。\n- [E8] `tests/unit_tests/retrievers/test_parent_document.py:26-32`：测试子类覆写 `add_documents` 并 `super().add_documents(...)`。\n\n## Spec vs Implementation\n证据中没有与此结论相冲突的文档描述，故不构成\"实现与设计不一致\"。需注意一处**命名/注释可能引起歧义**：[E7] 测试类 `CustomAddDocumentsVectorstore` 的 docstring 写着 \"A VectorStore that only implements add documents\" [E7:74-76]，但它只提供了类声明与 docstring，方法体未出现在证据中，因此无法据此判断它到底实现了哪些方法，也不能用它反驳 [E2] 的 `add_texts` 转发机制。\n\n## Missing Evidence\n- `VectorStore` 中标记为 `@abstractmethod` 的方法清单（[E5] 只截到第 45 行，未列出 abstractmethods），因此\"最少必须实现的方法\"只能就 `add_documents` / `add_texts` 这一对给出确定结论；检索类接口（如 `similarity_search`、`from_texts` 等）是否强制要求，证据不足。\n- `VectorStore.add_texts` 自身的定义与签名（被 [E2] 以类属性方式比较，但该方法的代码未被提供）。\n- [E7] `CustomAddDocumentsVectorstore` 的方法体。\n- [F1]（`VectorStore.add_documents → Crawler.type → Crawler.click`）与向量库实现无关，不予采信。"
+      },
+      {
+        "id": "LC-10",
+        "category": "behavior",
+        "question": "BaseRetriever 和 VectorStoreRetriever 是什么关系？向量库怎么变成一个检索器？",
+        "expected": [
+          "libs/core/langchain_core/retrievers.py",
+          "libs/core/langchain_core/vectorstores/base.py"
+        ],
+        "pack_rank": 1,
+        "pack_answerable": true,
+        "evidence_count": 3,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 6370.9,
+        "answer_tokens": 1066,
+        "valid_citations": 14,
+        "invalid_citations": 0,
+        "citation_coverage": 0.875,
+        "answer": "## Answer\n\n两者是**继承关系**：`VectorStoreRetriever` 是 `BaseRetriever` 的子类（[E1] 第 964 行 `class VectorStoreRetriever(BaseRetriever)`）。\n\n- **BaseRetriever**（[E2] retrievers.py:55-144）：抽象基类，定义\"检索系统\"的通用接口，继承 `RunnableSerializable`，因此必须走 Runnable 的 `invoke`/`ainvoke`/`batch`/`abatch` 用法；自定义检索器需要实现 `_get_relevant_documents`，可选实现 `_aget_relevant_documents` 提供异步实现（[E2] 55-72 行）。\n- **VectorStoreRetriever**（[E1] vectorstores/base.py:964-985）：面向向量库的具体检索器实现，额外持有 `vectorstore: VectorStore` 字段，并带有 `search_type`（默认 `\"similarity\"`）、`search_kwargs`，以及允许的搜索类型集合 `allowed_search_types = (\"similarity\", \"similarity_score_threshold\", \"mmr\")`。\n\n也就是说：`BaseRetriever` 规定\"检索器是什么\"，`VectorStoreRetriever` 规定\"如何用向量库来检索\"。这一\"检索器是 Runnable\"的设计也与文档一致——文档把 `VectorStoreRetriever`、`BM25Retriever` 列入\"All Components Are Runnables\"，从而可被 `|` 组合、并行、重试、统一监控（[E3] 632-644 行）。\n\n## Code Flow\n\n关于\"向量库怎么变成一个检索器\"的具体调用链，**证据不足**：\n\n- 现有证据只能说明 `VectorStoreRetriever` 通过字段 `vectorstore: VectorStore` 持有向量库、通过 `search_type`/`search_kwargs` 决定搜索行为（[E1] 967-980 行）。\n- 但证据中**没有** `VectorStoreRetriever._get_relevant_documents`（或 `_aget_relevant_documents`）的实现体，也没有 `VectorStore.as_retriever()` 之类的工厂方法，因此无法确认\"向量库 → 检索器\"的具体转换入口与实际搜索调用。\n- 本次证据中没有任何 [F*] 调用链证据，故不描述任何调用关系。\n\n## Key Evidence\n\n- [E1] `libs/core/langchain_core/vectorstores/base.py:964-985`：`VectorStoreRetriever(BaseRetriever)`，含 `vectorstore`、`search_type`、`search_kwargs`、`allowed_search_types`。\n- [E2] `libs/core/langchain_core/retrievers.py:55-144`：`BaseRetriever(RunnableSerializable[...], ABC)`，自定义检索器需实现 `_get_relevant_documents`。\n- [E3] `openwiki/runnables.md`：检索器属于 Runnable 组件之一。\n\n## Spec vs Implementation\n\n现有证据中，文档（[E3]）与代码（[E1]、[E2]）在\"检索器是 Runnable\"这一点上**未见冲突**：[E3] 声明检索器是 Runnable，[E2] 中 `BaseRetriever` 确实继承 `RunnableSerializable`。至于\"向量库如何转为检索器\"的细节，文档与代码证据均未覆盖，故无法比较，也不存在可指出的不一致。\n\n## Missing Evidence\n\n1. `VectorStoreRetriever._get_relevant_documents` / `_aget_relevant_documents` 的实现代码（用于确认它如何调用向量库搜索）。\n2. `VectorStore` 侧提供检索器的工厂方法（如 `as_retriever`）及其参数装配代码。\n3. 任何 [F*] 调用链证据，用于确认 `VectorStoreRetriever` → 向量库搜索函数的实际调用路径。\n4. `search_type` 到具体搜索方法的映射代码（`similarity`/`similarity_score_threshold`/`mmr` 的分派逻辑）。"
+      },
+      {
+        "id": "LC-14",
+        "category": "behavior",
+        "question": "langchain_core.indexing 的 index() 是怎么判断「该跳过 / 该更新 / 该删除」的？cleanup 有哪几种模式？",
+        "expected": [
+          "libs/core/langchain_core/indexing/api.py"
+        ],
+        "pack_rank": 2,
+        "pack_answerable": true,
+        "evidence_count": 4,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 9832.4,
+        "answer_tokens": 918,
+        "valid_citations": 25,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n**cleanup 的取值（可直接从签名得到）**：`cleanup: Literal[\"incremental\", \"full\", \"scoped_full\"] | None = None`，即三种模式加一个「不做清理」的 `None`，默认 `None` [E2][E3]。注意 `aindex()` 的签名与之完全一致 [E3]。此外还有 `force_update: bool = False` 与 `key_encoder`（\"sha1\"/\"sha256\"/\"sha512\"/\"blake2b\" 或自定义函数，默认 `\"sha1\"`）等参数 [E2][E3]。\n\n**「跳过 / 更新 / 删除」怎么判定**：证据不足。`index()` 的函数体在证据中被截断（`api.py:311` 之后约 292 行被省略）[E2]，`aindex()` 同理（省略 304 行）[E3]，因此看不到实际的比较分支（例如基于 key/hash 比较记录、调用 record_manager 的哪些方法）以及删除分支的触发条件。\n\n能确证的只是**外部可观察行为**，来自单元测试 [E4]（`cleanup=\"full\"`）：\n- 一批 3 个文档中，`metadata={\"source\": \"1\"}` 的第 3 个文档与第 1 个内容完全相同，结果为 `num_added=2, num_skipped=1` → 同源且内容未变的文档会被跳过 [E4]。\n- 用同一批文档再跑一次，结果为 `num_skipped=3` → 已入库且内容未变者全部跳过 [E4]。\n- 加 `force_update=True` 后变为 `num_updated=2, num_skipped=1` → 强制更新走的是「更新」计数而非「跳过」[E4]。\n- 这三个断言中 `num_deleted` 均为 0 [E4]，因此**没有任何证据展示删除分支被触发的场景**。\n\n## Code Flow\n\n证据中没有 `[F*]` 调用链证据，只能给出静态位置关系：\n- `langchain_core.indexing` 包通过 `_dynamic_imports` 把 `index`/`aindex` 指向子模块 `api`，`RecordManager`/`InMemoryRecordManager`/`DocumentIndex` 等指向 `base` [E1]。\n- `index()` 定义于 `libs/core/langchain_core/indexing/api.py:296` [E2]；`aindex()` 定义于同文件 `:635` [E3]。\n- 包 docstring 声称其用途是避免重复内容、并在内容未变时不覆盖已有内容 [E1]。\n\n## Key Evidence\n\n- cleanup 模式枚举与默认值：`index()` 签名 [E2]、`aindex()` 签名 [E3]。\n- 跳过/更新的行为样例：`test_indexing_force_update` 的三组断言 [E4]。\n- 设计意图（包级 docstring）：避免重复、未变不覆写 [E1]。\n\n## Spec vs Implementation\n\n证据中**没有 Doc 类证据**（仅有代码内 docstring，且被截断 [E2][E3]），因此无法做设计文档与实现的对齐比较——这一节证据不足。\n\n## Missing Evidence\n\n1. `index()` 函数体（`api.py:311` 以后被省略）与 `aindex()` 主体（`:648` 以后被省略），即真正的比较/分支逻辑 [E2][E3]。\n2. `RecordManager` 的接口方法（如 `get_time`、`exists`、`update`、`delete_keys`）及其语义，`base` 模块未展开 [E1]。\n3. 三种 cleanup 模式（`incremental` / `full` / `scoped_full`）各自语义差异的说明——签名只给出枚举值，未给出定义或文档。\n4. `source_id_key` 在判定中的作用、以及 `num_deleted > 0` 的任何样例。\n5. 任何 `[F*]` 调用链证据（本证据集内为空）。"
+      },
+      {
+        "id": "LC-16",
+        "category": "behavior",
+        "question": "RunnableWithFallbacks、RunnableRetry、RunnableBranch 各自解决什么问题？",
+        "expected": [
+          "libs/core/langchain_core/runnables/fallbacks.py",
+          "libs/core/langchain_core/runnables/retry.py",
+          "libs/core/langchain_core/runnables/branch.py"
+        ],
+        "pack_rank": 1,
+        "pack_answerable": true,
+        "evidence_count": 4,
+        "status": "answered",
+        "answer_hit": false,
+        "latency_ms": 9649.2,
+        "answer_tokens": 1269,
+        "valid_citations": 15,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n- **RunnableWithFallbacks**：解决“主 Runnable 失败后怎么办”的问题。它持有首先运行的 `runnable` 与一串按顺序尝试的 `fallbacks`，直到某个成功或全部失败；可作用于单个 Runnable，也可作用于 Runnable 链。可通过 `exceptions_to_handle` 限定哪些异常才触发回退（不匹配的异常立即抛出），通过 `exception_key` 把被处理的异常作为输入传给 fallback。通常用 `Runnable.with_fallbacks()` 创建。[E1]\n- **RunnableRetry**：解决“可恢复的瞬时失败”问题，为任意 Runnable 子类添加重试逻辑，特别适合可能因瞬时错误失败的网络调用。可配置 `retry_exception_types`（默认重试所有异常）、`wait_exponential_jitter` 与 `exponential_jitter_params`（退避与抖动）、`max_attempt_number`（默认 3）。实现上是 RunnableBinding，一般通过 `.with_retry()` 使用；文档建议把重试范围尽量缩小到易失败的那个 Runnable，而不是整条链。[E3]\n- **RunnableBranch**：解决“按条件在多条分支中选择一条执行”的问题。它以 `(condition, Runnable)` 列表加一个 `default` 初始化；对输入执行时，第一个求值为 `True` 的条件所对应的 Runnable 被选中运行，若没有任何条件为 `True`，则运行默认分支。[E2]\n\n三者定位不同：fallback 是失败后的替代路径，retry 是同一路径的重复尝试，branch 是正常运行时的条件路由。\n\n## Key Evidence\n\n- [E1] `RunnableWithFallbacks` 定义与字段 `runnable` / `fallbacks` / `exceptions_to_handle` / `exception_key`，以及“Fallbacks are tried in order until one succeeds or all fail”“usually more convenient to use the `with_fallbacks` method”。\n- [E2] `RunnableBranch` 定义、`branches: Sequence[tuple[Runnable[Input, bool], Runnable[Input, Output]]]`、`default`，以及“first condition that evaluates to True is selected”“If no condition evaluates to `True`, the default branch is run”。\n- [E3] `RunnableRetry` 定义、`retry_exception_types` / `wait_exponential_jitter` / `exponential_jitter_params` / `max_attempt_number`，以及“Retry a Runnable if it fails”“especially useful for network calls that may fail due to transient errors”“best practice to keep the scope of the retry as small as possible”。\n- [E4] Runnable 层次图，列出 `with_fallbacks(fallbacks) -> RunnableWithFallbacks` 与 `with_retry(params) -> RunnableRetry`，并给出 `RunnableBranch`、`RunnableWithFallbacks`、`RunnableRetry` 的属性示意。\n\n## Spec vs Implementation\n\n存在一处**实现与设计（类图）可能不一致**：\n\n- 设计/文档类图 [E4] 标明 `RunnableSerializable <|-- RunnableRetry`，即 RunnableRetry 直接继承 RunnableSerializable。\n- 代码 [E3] 实际声明为 `class RunnableRetry(RunnableBindingBase[Input, Output])`。\n\n证据中没有 `RunnableBindingBase` 的继承信息，因此无法判断它是类图简化/遗漏，还是真实的继承关系差异。[E4][E3]\n\n另外，[E4] 类图对字段做了简化：`RunnableRetry` 只列 `bound`、`max_attempt_number`，`RunnableWithFallbacks` 只列 `runnable`、`fallbacks`；而代码中还有 `retry_exception_types`、`wait_exponential_jitter`、`exceptions_to_handle`、`exception_key` 等字段 [E1][E3][E4]。这属于图示粒度差异，不必然构成语义冲突。\n\n## Missing Evidence\n\n- 没有 [F*] 调用链证据，因此无法说明 fallback/retry/branch 在运行时具体由哪些方法（如 `invoke` / `batch` / `stream`）触发和调度。\n- 缺少 `RunnableBindingBase` 的定义证据，无法确认它与 `RunnableSerializable` 的继承关系，因而上述第 1 条不一致只能标注为“可能”。"
+      },
+      {
+        "id": "LC-18",
+        "category": "behavior",
+        "question": "ChatPromptTemplate.from_messages 支持哪几种写法来做占位？",
+        "expected": [
+          "libs/core/langchain_core/prompts/chat.py",
+          "libs/core/langchain_core/prompts/chat.py"
+        ],
+        "pack_rank": 1,
+        "pack_answerable": true,
+        "evidence_count": 3,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 12794.4,
+        "answer_tokens": 867,
+        "valid_citations": 10,
+        "invalid_citations": 0,
+        "citation_coverage": 0.6667,
+        "answer": "## Answer\n\n依据代码文档字符串，`ChatPromptTemplate.from_messages` 的 `messages` 参数支持 5 种写法 [E1]：\n\n1. `BaseMessagePromptTemplate` 实例\n2. `BaseMessage` 实例（如 `SystemMessage(content=\"hello\")`）\n3. `(message type, template)` 二元组，例如 `('human', '{user_input}')`\n4. `(message class, template)` 二元组\n5. 纯字符串，等价于 `('human', template)`，例如 `'{user_input}'`\n\n其中第 3、5 种就是最常用的占位写法：元组 `(\"human\", \"Hello, {name}\")` 或直接 `\"{user_input}\"` [E1]。文档中还给出混合使用示例（`SystemMessage` 与元组混用）[E1]。\n\n另外，文档描述了动态消息列表的占位方式：在元组里用 `\"placeholder\"` → `MessagesPlaceholder`，或直接传入 `MessagesPlaceholder(\"chat_history\", optional=True)`；`optional=True` 时未提供输入会替换为空列表，`n_messages` 可限制保留的最近消息数 [E2]。\n\n## Code Flow\n\n`from_messages` 本身只是把 `messages` 与 `template_format` 转交给构造器 `cls(messages, template_format=template_format)`，各写法的解析发生在构造阶段 [E1]。测试调用链显示 `test_chat_prompt_template_from_messages` 会调用 `ChatPromptTemplate.from_messages`（链路已截断）[F1]。\n\n## Key Evidence\n\n- [E1] `from_messages` 定义与 docstring 的 5 种 message 表示格式：`libs/core/langchain_core/prompts/chat.py:1123-1172`\n- [E2] 文档中的元组简写、消息类型别名（`\"user\"`→human、`\"assistant\"`→ai、`\"tool\"`/`\"function\"`）、`\"placeholder\"`，以及 `MessagesPlaceholder` 用法：`openwiki/prompts.md:83-141`\n- [E3] 实际使用元组简写的代码示例：`libs/langchain/tests/unit_tests/runnables/test_hub.py:23-39`\n\n## Spec vs Implementation\n\n证据不足，无法判断是否存在冲突：E1 的代码 docstring 列出了 5 种**表示格式**，但未枚举二元组中合法的**消息类型字符串**（别名 `\"user\"`、`\"assistant\"`、`\"placeholder\"` 等仅见于文档 [E2]）。文档声称的 `\"placeholder\"` → `MessagesPlaceholder` 简写，在给出的代码证据中未见对应的类型映射实现，因此该简写是否真正被代码分支支持，证据不足（见 Missing Evidence）。\n\n## Missing Evidence\n\n- `from_messages` / `ChatPromptTemplate.__init__` 内部把消息表示转换为 `MessagePromptTemplate` 的解析代码（如 `_convert_to_message` 之类），未在证据中提供，无法从代码确认类型字符串别名全集。\n- 因此无法确认文档所列 `\"placeholder\"`、`\"function\"` 等别名在实现中是否全部支持。"
+      }
+    ]
+  }
+}

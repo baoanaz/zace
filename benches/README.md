@@ -13,6 +13,7 @@
 | **复用三靶场持久索引**跑基准（**不要重新索引**） | `targets-benchmark.md` §持久索引 + `results/raw/ingest-vps/INDEXES.json` |
 | 看索引耗时/内存/带宽/TPM 的结论与留档 | `results/README.md`（报告索引）→ `results/index-cost-model-vps.md` |
 | 改维度 / chunk 切分前，先看冻结配置与基线 | **`results/baseline-v1.md`** |
+| 测检索/问答质量（60 题题库 + 跑分脚本） | **`results/qa-quality-v1.md`**、`golden/<repo>/qa.md`、`golden/qa_probe.py` |
 | 改计量脚本 / 查指标口径定义 | `embed-bench/README.md` |
 | 找某个数字的原始证据 | `results/README.md` §4 `raw/` 证据索引 |
 
@@ -25,6 +26,8 @@
 |---|---|
 | `targets.json` | **靶场清单**：把「用例集 + 预建索引」绑成靶场名（golden / commit / projectId / 指纹 / 产物获取方式）。只放元信息，**不放索引** |
 | `golden/<repo>/*.jsonl` | 查询用例集（问题 + 期望文件/符号；**不含正文**） |
+| `golden/<repo>/qa.md` | 题库正文：**问题 + 人工核实的参考答案 + 依据路径 + 建议工具**（`search`/`ask`） |
+| `golden/qa_probe.py` | 按每题的 `tool` 字段分别跑 search（core 评估器）与 ask（service 的 LLM 路径） |
 | `run.py` | 统一入口：`--target <靶场名>` 展开 `--golden`/`--project-id`，其余参数原样转给 `zace-core eval` |
 | `test_targets.py` | 清单与入口的单元测试（不在根 `pyproject.toml` 的 `testpaths` 里，跑法见"运行"） |
 | `results/*.md` | 报告产物：当前口径的原始报告 + 整理过的基线/选型报告 |

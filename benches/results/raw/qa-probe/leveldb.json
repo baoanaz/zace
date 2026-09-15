@@ -1,0 +1,336 @@
+{
+  "schema": 1,
+  "golden": "benches/golden/leveldb/leveldb.jsonl",
+  "project_id": "3ed886ce58bc0e47",
+  "data_root": "/root/.zace/bench/voyage-4-lite-d1024",
+  "counts": {
+    "total": 20,
+    "search": 15,
+    "ask": 5
+  },
+  "search": {
+    "cases": 15,
+    "recall_at_5": 0.7143,
+    "recall_at_10": 0.7143,
+    "mrr": 0.3869,
+    "negatives_passed": 1,
+    "negatives_total": 1,
+    "degraded": 0,
+    "per_case": [
+      {
+        "id": "L-01",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "db/memtable.h:20-26 (leveldb::MemTable)",
+          "db/memtable.cc:21-22 (leveldb::MemTable::MemTable)",
+          "db/memtable.h:6-6 (STORAGE_LEVELDB_DB_MEMTABLE_H_)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-02",
+        "category": "symbol",
+        "rank": 4,
+        "hit": true,
+        "passed": true,
+        "answerable": false,
+        "top3": [
+          "table/two_level_iterator.h:6-6 (STORAGE_LEVELDB_TABLE_TWO_LEVEL_ITERATOR_H_)",
+          "table/format.h:6-6 (STORAGE_LEVELDB_TABLE_FORMAT_H_)",
+          "table/merger.h:6-6 (STORAGE_LEVELDB_TABLE_MERGER_H_)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-03",
+        "category": "symbol",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "db/version_set.h:252-255 (leveldb::VersionSet::NeedsCompaction)",
+          "db/version_set.h:319-321 (leveldb::Compaction)",
+          "db/version_set.h:234-234 (leveldb::VersionSet::PickCompaction)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-04",
+        "category": "spec",
+        "rank": 3,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "table/format.h:45-54 (leveldb::Footer)",
+          "table/format.cc:32-67 (leveldb::Footer::DecodeFrom)",
+          "doc/table_format.md:1-54 ((preamble))"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-05",
+        "category": "spec",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "db/log_format.h:9-9 (STORAGE_LEVELDB_DB_LOG_FORMAT_H_)",
+          "doc/impl.md:1-21 (Files > Log files)",
+          "db/log_reader.h:6-6 (STORAGE_LEVELDB_DB_LOG_READER_H_)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-06",
+        "category": "symbol",
+        "rank": 4,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "doc/table_format.md:1-54 ((preamble))",
+          "table/table_builder.cc:94-139 (leveldb::TableBuilder::Add)",
+          "table/filter_block.h:56-56 (leveldb::FilterBlockReader::KeyMayMatch)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-07",
+        "category": "path",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "util/bloom.cc:17-80 (leveldb::BloomFilterPolicy)",
+          "table/filter_block.h:44-55 (leveldb::FilterBlockBuilder::policy_)",
+          "table/filter_block.h:59-59 (leveldb::FilterBlockReader::policy_)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-08",
+        "category": "behavior",
+        "rank": 4,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "table/filter_block.h:1-10 (STORAGE_LEVELDB_TABLE_FILTER_BLOCK_H_)",
+          "doc/table_format.md:55-94 (\"filter\" Meta Block)",
+          "table/table_builder.cc:48-48 (leveldb::TableBuilder::Rep::filter_block)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-11",
+        "category": "symbol",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "table/block_builder.cc:40-44 (leveldb::BlockBuilder::BlockBuilder)",
+          "table/table_builder.cc:22-36 (leveldb::TableBuilder::Rep::Rep)",
+          "doc/index.md:312-323 (Performance > Block size)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-12",
+        "category": "symbol",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "db/version_edit.h:29-31 (leveldb::VersionEdit)",
+          "doc/impl.md:44-56 (Sorted tables > Manifest)",
+          "db/version_set.h:185-191 (leveldb::VersionSet::ManifestFileNumber)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-13",
+        "category": "behavior",
+        "rank": 2,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "doc/impl.md:22-64 (Sorted tables > Manifest)",
+          "db/filename.cc:78-139 (leveldb::SetCurrentFile)",
+          "db/version_set.h:185-191 (leveldb::VersionSet::ManifestFileNumber)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-15",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "db/skiplist.h:111-122 (leveldb::SkipList::FindLessThan)",
+          "db/skiplist.h:252-300 (leveldb::SkipList<Key, Comparator>::FindLessThan)",
+          "db/skiplist.h:368-376 (leveldb::SkipList<Key, Comparator>::Contains)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-17",
+        "category": "path",
+        "rank": 2,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "table/table.cc:35-80 (leveldb::Table::Rep::index_block)",
+          "table/two_level_iterator.cc:146-169 (leveldb::TwoLevelIterator::InitDataBlock)",
+          "doc/table_format.md:1-54 ((preamble))"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-18",
+        "category": "symbol",
+        "rank": 3,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "db/skiplist.h:130-130 (leveldb::SkipList::arena_)",
+          "util/arena.h:1-23 (leveldb::Arena)",
+          "util/arena.cc:1-56 (leveldb::Arena::Arena)"
+        ],
+        "error": null
+      },
+      {
+        "id": "L-20",
+        "category": "negative",
+        "rank": null,
+        "hit": false,
+        "passed": true,
+        "answerable": false,
+        "top3": [
+          "benchmarks/db_bench_sqlite3.cc:674-726 (main)",
+          "util/testutil.h:22-25 (EXPECT_LEVELDB_OK)",
+          "include/leveldb/export.h:23-23 (LEVELDB_EXPORT)"
+        ],
+        "error": null
+      }
+    ]
+  },
+  "ask": {
+    "cases": 5,
+    "answered": 5,
+    "answer_hits": 2,
+    "pack_hits": 1,
+    "per_case": [
+      {
+        "id": "L-09",
+        "category": "behavior",
+        "question": "一次 Get 读取会按什么顺序查找数据，快照在其中起什么作用？",
+        "expected": [
+          "db/db_impl.cc"
+        ],
+        "pack_rank": null,
+        "pack_answerable": true,
+        "evidence_count": 13,
+        "status": "answered",
+        "answer_hit": false,
+        "latency_ms": 8113.8,
+        "answer_tokens": 767,
+        "valid_citations": 18,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n**查找顺序：证据不足。** 现有证据只给出了参与 Get 的三个实现入口签名（`Version::Get` [E2]、`TableCache::Get` [E3]、`MemTable::Get` [E4]），但**没有任何 [F*] 调用链证据**说明 `DBImpl::Get` 先查哪一个、后查哪一个。因此无法按证据回答\"先 memtable 后 SSTable\"或\"先版本后表缓存\"之类的顺序，任何顺序陈述都会是虚构。\n\n**快照的作用：证据充分。** 文档说明快照提供对整个键值库状态的一致只读视图 [E1]；`ReadOptions::snapshot` 非 NULL 时表示本次读取作用于某个特定版本的 DB 状态；若为 NULL，读取则作用于当前状态的一个**隐式快照**上 [E8]。快照由 `DB::GetSnapshot()` 创建，不再需要时须用 `DB::ReleaseSnapshot` 释放，以便实现回收仅为支持该快照读取而维护的状态 [E8]。\n\n据此可以确定的只有一点：**每次 Get 读取都必然对应某个快照语义的状态**——要么是调用者显式传入的快照，要么是 NULL 时自动采用的当前状态隐式快照 [E8]。至于这个快照在内部查找过程中如何被具体解析（例如是否转成序列号参与比较），证据未涉及。\n\n## Code Flow\n\n证据不足：<evidence> 中不存在任何 [F*] 形式的调用链条目，无法给出 `Get → ... → MemTable::Get / Version::Get / TableCache::Get` 的实际调用路径或先后关系。\n\n## Key Evidence\n\n- 快照语义：显式快照 vs NULL 时的隐式快照 [E8]；快照生命周期（GetSnapshot/ReleaseSnapshot）[E8]\n- 快照作为特性：\"Users can create a transient snapshot to get a consistent view of data.\" [E1]\n- Get 的对外用法示例 `db->Get(leveldb::ReadOptions(), key1, &value)` [E5]\n- 参与读取的实现入口（仅签名，无调用关系）：`Version::Get(ReadOptions, LookupKey, val, GetStats)` [E2]、`TableCache::Get(options, file_number, file_size, k, arg, handle_result)` [E3]、`MemTable::Get(LookupKey, value, s)` [E4]\n- 反面例证（说明\"传了快照\"不等于\"用了快照\"）：测试辅助 `RecoveryTest::Get(k, snapshot = nullptr)` 接收 snapshot 形参，但内部调用 `db_->Get(ReadOptions(), k, &result)` 并未把该快照写入 ReadOptions [E7]\n\n## Missing Evidence\n\n- 缺少说明实际查找顺序的 [F*] 调用链证据（例如 DbImpl::Get 内部先查 memtable 还是先查 Version/TableCache）。\n- 缺少 `ReadOptions::snapshot` 在实现侧被消费的代码证据（快照如何影响键比较/序列号解析），仅有文档描述 [E8]。\n- 因此\"顺序\"问题只能回答证据不足；\"快照作用\"问题依据 [E1][E8] 可答。"
+      },
+      {
+        "id": "L-10",
+        "category": "behavior",
+        "question": "调用方设置 WriteOptions.sync = true 时，写路径上究竟发生了什么？",
+        "expected": [
+          "db/db_impl.cc"
+        ],
+        "pack_rank": null,
+        "pack_answerable": true,
+        "evidence_count": 15,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 8833.2,
+        "answer_tokens": 1105,
+        "valid_citations": 19,
+        "invalid_citations": 0,
+        "citation_coverage": 0.8261,
+        "answer": "## Answer\n\n按设计文档，`WriteOptions.sync = true` 的含义是：该次写操作在数据被\"一路推到持久化存储\"之前不会返回；在 POSIX 系统上是通过在写操作返回前调用 `fsync(...)`/`fdatasync(...)`/`msync(..., MS_SYNC)` 实现的 [E1]。文档还指出，同步写通常比异步写慢三个数量级以上，且把多个更新放进同一个 `WriteBatch` 用一次同步写应用，可以把同步写开销摊薄到整批上 [E1]。\n\n但**本证据集中没有任何代码证据覆盖 leveldb 真正的 DB 写路径**（如 `DBImpl::Write`、`WriteOptions` 定义、log 写入与 `WritableFile::Sync` 的调用点）。因此无法基于证据描述\"代码里逐层发生了什么调用\"。\n\n## Code Flow\n\n无法给出。没有 [F*] 证据串联 `DB::Write` → 内存表/log → `Env::WritableFile::Sync()` 这条链路，不能虚构。\n\n仅有的间接相关代码线索（都不是 DB 写路径）：\n- `util/env.cc` 的 `DoWriteStringToFile(env, data, fname, should_sync)`：先 `file->Append(data)`，若 `should_sync` 为真再 `file->Sync()`，随后 `Close()` [E4]。这体现的是\"按标志决定是否 Sync\"的一般模式。\n- 测试桩 `TestWritableFile::Sync()` 会调用 `target_->Sync()`，随后可能 `SyncParent()`，并把当前位置记为 `pos_at_last_sync_` [E5]；其中有 `TestWritableFile::Sync → FaultInjectionTestEnv::IsFilesystemActive` 的调用链 [F1]。这是测试环境的同步语义，不等于生产写路径。\n- `FileState::DropUnsyncedData()` 依据 `pos_at_last_sync_` 截断文件，说明同步位置被用来界定\"未同步数据\" [E14]。\n\n## Key Evidence\n\n- 设计语义与平台实现方式：doc/index.md #Synchronous Writes [E1]\n- 示例调用方式：`write_options.sync = true; db->Put(...)` [E1]\n- 批量摊薄同步开销的建议：`WriteBatch` + `sync = true` [E1]\n- 一般化的\"Append 后按标志 Sync\"辅助函数：`DoWriteStringToFile` / `WriteStringToFileSync` [E4]\n- 同步位置记录与截断语义（测试设施）：[E5]、[E14]、[F1]\n\n## Spec vs Implementation\n\n**实现与设计可能不一致——更准确地说，本证据集无法验证实现是否一致。**\n\n- 设计侧（Doc）：`sync = true` 会让写操作在数据落盘前不返回，POSIX 下通过 `fsync/fdatasync/msync(MS_SYNC)` 实现 [E1]。\n- 实现侧（Code）：没有任何代码证据显示 `WriteOptions::sync` 被读取、或 DB 写路径上调用了 `WritableFile::Sync()`。现有代码证据 [E4] 位于 `util/env.cc` 的文件写入辅助函数，与 DB 写路径无证据关联；[E5]/[F1] 属测试设施。\n\n因此不能断言实现符合或违背该设计，也不能断言 `sync` 在 DB 写路径上被忽略了——两种说法都缺乏证据。\n\n## Missing Evidence\n\n需要以下证据才能回答\"写路径上究竟发生了什么\"：\n\n1. `WriteOptions` 结构体定义（`include/leveldb/options.h`），确认 `sync` 字段及其语义。\n2. `DBImpl::Write` 的实现（`db/db_impl.cc`），确认它对 `options.sync` 的处理方式（是否转为 `WriteBatchInternal`/`log::Writer` 的同步写）。\n3. `DBImpl::Write` 内对 log 文件的写记录路径，例如 `logfile_->AddRecord(...)` 及 `log::Writer` 的 `dest_->Sync()` / `Flush()` 调用点（`db/log_writer.cc`）。\n4. `PosixWritableFile::Sync()` 的实现（`util/env_posix.cc`），确认是否真的调用 `fsync`/`fdatasync`。\n5. 若有 [F*] 形式的调用链证据（DB::Write → … → WritableFile::Sync），才能给出 Code Flow。\n\n当前仅有 [F1] 一条测试相关调用链，以及 [E1] 的设计描述，不足以重建生产写路径。"
+      },
+      {
+        "id": "L-14",
+        "category": "behavior",
+        "question": "为什么 DBImpl::Get 里要把 mem_/imm_/current 都 Ref 一遍再释放锁？",
+        "expected": [
+          "db/db_impl.cc"
+        ],
+        "pack_rank": null,
+        "pack_answerable": true,
+        "evidence_count": 3,
+        "status": "answered",
+        "answer_hit": false,
+        "latency_ms": 7701.4,
+        "answer_tokens": 595,
+        "valid_citations": 6,
+        "invalid_citations": 0,
+        "citation_coverage": 0.4615,
+        "answer": "## Answer\n\n**证据不足**，无法回答\"为什么\"。\n\n现有证据只能证明一个笼统的设计意图：同一个 `leveldb::DB` 对象可被多线程共享，\"different threads may write into or fetch iterators or call Get on the same database without any external synchronization（leveldb 实现会自动完成所需的同步）\"[E3]。这只能说明 `Get` 内部需要自己做同步，**完全没有提到** `Ref`、`mem_`、`imm_`、`current`，也没有提到释放锁的时机或顺序。\n\n其余两条命中证据与问题无关：[E1] 只说明 `dbformat.h` 中有一个 \"helper class useful for DBImpl::Get()\"（未给出类名与实现体），[E2] 只是 `DBIter` 持有的 `DBImpl* db_` 成员声明。二者都不能推出任何关于 `Ref` 顺序的结论。\n\n因此无法对\"先 Ref 再释放锁\"这一行为给出有证据支撑的解释。\n\n## Key Evidence\n\n- [E3] doc/index.md:131-142（Concurrency）：DB 对象可被多线程并发 `Get`/`Write`/取迭代器，实现内部负责同步——仅支持\"Get 需内部同步\"，不涉及 Ref 语义。\n- [E1] db/dbformat.h:182-183：`// A helper class useful for DBImpl::Get()`——未给出实现。\n- [E2] db/db_iter.cc:109：`DBImpl* db_;`——与 Get 的锁/Ref 顺序无关。\n\n## Missing Evidence\n\n要回答该问题，至少需要以下证据（当前均缺失）：\n\n1. `DBImpl::Get` 的函数体源码（含 `mutex_.Lock()` / `Unlock()` 与 Ref/Unref 调用的实际位置与顺序）。\n2. `mem_` / `imm_` / `current` 三者的类型定义及其 `Ref`/`Unref` 语义（如 `MemTable::Ref`、`Version`/`Versions::Ref` 的引用计数与释放行为）。\n3. 释放锁后这些对象被使用的位置（例如从 memtable 读、从 version 中查找 sstable 的代码路径），用于说明\"为何需要存活\"。\n4. 任何 [F*] 调用链证据，用以确认调用关系；当前无调用链证据，故无法给出 Code Flow。\n\n在补齐上述证据前，任何关于\"防止对象在解锁后被销毁/被并发修改\"的解释都属于外部推测，本回答不提供。"
+      },
+      {
+        "id": "L-16",
+        "category": "behavior",
+        "question": "一个 memtable 从写满到变成 level-0 的 sstable，中间经历了哪些步骤？",
+        "expected": [
+          "db/db_impl.cc",
+          "db/builder.cc"
+        ],
+        "pack_rank": null,
+        "pack_answerable": true,
+        "evidence_count": 11,
+        "status": "answered",
+        "answer_hit": false,
+        "latency_ms": 9892.5,
+        "answer_tokens": 1025,
+        "valid_citations": 9,
+        "invalid_citations": 0,
+        "citation_coverage": 0.3333,
+        "answer": "## Answer\n按文档描述，一个 memtable 写满到成为 level-0 sstable 的步骤如下（[E2] doc/impl.md > Level 0）：\n\n1. **触发**：当 log 文件增长超过某个大小（默认 4MB）时触发 [E2:67]。\n2. **切换写入目标**：创建一个全新的 memtable 和 log 文件，后续更新都写入新的这两个对象 [E2:68]。\n3. **后台处理旧 memtable**（[E2:70-74]）：\n - 把前一个 memtable 的内容写成一个 sstable [E2:72]\n - 丢弃（discard）该 memtable [E2:73]\n - 删除旧的 log 文件和旧 memtable [E2:74]\n - 把这个新 sstable 加入 young（level-0）层 [E2:74]\n\n另外，在**恢复路径**下，文档还提到\"把 log chunk 转换成一个新的 level-0 sstable\"[E3:164]，这与正常写入路径是不同的入口。\n\n## Code Flow\n**证据不足**：本批证据中没有提供任何 [F*] 调用链证据，因此无法给出从\"memtable 写满\"到\"写入 level-0\"的实际函数调用序列（例如谁调用谁、在何处判断阈值）。\n\n代码侧仅有类定义级证据，只能佐证\"丢弃 memtable\"这一环节与引用计数机制有关：`MemTable` 是引用计数的，初始引用计数为 0，调用方必须至少调用一次 `Ref()` [E6:22-23]；析构函数是私有的，只能通过 `Unref()` 删除 [E8:77]。但证据中**没有**任何代码把这些类串成一条从写满到落盘的调用链，因此不能据此断言实际流程。\n\n## Key Evidence\n- [E2:67-74] log 超过 4MB → 新建 memtable 和 log → 后台：旧 memtable 写 sstable、丢弃 memtable、删旧 log 与 memtable、新 sstable 加入 level-0。\n- [E3:160-164] 恢复流程：读 CURRENT → 读 MANIFEST → 清理陈旧文件 → 把 log chunk 转换为新的 level-0 sstable → 新写入指向新 log 文件。\n- [E1:110-111] level-0 compaction 会读取最多四个 1MB 的 level-0 文件，最坏情况下还要读全部 level-1 文件（10MB）——即\"成为 level-0 之后\"的后续压缩成本。\n- [E4:10-11] NEWS 记载修复过 memtable 管理问题：\"之前一次大量写入突发（heavy write burst）可能导致内存无上限增长\"。\n- [E6:22-23]、[E8:77] memtable 的引用计数与删除语义。\n\n## Spec vs Implementation\n**实现与设计可能不一致，且当前无法核验：**\n- 设计侧（Doc）：[E2:67-74] 明确给出了四步流程与 4MB 默认阈值。\n- 实现侧（Code）：本批代码证据只有 `MemTable` 的构造/析构、`MemTableInserter`、`LookupKey::memtable_key`、`MemTableIterator` 等声明片段 [E5][E6][E7][E8][E9][E10][E11]，**没有任何**涉及阈值判断、log 切换、sstable 写入、version 变更的代码，因此无法确认当前实现是否与 [E2] 完全一致。\n- 旁证：[E4:10-11] 说明历史上实现确实与预期行为有过偏差（memtable 管理曾导致内存无上限增长），但这条证据描述的是过去已修复的问题，不能用于判断当前实现状态。\n\n## Missing Evidence\n要把这条链路补全，至少缺以下证据：\n1. 写路径的调用链（即 [F*] 证据），例如 `DBImpl` 中判断 memtable 是否写满、切换 log、调度后台压缩的函数。\n2. 把 memtable 内容写成 level-0 sstable 的具体实现代码（当前仅 [E2:72] 的文档描述）。\n3. 4MB 阈值常量的实际定义位置与当前取值（[E2:67] 只说是\"默认 4MB\"）。\n4. sstable 写入后更新版本、把文件登记到 level-0 的实现（文档 [E2:74] 提到\"加入 young level\"，但无代码佐证）。\n5. sstable 构造/落盘相关类（如 TableBuilder、WritableFile）的定义或实现。\n6. 恢复路径中\"log chunk → level-0 sstable\"与正常写入路径在代码上是否复用同一实现 [E3:164]。"
+      },
+      {
+        "id": "L-19",
+        "category": "spec",
+        "question": "leveldb 明确声明自己不具备哪些能力（不是 SQL 数据库、并发访问、客户端服务）？",
+        "expected": [
+          "README.md"
+        ],
+        "pack_rank": 1,
+        "pack_answerable": false,
+        "evidence_count": 43,
+        "status": "answered",
+        "answer_hit": true,
+        "latency_ms": 6003.8,
+        "answer_tokens": 587,
+        "valid_citations": 11,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\nREADME 的 “Limitations” 章节明确列出三项能力缺失 [E1]：\n\n1. **不是 SQL 数据库**：没有关系数据模型，不支持 SQL 查询，也不支持索引（\"This is not a SQL database. It does not have a relational data model, it does not support SQL queries, and it has no support for indexes.\"）[E1]\n2. **不支持多进程并发访问**：同一时刻只能有一个进程（可以是多线程的）访问某个特定数据库（\"Only a single process (possibly multi-threaded) can access a particular database at a time.\"）[E1]\n3. **不内置客户端-服务端支持**：库本身不提供 client-server 能力，需要该能力的应用必须自己在库之上包装服务器（\"There is no client-server support builtin to the library...\"）[E1]\n\n## Key Evidence\n\n- [E1] README.md > Limitations，第 28–32 行，是唯一明确声明这三项能力边界的证据，且明确标注为文档（设计意图）。\n\n## Spec vs Implementation\n\n本问题所涉三项限制均为 README 文档中的声明 [E1]；所提供的代码证据（[E2]–[E43]）基本都是头文件保护宏、导出宏、测试宏等无关符号，**未出现与 [E1] 冲突的实现证据**，因此不构成“实现与设计不一致”。\n\n需要说明的是，代码证据中确实存在 SQL 相关代码（[E4] `StepErrorCheck`、[E8] `leveldb::Benchmark::Read`，均位于 `benchmarks/db_bench_sqlite3.cc`，内部调用 `sqlite3_prepare_v2` / `sqlite3_step` 等 API），但它们是 SQLite 侧的基准测试代码，与 “leveldb 本身不是 SQL 数据库” 的声明并不矛盾；证据中没有任何实现代码支持 leveldb 自身具备 SQL 或索引能力。\n\n## Missing Evidence\n\n- 除 README 的声明外，缺少实现层面对“单进程访问”“无客户端-服务端”限制的显式检查或文档证据（例如是否有锁/文件锁机制来强制该限制），因此无法从代码侧验证这些限制是如何被落实或仅是使用约束。\n- 所提供的 [F*] 调用链证据为空，无法佐证任何调用关系。"
+      }
+    ]
+  }
+}
