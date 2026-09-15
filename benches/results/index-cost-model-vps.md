@@ -55,6 +55,10 @@
 | `langchain` | `ca2050db0db5b1e2` | `projects/ca2050db0db5b1e2` | 179 MB | 20,673 chunk / 15,735 symbol / 71,330 edge |
 
 三个索引的 embedding 指纹一致：`api:voyage-4-lite@1024`，`parser_config_hash=76741bca6f8e…`。
+> **遗留目录**：`~/.zace/bench/projects/`（扁平布局，179 MB）里是更早建的 `zace` dogfood（`adfdd1a626db62b7`）
+> 与 `datawhalechina/hello-agents`（`e9ee9dd1d41a7d2c`）两个索引，配置同为 1024 维 voyage。
+> 它们**不在本次三靶场范围内**，未迁移（迁移会牵动 `benches/README.md` / `targets.json` 里
+> `--data ~/.zace/bench` 的既有说明）；要统一成「模型-维度」分目录时再整体搬迁即可。
 **projectId 只由 D-29 身份（git remote + 仓库内相对路径）决定**，因此换 checkout 路径不变。
 
 复用（**不索引、不重嵌**，仅查询向量走一次 API）：
