@@ -198,7 +198,7 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
             ctx["elapsed"] = elapsed
             rescan = await run_in_threadpool(_rescan_before_query, manager, request, project_id)
             trace = await run_in_threadpool(
-                manager.search, project_id, question, DEFAULT_MAX_TOKENS
+                manager.search, project_id, question, DEFAULT_MAX_TOKENS, deep=True
             )
         pack = trace.pack
         # 两条路都如实记 ``degraded=True``（都不含 LLM 总结），但"为什么"不同：

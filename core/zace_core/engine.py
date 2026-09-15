@@ -60,6 +60,7 @@ from zace_core.pipeline import DirectorySource, Indexer, IngestReport
 from zace_core.pipeline.source import SourceProvider
 from zace_core.retrieval import RecallLimits, recall
 from zace_core.retrieval.expand import ExpansionLimits, expand
+from zace_core.retrieval.gap import GapLimits, GapPlan, SymbolMember, plan_gaps
 from zace_core.retrieval.rerank import collect_signals, rerank
 from zace_core.storage import Store
 from zace_core.types import (
@@ -82,6 +83,7 @@ __all__ = [
     "SCAN_MANIFEST_FILENAME",
     "Engine",
     "EngineError",
+    "DEEP_GAP_LIMITS",
     "RepoIdentity",
     "SearchTrace",
     "git_remote_url",
@@ -102,6 +104,17 @@ PROJECTS_DIRNAME = "projects"
 PROJECT_META_FILENAME = "project.json"
 #: 本地扫描状态文件名（本卡扩展：CLI 侧增量对账；Phase 2 由 client 的 scan 状态取代）。
 SCAN_MANIFEST_FILENAME = "scan_manifest.json"
+
+#: Deep 模式的 Gap 补检配额（TASK-109）。比 Fast 宽，但仍是**有界**的：Deep 的定位是
+#: "综合判断"，需要更完整的调用链；Fast 是"毫秒级定位器"，配额收敛到能补上断层即止。
+#: 两边走的是**同一份代码**（D-10），这里只是参数差异。
+DEEP_GAP_LIMITS = GapLimits(
+    max_containers=3,
+    members_per_container=32,
+    max_spec_anchors=3,
+    refs_per_spec=12,
+    max_total=32,
+)
 
 _PROJECT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _GIT_TIMEOUT_S = 5.0
@@ -221,6 +234,9 @@ class SearchTrace:
 
     ``candidates`` = 送进组装的最终候选序（rerank 后），带 ``channel_ranks``——组装会做
     同符号聚合/相邻区间合并，通道命中信息在 ContextPack 里不再完整可读，E2E 断言需要它。
+
+    ``gap_kinds`` / ``backfilled``（TASK-109）：二轮补检的可观测面——命中了哪些 Gap 规则、
+    补入了多少候选。测试与基准报告靠它区分"首轮就命中"与"靠补检命中"。
     """
 
     pack: ContextPack
@@ -228,6 +244,8 @@ class SearchTrace:
     degraded: bool = False
     degraded_reason: str | None = None
     candidates: tuple[Candidate, ...] = ()
+    gap_kinds: tuple[str, ...] = ()
+    backfilled: int = 0
 
     @property
     def candidate_count(self) -> int:
@@ -487,13 +505,37 @@ class Engine:
     # ------------------------------------------------------------------ 检索链（本卡扩展）
 
     def search_with_trace(
-        self, project_id: str, query: str, max_tokens: int = 10_000
+        self,
+        project_id: str,
+        query: str,
+        max_tokens: int = 10_000,
+        *,
+        deep: bool = False,
     ) -> SearchTrace:
-        """``search`` 的带 trace 版本（通道健康度/候选计数；CLI 与测试用）。"""
+        """``search`` 的带 trace 版本（通道健康度/候选计数；CLI 与测试用）。
+
+        两轮管线（TASK-109，D-19；Module/02 §4.7/§4.8）：
+
+        ```text
+        第一轮：recall → expand → rerank → assemble
+                    ↓
+                gap 检查（确定性，纯函数，<5ms）
+                    ↓ 命中 G1/G2
+        第二轮：定向补检（只补缺口，不全量重跑）
+                → 并入同一 rerank → 重新 assemble（独立小预算）
+        ```
+
+        ``deep``（TASK-109 §“与 ask 的关系”）：Deep 模式（``ask_project``）用**更大**的
+        补检配额。Fast/Deep **共用同一条管线与同一份代码**（D-10）——差异只在配额，
+        不在分支；分叉点在**组装之后**（Fast 拿到包即停，Deep 交给 LLM）。
+        两边都触发补检：实测两个失败用例（``cockpit-0033``/``0035``）都是 search 题，
+        只在 Deep 触发就修不了它们。
+        """
         if not query.strip():
             raise EngineError("query 不能为空")
         if max_tokens <= 0:
             raise EngineError(f"max_tokens 必须为正整数，收到 {max_tokens}")
+        limits = DEEP_GAP_LIMITS if deep else GapLimits()
         with self._open_project(project_id) as (store, vectors, provider):
             recalled = recall(
                 store,
@@ -517,6 +559,22 @@ class Engine:
                 config=self._budget(max_tokens),
                 signals=collect_index_signals(store, ranked),
             )
+            # ---- 第二轮：Evidence-Gap 定向补检（≤ 1 次，确定性） ----
+            gaps, backfill, ranked = self._backfill_gaps(
+                store, query, ranked, pack, limits=limits
+            )
+            if gaps.triggered:
+                pack = assemble(
+                    store,
+                    query,
+                    ranked,
+                    flows=expansion.flows,
+                    freshness=store.freshness(),
+                    mode=MODE_FAST,
+                    config=self._budget(max_tokens),
+                    signals=collect_index_signals(store, ranked),
+                    backfill=backfill,
+                )
         degraded_reason = recalled.degraded_reason
         if vector_gap is not None:
             degraded_reason = (
@@ -528,7 +586,148 @@ class Engine:
             degraded=recalled.degraded or vector_gap is not None,
             degraded_reason=degraded_reason,
             candidates=tuple(ranked),
+            gap_kinds=gaps.kinds,
+            backfilled=len(backfill),
         )
+
+    # ------------------------------------------------------------------ Gap 二轮（TASK-109）
+
+    def _backfill_gaps(
+        self,
+        store: Store,
+        query: str,
+        ranked: list[Candidate],
+        pack: ContextPack,
+        *,
+        limits: GapLimits,
+    ) -> tuple[GapPlan, list[tuple[Candidate, str]], list[Candidate]]:
+        """首轮包 → gap 计划 → 补检候选（并入同一 rerank，**不插队**）。
+
+        三条纪律（TASK-109 §“二轮纪律”，不得放宽）：
+
+        1. 最多 1 次迭代（本函数只调一次 ``plan_gaps``，不做循环）；
+        2. 二轮只补缺口对应通道（G1 走符号容器、G2 走 spec 引用），不全量重跑；
+        3. 二轮结果**进同一 rerank** 重排，不直接插队（否则破坏 D-16 的排序唯一性）。
+        """
+        # 包内证据 → chunk_id：组装会做同符号聚合与相邻区间合并，因此一条 ``EvidenceItem``
+        # 的行区间可能覆盖**多个**候选（实测 ``intent_router.py:(13,24)`` 合并了
+        # ``IntentRouter:13`` 与 ``FixedIntentRouter:19`` 两个候选）。
+        # 故用**行区间重叠**判定候选是否已在包内，而不是 ``(path, 行区间)`` 全等——
+        # 后者会把已被合并装填的候选误判为"未进包"，于是补检把它们再装一遍。
+        packed_ranges: dict[str, list[tuple[int, int]]] = {}
+        for item in (*pack.evidence, *pack.docs):
+            if item.lines is None:
+                continue
+            packed_ranges.setdefault(item.path, []).append(
+                (item.lines[0], item.lines[1])
+            )
+
+        def in_pack(candidate: Candidate) -> bool:
+            """候选的行区间是否与包内任一同路径证据重叠（重叠 = 内容已在包内）。"""
+            if candidate.path is None or candidate.start_line is None or candidate.end_line is None:
+                return False
+            for start, end in packed_ranges.get(candidate.path, ()):
+                if not (candidate.end_line < start or candidate.start_line > end):
+                    return True
+            return False
+
+        packed_candidates = [candidate for candidate in ranked if in_pack(candidate)]
+        packed_cids = {candidate.chunk_id for candidate in packed_candidates}
+        packed_symbols = [
+            item.symbol for item in pack.evidence if item.symbol
+        ]
+        # 首轮池序（chunk_id → 下标）：G2 的引用目标按**池序**取，而不是按
+        # ``spec_references`` 的字典序——图扩展把 spec 引用全部拉进了池，
+        # 池序才含“哪个引用的符号更可能是答案”的相关度判定。
+        pool_order = {candidate.chunk_id: index for index, candidate in enumerate(ranked)}
+        # G2 的输入：包内 spec 块 → 它 spec_references 指向的 chunk id（按池序）。
+        packed_spec_refs: dict[str, tuple[str, ...]] = {}
+        for candidate in packed_candidates:
+            if candidate.kind != "spec":
+                continue
+            refs = tuple(
+                sorted(
+                    (ref.symbol_id for ref in store.spec_refs_for_spec(candidate.chunk_id)),
+                    key=lambda chunk_id: pool_order.get(chunk_id, 1 << 30),
+                )
+            )
+            if refs:
+                packed_spec_refs[candidate.chunk_id] = refs
+
+        def members_of(container: str) -> list[SymbolMember]:
+            return [
+                SymbolMember(fqn=row.fqn, chunk_id=row.chunk_id)
+                for row in store.symbols_in_container(container)
+            ]
+
+        plan = plan_gaps(
+            query,
+            packed_symbols=packed_symbols,
+            packed_chunk_ids=packed_cids,
+            pool_chunk_ids=[candidate.chunk_id for candidate in ranked],
+            packed_spec_refs=packed_spec_refs,
+            members_of=members_of,
+            limits=limits,
+        )
+        if not plan.triggered:
+            return plan, [], ranked
+
+        by_id = {candidate.chunk_id: candidate for candidate in ranked}
+        # 补检优先级（TASK-109，实测驱动）：**先补已进包成员的被调用方**，再按相关度。
+        #
+        # 为什么需要这层排序：G1 的补检目标里有相当一部分在池内是 ``score=0.000``——
+        # 它们只靠图扩展（``._invoke`` 的 callee）入池，没有直接通道命中。
+        # 纯按分数排时，这些 0 分组会与一堆无关成员混在一起按片段大小争配额，
+        # 真正被问的方法（``_should_retry`` / ``_normalize``）拿不到位置。
+        #
+        # “已进包成员的 callee”是**确定性的调用链闭合依据**（Module/02 §4.4-a 的 calls 边），
+        # 也是“调用链断裂”这个缺口的字面含义：``_invoke`` 已在包里，它调用的方法却不在，
+        # 补齐它们就是补断链；其余同容器成员排在后面。
+        packed_fqns = {
+            candidate.symbol_fqn for candidate in packed_candidates if candidate.symbol_fqn
+        }
+        callees_of_packed: set[str] = set()
+        for fqn in packed_fqns:
+            for edge in store.edges_for(fqn, kinds=["calls"]):
+                if edge.source == fqn:
+                    callees_of_packed.add(edge.target)
+
+        def chain_priority(chunk_id: str) -> int:
+            candidate = by_id[chunk_id]
+            fqn = candidate.symbol_fqn
+            if not fqn:
+                return 2
+            return 0 if fqn in callees_of_packed else 1
+
+        def order_key(chunk_id: str) -> tuple[int, float, int, str]:
+            candidate = by_id[chunk_id]
+            span = (
+                (candidate.end_line - candidate.start_line + 1)
+                if candidate.start_line is not None and candidate.end_line is not None
+                else 1 << 30
+            )
+            return (chain_priority(chunk_id), -candidate.score, span, chunk_id)
+
+        missing = [
+            by_id[chunk_id]
+            for chunk_id in sorted(plan.chunk_ids, key=order_key)
+            if chunk_id in by_id
+        ]
+        if not missing:
+            return plan, [], ranked
+        # 并入同一 rerank（重排全部候选，不插队）：补检候选与首轮候选走**同一个** rerank。
+        #
+        # 必须**重新收集信号**，不能拿首轮那份复用：``collect_signals`` 的 ``top1_seed_chunk_id``
+        # 取自“当前候选的最高分”（``ordered[0]``），而首轮 ``rerank`` 已把 ``score`` 从
+        # ``rrf_score`` 改写为最终分。复用旧信号会把 rerank 的图连通特征
+        # （``FEATURE_GRAPH_1HOP``，依赖 top-1 seed）锚到一个**旧 top-1**上，
+        # 实测使 4 个用例的装填顺序发生无关漂移（hits@5 29 vs 30）。
+        merged = rerank([*ranked, *missing], collect_signals(store, query, [*ranked, *missing]))
+        backfill = [
+            (candidate, plan.reason_for(candidate.chunk_id) or "")
+            for candidate in missing
+        ]
+        return plan, backfill, merged
 
     # ------------------------------------------------------------------ 扫描状态（本卡扩展）
 

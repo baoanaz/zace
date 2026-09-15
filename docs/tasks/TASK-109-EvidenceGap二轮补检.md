@@ -182,3 +182,69 @@ done
 - 已确认与 TASK-108 的分工（见上文"已排除的可能"对照实验）。
 - 回归用例已固化：`benches/golden/cockpit-agents-py/cockpit.jsonl` 的
   `cockpit-0033`（链路）、`cockpit-0035`（Gateway），详见同目录 `qa.md`。
+
+### 2026-09-15 · 实施（lane-f，`feature/task-109-evidence-gap_xwz0915`）
+
+**结论：验收标准全部达成，四靶场无一回退。**
+
+编排者开场即确认三项范围决策（本卡据此实施，未自行拍板）：
+
+| 待讨论项 | 裁决 | 落地 |
+|---|---|---|
+| G6 需要按容器前缀枚举符号 | **加只读 Store 方法** | `Store.symbols_in_container()`（+37 行，只读、无写路径） |
+| 触发面（Fast 是否触发） | **两边都触发，Deep 用更大配额** | `DEEP_GAP_LIMITS`（core）；`runtime.search(deep=)` + `routers/query.py` 的 ask 传 `deep=True` |
+| 二轮预算 | **独立小预算 + 标记来源 + 必经 rerank** | `BudgetConfig.backfill_ratio`；reason 写 `gap backfill: …`；结果并入同一 `rerank` |
+
+#### 交付物
+
+| 文件 | 变更 |
+|---|---|
+| `core/zace_core/retrieval/gap.py` | **新建**：纯函数 Gap 判定（G1 容器-成员断层 / G2 文档锚点闭包） |
+| `core/zace_core/engine.py` | 两轮管线接线（`search_with_trace` → `_backfill_gaps`）；`SearchTrace.gap_kinds/backfilled` |
+| `core/zace_core/contextpack/assembly.py` | `assemble(backfill=)` 独立小预算装填；`_degrade(force=)` |
+| `core/zace_core/storage/store.py` | `symbols_in_container()`（**超出卡片清单，已获授权**） |
+| `service/zace_service/runtime.py` | `search(deep=)` 透传 |
+| `service/zace_service/routers/query.py` | ask 路径传 `deep=True`（1 行） |
+| `core/tests/retrieval/test_gap.py` | **新建**：18 条（12 纯函数 + 6 集成回归） |
+
+#### 实测根因（与建卡时的推断不同，以实测为准）
+
+| 用例 | 建卡推测 | 实测根因 | 修复机制 |
+|---|---|---|---|
+| cockpit-0035 | "召回覆盖不足" | **不是召回**：15 个成员**已在池内**（`_invoke` 图扩展带出），但被 `top1×0.40` 相对分数闸门（0.76）挡下，目标分 0.30 | G1：查询点名 `CapabilityGateway` 且它在包内 → 补入池内成员 |
+| cockpit-0033 | "调用链断裂" | `Runtime.admit`/`InputDispatcher` **在池内**（rank 25/18），同样被闸门挡下；而 `spec_refs_for_spec(doc)` 直接给出二者 | G2：包内文档的引用目标在池内未进包 → 补入 |
+
+**关键发现**：目标几乎全是 `tier=3`（图扩展发现），而 tier3 配额（≤30%）在首轮已被别的邻居吃满 →
+补检循环里若再卡一次 tier3 会**恒真地**挡下全部目标。故补检候选**不重复计 tier3 配额**
+（它们已有自己的独立预算；tier 值不变、如实反映来源）。这不是绕过闸门：TASK-108 否决的是
+"无依据地装"，而补检候选带确定性结构依据。
+
+另一处实测：**行数 ≠ token 数**。`Runtime.admit` 仅 63 行却 971 token，
+按行长阈值判永不触发降级 → 被单成员 token 上限整个跳过。故 `_degrade(force=)` 按 token 判定。
+
+#### 验收证据
+
+| 标准 | 结果 |
+|---|---|
+| 用例 A：`_reserve_idempotency`/`_should_retry`/`_normalize` ≥2 进包 | ✅ **3/3**（修复前 0） |
+| 用例 B：`runtime.py` 或 `dispatcher.py` 进包 | ✅ 二者均进包 |
+| 三仓不回退 | ✅ leveldb R@5 1.000→1.000 MRR 0.721→0.721；helloagents 0.842→0.842 / **R@10 0.842→0.947** / 0.754→**0.766**；langchain 0.895→0.895 / **R@10 0.895→0.947** / 0.791→**0.798** |
+| cockpit 不回退 | ✅ R@5 0.806→**0.861**、R@10 0.833→**0.861**、MRR 0.544→**0.562**、负例 2/2 |
+| Gap 检查 <5ms | ✅ 纯函数 0.02ms；含 Store 查询 1.2–2.8ms（端到端 ~600ms 不变，受 embedding 主导） |
+| 二轮纪律单测 | ✅ `test_gap.py`（最多 1 次迭代、只补池内、独立预算上限、来源标记、Deep 配额 ≥ Fast） |
+| G4/G5 未重复实现 | ✅ 未触碰 |
+| 全仓质量门 | ✅ ruff 全绿；依赖方向通过；`pytest` **1046 passed / 7 skipped**；service 372 passed |
+
+#### 未决问题 / 已知风险
+
+1. **既有非确定性**（非本卡引入）：同一 query 连续调用 `recall_vector` 会有约 7 个低分位置
+   顺序互换（LanceDB ANN 同分 tie）。已在未修改的 `main @ 7df6cc6` 上复现。
+   影响：`cockpit-0035` 的 `backfilled` 会在 14/15 间浮动（该题 `expected_mode=any`，判定不受影响）。
+   本卡测试因此不对该数值做相等断言，只断言机制生效。**建议另开卡修**。
+2. **G3 仍未实现**（设计里的"无共识结果"重召回）。本卡实测未在任何靶场触发该缺口，
+   无证据驱动，故按"不做无证据的推演"留在设计面。
+3. **G6 命名**：实现时把建卡暂称的 "G6" 与 G1 合并为同一条规则（两者判据同源：
+   "容器在包内 + 池内有未进包成员"），未在设计文档 §4.7 新增编号——**需编排者确认**
+   是补一行设计、还是维持"G1 的一个子情形"。
+4. `web` 前端的 `History.trace.test.tsx` 有 1 条失败，已在干净 `main` 复现（既有问题，与本卡无关）；
+   本卡未改任何 web 文件。

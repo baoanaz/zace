@@ -255,6 +255,31 @@ class BudgetConfig:
     docs_ratio: float = 0.10
     skeleton_line_threshold: int = 300   # 超过此行数且超预算 → skeleton 降级
     skeleton_context_lines: int = 15     # 降级保留的上下文行数（±15）
+    # TASK-109（G1/G2 补检）：第二轮的**独立小预算**（占 hard_cap 比例）。
+    #
+    # 为什么不能用主闸门：实测目标方法分 0.30，而主闸门是 ``top1 × 0.40``（该题 top1=1.9
+    # → 闸门 0.76）——真实目标**结构性低于闸门**（它们是类里较小的行为方法，而闸门由
+    # 文档/高频同名符号抬高）。但也不能因此绕过闸门（TASK-108 教训：不丢候选、预算允许就装
+    # 的后果是包被 0.00/-0.24 的噪音填满）。
+    #
+    # 故用独立配额：补检候选只花这一份额，且**必须有确定性缺口依据**（gap.py 判定）
+    # 才可能进入这一份额。0.25 与 ``single_file_ratio`` 同量级，含义是"二轮补检不得超过
+    # 整个包的四分之一"——防止一个容器的全部成员淹没首轮证据（实测 cockpit-0035 的
+    # ``CapabilityGateway`` 有 19 个成员、全量入包需 6598 token）。
+    backfill_ratio: float = 0.35
+    #: 补检候选的 skeleton 降级行数阈值（低于常驻的 300）：100+ 行的成员方法不是
+    #: "某个行为怎么实现"的答案，而是一个大调度器——实测 ``_invoke`` 149 行 / 1996 token
+    #: 会独吞整个补检配额（其余 13 个成员只能分剩下的 500 token）。降级后它只留签名 +
+    #: 15 行上下文，配额才能落到真正的目标方法上。
+    backfill_skeleton_lines: int = 100
+    # 单个补检候选可占用的配额上限（占 ``backfill_ratio × hard_cap`` 的比例）。
+    #
+    # 实测矛盾（cockpit-0035）：即使已 skeleton 降级，``_invoke`` 仍占约 400 token，
+    # 按池序装填时它 + ``_cache_and_finish`` 就把 2500 token 的配额吃完，
+    # 三个真正目标（``_reserve_idempotency`` / ``_should_retry`` / ``_normalize``，
+    # 均在池序 40+）拿不到任何预算。0.25 = 单成员不得超补检配额的四分之一，
+    # 等价于“保证至少四个成员能上场”——补检是补断层，不是补某一个方法。
+    backfill_single_ratio: float = 0.25
     # TASK-095：相对分数阈值——低于 ``top1_score × score_ratio`` 的候选**不装填**。
     # 只在贪心主循环生效；code_floor / spec_floor 的保底装填**不受它约束**
     # （保底是"至少给这些"，与"最多给到哪"不冲突，否则纯文档查询可能被清空）。
@@ -501,8 +526,16 @@ def assemble(
     signals: IndexSignals | None = None,
     structural_result: bool = False,
     graph_boundary: bool = False,
+    backfill: Sequence[tuple[Candidate, str]] = (),
 ) -> ContextPack:
-    """候选（已 rerank）→ 预算内的 ContextPack（CF-03 字段）。"""
+    """候选（已 rerank）→ 预算内的 ContextPack（CF-03 字段）。
+
+    ``backfill``（TASK-109）：二轮补检候选 + 来源标注 ``(candidate, reason)``，按**优先级
+    顺序**给出（调用方按候选池序给）。它们在主装填之后用一个**独立小预算**
+    （``config.backfill_ratio``）补入，并受与主装填**同一套**上限约束（单文件、tier3、
+    docs_ratio、hard_cap）——不绕过任何闸门（TASK-108 的教训，见 ``BudgetConfig`` 注释）。
+    ``reason`` 写进证据的 ``reason`` 行，让 Agent 能看出"这条是二轮补来的"。
+    """
     active = config or budget_for(mode)
     single_file_cap = int(active.hard_cap * active.single_file_ratio)
     index_signals = signals if signals is not None else IndexSignals()
@@ -721,14 +754,109 @@ def assemble(
             _place(candidate, slot, tokens)
             code_placed += 1
 
-    # ``truncated`` 只反映**真的被预算截断**（TASK-108：闸外候选已不再被丢弃，
-    # 它们要么装进包、要么因预算耗尽被 capacity_cut 计数）。
-    truncated = capacity_cut > 0
-    flow_tokens = sum(
+    # ---- 二轮补检装填（TASK-109）：独立小预算，不绕主闸门 --------------------------
+    #
+    # 位置：在首轮贪心与 code_floor 之后、``truncated`` 判定之前。用**同一套**上限
+    # （单文件 / tier3 / docs_ratio / hard_cap），只额外受两个约束：
+    #   ① 补检总额 ≤ ``backfill_ratio × hard_cap``（独立小预算，不挤压首轮证据的份额）；
+    #   ② 补检候选 > ``backfill_skeleton_lines`` 行时按 skeleton 降级装填
+    #      （大调度器不该独吞配额，见 BudgetConfig.backfill_skeleton_lines 注释）。
+    #
+    # **不绕过主闸门**的落法：这些候选本来就被相对分数闸门挡下（目标分 0.30 < 闸门 0.76），
+    # 但它们带着 gap.py 的**确定性结构依据**（同容器成员 / 文档符号引用），
+    # 与 TASK-108 否决的"不丢候选、预算允许就装"有本质区别——后者没有任何依据。
+    backfill_used = 0
+    backfill_placed = 0
+    backfill_cap = int(active.hard_cap * active.backfill_ratio)
+    backfill_single_cap = int(backfill_cap * active.backfill_single_ratio)
+    base_flow_tokens = sum(
         estimate_tokens(node.symbol) + estimate_tokens(node.path)
         for flow in flows
         for node in flow.nodes
     )
+    for candidate, reason in backfill:
+        if base_flow_tokens + used + backfill_used >= active.hard_cap:
+            break
+        if backfill_used >= backfill_cap:
+            break
+        if not candidate.chunk_id or candidate.chunk_id in placed_ids:
+            continue
+        # 单成员公平上限（见 ``backfill_single_ratio`` 注释）：超了就跳过，让后面的成员有机会。
+        # 因为补检候选已按池序给出，跳过大的调度器不会损失“最相关”的判定（池序不变）。
+        slot = _build_slot(store, candidate, index_signals)
+        if slot is None:
+            continue
+        existing = symbol_slots.get(candidate.symbol_fqn) if candidate.symbol_fqn else None
+        if existing is not None and existing is not slot:
+            continue  # 同符号聚合：该符号已在包内，不必重复补
+        if reason and reason not in slot.item.reason:
+            slot.item.reason = f"{slot.item.reason} + {reason}" if slot.item.reason else reason
+            slot.base_reason = slot.item.reason
+        tokens = slot.tokens
+        file_key = candidate.path or ""
+        over_file_cap = file_usage.get(file_key, 0) + tokens > single_file_cap
+        over_backfill = backfill_used + tokens > backfill_cap
+        over_budget = base_flow_tokens + used + backfill_used + tokens > active.hard_cap
+        over_single = tokens > backfill_single_cap
+        if over_file_cap or over_backfill or over_budget or over_single:
+            # 仅按**行数**降级不够（行数 ≠ token 数，见 ``_degrade`` 的 ``force`` 说明）：
+            # 超过单成员 token 配额时一律强制降级，否则这些调用链目标会被直接跳过。
+            degraded = _degrade(
+                candidate, slot, active, store, backfill=True, force=over_single
+            )
+            if degraded is not None:
+                # reason 含降级签名，重写一次（_degrade 会重置 content，但不动 reason）
+                if reason and reason not in slot.item.reason:
+                    slot.item.reason = (
+                        f"{slot.item.reason} + {reason}" if slot.item.reason else reason
+                    )
+                    slot.base_reason = slot.item.reason
+                tokens = slot.tokens
+        if file_usage.get(file_key, 0) + tokens > single_file_cap:
+            continue
+        if tokens > backfill_single_cap:
+            continue  # 降级后仍超单成员上限 → 放弃（不与小成员抢配额）
+        # **不重复受 tier3 配额约束**（TASK-109 的关键设计决定，实测驱动）：
+        #
+        # 补检目标几乎全是 tier=3——它们由图扩展发现（``CapabilityGateway._should_retry``
+        # 是 ``._invoke`` 的 callee；``Runtime.admit`` 是 docs 锚点的 spec 引用）。
+        # 而 tier3 配额（≤30%）在首轮就已被别的扩展邻居吃满，因此在补检循环里再卡一次
+        # 会**恒真地**把目标挡下——实测 ``Runtime.admit`` / ``_should_retry`` / ``_normalize``
+        # 三个目标全因此被跳过（它们已在计划里、已按顺序到达，就是装不进去）。
+        #
+        # 这不是“绕过闸门”（TASK-108 的教训）：tier3 配额管的是 *无依据的图扩散*，
+        # 而补检候选带**确定性结构依据**（用户点名的容器的成员 / 包内文档引用的符号），
+        # 且已经受自己的独立预算（``backfill_ratio``，默认 35% of hard_cap）约束——
+        # 那就是这一类候选的配额。tier 值**不改**（仍是 3，如实反映来源），
+        # 只是不再重复计一次配额。
+        if (
+            has_code
+            and candidate.kind == _SPEC_KIND
+            and spec_used + tokens > docs_cap
+        ):
+            continue
+        if backfill_used + tokens > backfill_cap:
+            continue
+        if base_flow_tokens + used + backfill_used + tokens > active.hard_cap:
+            continue
+        merged = _try_merge(slots, slot, tokens)
+        if merged is not None:
+            used += merged
+            backfill_used += merged
+            if slot.item.type == "spec":
+                spec_used += merged
+            file_usage[file_key] = file_usage.get(file_key, 0) + merged
+            placed_ids.add(candidate.chunk_id)
+            backfill_placed += 1
+            continue
+        _place(candidate, slot, tokens)
+        backfill_used += tokens
+        backfill_placed += 1
+
+    # ``truncated`` 只反映**真的被预算截断**（TASK-108：闸外候选已不再被丢弃，
+    # 它们要么装进包、要么因预算耗尽被 capacity_cut 计数）。
+    truncated = capacity_cut > 0
+    flow_tokens = base_flow_tokens
 
     evidence: list[EvidenceItem] = []
     docs: list[EvidenceItem] = []
@@ -811,10 +939,27 @@ def _degrade(
     slot: _Slot,
     config: BudgetConfig,
     store: Store,
+    *,
+    backfill: bool = False,
+    force: bool = False,
 ) -> _Slot | None:
-    """单 chunk > ``skeleton_line_threshold`` 行且超预算 → 签名 + 起始行起 N 行。"""
+    """单 chunk > 行长阈值且超预算 → 签名 + 起始行起 N 行。
+
+    ``backfill=True``（TASK-109）：用更低的 ``backfill_skeleton_lines`` 阈值。
+    ``force=True``（TASK-109）：**跳过行长前置条件**，一律降级。
+
+    为什么需要 ``force``（实测数据）：行数与 token 数并不成比例——
+    ``Runtime.admit`` 仅 63 行但 971 token（密集的 docstring 与签名），
+    ``CapabilityGateway._normalize`` 44 行 585 token。单成员配额（25% × 补检预算 ≈ 875 token）
+    按行数判永远不触发，于是这些**必须入包的调用链目标**被 token 闸门直接跳过
+    （实测：三个 G1/G2 目标全因此未进包）。调用方按 token 判定要不要降级，
+    这里负责执行降级。
+    """
+    threshold = (
+        config.backfill_skeleton_lines if backfill else config.skeleton_line_threshold
+    )
     start, end = slot.span
-    if end - start + 1 <= config.skeleton_line_threshold:
+    if not force and end - start + 1 <= threshold:
         return None
     chunk = store.chunk_by_id(candidate.chunk_id)
     if chunk is None:
