@@ -18,6 +18,8 @@ from zace_core.retrieval.rerank import (
     FEATURE_SYMBOL_MATCH,
     FEATURE_SYNTHESIZED,
     FEATURE_TEST_FIXTURE,
+    FEATURE_VECTOR_NEAR,
+    FEATURE_VECTOR_TOP,
     RRF_BASE_SCALE,
     RerankSignals,
     RerankWeights,
@@ -94,10 +96,35 @@ def test_feature_symbol_match_positive_and_negative() -> None:
 
 
 def test_feature_consensus3_positive_and_negative() -> None:
-    three = _candidate(channel_ranks={"exact": 1, "bm25": 2, "vector": 3})
+    three = _candidate(channel_ranks={"exact": 1, "bm25": 2, "vector": 30})
     assert _hits(three) == {FEATURE_EXPLICIT: 2.0, FEATURE_CONSENSUS3: 0.5}
-    two = _candidate(channel_ranks={"bm25": 1, "vector": 2})
+    two = _candidate(channel_ranks={"bm25": 1, "vector": 40})
     assert _hits(two) == {}
+
+
+def test_feature_vector_semantic_rank(TASK_105=False) -> None:
+    """向量通道排名作为语义相关度证据（TASK-105）。
+
+    分两档：top-8 满分、9-10 次档；窗口外（≥ 11）不加分，避免把"排得很后面的语义噪声"
+    当证据。向量 rank 与三通道共识独立叠加。
+    """
+    top = _candidate(channel_ranks={"vector": 1})
+    assert _hits(top) == {FEATURE_VECTOR_TOP: 1.5}
+    boundary = _candidate(channel_ranks={"vector": 8})
+    assert _hits(boundary) == {FEATURE_VECTOR_TOP: 1.5}
+    near = _candidate(channel_ranks={"vector": 9})
+    assert _hits(near) == {FEATURE_VECTOR_NEAR: 0.7}
+    edge = _candidate(channel_ranks={"vector": 10})
+    assert _hits(edge) == {FEATURE_VECTOR_NEAR: 0.7}
+    outside = _candidate(channel_ranks={"vector": 11})
+    assert _hits(outside) == {}
+    # 语义相关性比"通道数多"更接近用户意图：单通道 vector rank 1 应胜过双通道平庸命中。
+    semantic_only = _candidate("src/a.py:f:1", rrf_score=1 / 61, channel_ranks={"vector": 1})
+    weak_pair = _candidate(
+        "src/b.py:g:1", rrf_score=2 / 61, channel_ranks={"bm25": 30, "literal": 30}
+    )
+    ranked = rerank([semantic_only, weak_pair])
+    assert ranked[0].chunk_id == semantic_only.chunk_id
 
 
 def test_feature_graph_1hop_top1_positive_and_negative() -> None:
@@ -170,10 +197,10 @@ def test_feature_synthesized_edge_negative_only() -> None:
     assert FEATURE_SYNTHESIZED not in _hits(_candidate(graph_depth=1))
 
 
-def test_feature_names_cover_twelve() -> None:
-    """特征表规模（TASK-101 §A 新增 2 条：literal / literal_root；基线 12 条不变）。"""
-    assert len(FEATURE_NAMES) == 14
-    assert len(set(FEATURE_NAMES)) == 14
+def test_feature_names_cover_fifteen() -> None:
+    """特征表规模（TASK-101 新增 2 条 literal；TASK-105 新增 2 条 vector rank）。"""
+    assert len(FEATURE_NAMES) == 16
+    assert len(set(FEATURE_NAMES)) == 16
 
 
 # --------------------------------------------------------------------------- 打分与排序
@@ -227,7 +254,7 @@ def test_weights_override_does_not_change_feature_structure() -> None:
     lightweight = with_weights(RerankWeights(), explicit_hit=0.0)
     assert lightweight.explicit_hit == 0.0
     assert lightweight.symbol_match == 1.0
-    assert len(RerankWeights().__dataclass_fields__) == 14
+    assert len(RerankWeights().__dataclass_fields__) == 16
     with pytest.raises(TypeError):
         with_weights(RerankWeights(), not_a_feature=1.0)
 

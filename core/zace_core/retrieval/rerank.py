@@ -1,6 +1,6 @@
 """确定性 Evidence Rerank（TASK-011 §B，Module/02 §4.5，D-16：V1 内置、无模型、零延迟）。
 
-12 条特征逐项落地（分值为初始值，TASK-015 校准**只改默认值不改特征结构**）：
+15 条特征逐项落地（分值为初始值，TASK-015 校准**只改默认值不改特征结构**）：
 
 | 特征 | 分值 | 信号来源 |
 |---|---|---|
@@ -9,6 +9,8 @@
 | **标识符词根命中**（仅符号名） | +0.4 | Literal 通道弱短语 |
 | query 符号名与 chunk 符号名等值 | +1.0 | Exact-Inferred |
 | 3 通道共识 | +0.5 | candidate.channel_ranks |
+| **向量 rank ≤ 8**（语义相关） | +1.5 | candidate.channel_ranks（TASK-105） |
+| **向量 rank 9-10**（语义较近） | +0.7 | candidate.channel_ranks（TASK-105） |
 | 与 top-1 种子图连通（1 跳） | +0.5 | expand 的 ``graph-expanded from`` 记录 |
 | doctype ∈ HIGH_VALUE_DOCTYPES | +0.8 | classify_doctype（索引侧同一函数） |
 | 入口点 / 被导出符号 | +0.2 | symbols.is_exported + 无内部调用者 |
@@ -19,11 +21,19 @@
 | 图距离 2 跳 | −0.3 | candidate.graph_depth |
 | 合成边（provenance=synthesized）扩展 | −0.2 | edges.provenance |
 
-基准分与量级（本卡口径，记录于任务卡"执行记录"）：``score = rrf_score * RRF_BASE_SCALE + Σ特征``。
+基准分与量级：``score = rrf_score * RRF_BASE_SCALE + Σ特征``。
 ``rrf_score = Σ 1/(60+rank) ∈ (0, 0.033]``，与特征表（±0.2..2.0）差两个数量级；不缩放的话
 特征表实际失效（单个 +2.0 恒压过任何 RRF 差异），Module/02 §4.6 的反例（"Explicit 命中无关 UI
-模块 vs 三通道共识的强相关符号 → 共识者胜"）也无法成立。故引入 ``RRF_BASE_SCALE = 100.0``
-把基准分换算到与特征可比的量级；特征结构不变，仅一个额外的全局缩放常量。
+模块 vs 三通道共识的强相关符号 → 共识者胜"）也无法成立。
+
+TASK-105 修正了两个实测确认的缺陷（三仓 57 正例 + 3 负例，零 embedding 成本的离线回放）：
+
+1. **特征表缺"语义相关性"**：正确答案常在 vector rank 1-3，却因只命中单通道而被
+   "多通道沾边"压到 17-58（RRF 的 ``Σ1/(60+rank)`` 实际在奖励通道数量而非相关性）。
+   故新增 ``vector_rank_top`` / ``vector_rank_near`` 两档。
+2. **``RRF_BASE_SCALE`` 过大使特征失效**：100.0 下 base 分区间为 1.6-4.9，任何特征
+   （±0.2..2.0）都压不过 base 差；降到 ``25.0`` 后特征重新具备区分度。
+   隔离实验证实：只降 scale 不加向量特征反而变差（见任务卡执行记录），增益来自向量特征。
 
 数据来源缺口（详见任务卡"未决问题"）：``files.generated`` 目前既无 Store 读 API、W1 写入端
 也恒写 0，因此 ``is_generated_path`` 用 Module/01 §4.2 的**文件名约定**做临时代理；
@@ -40,6 +50,7 @@ from zace_core.parsing.markdown import classify_doctype
 from zace_core.retrieval.exact import extract_inferred, parse_explicit
 from zace_core.retrieval.expand import GRAPH_REASON_PREFIX, SYNTHESIZED_REASON
 from zace_core.retrieval.fusion import (
+    CHANNEL_VECTOR,
     KIND_FALLBACK,
     KIND_SPEC,
     KIND_TEST,
@@ -67,8 +78,14 @@ __all__ = [
     "with_weights",
 ]
 
-#: 基准分缩放（见模块 docstring"基准分与量级"）。
-RRF_BASE_SCALE = 100.0
+#: 基准分缩放（见模块 docstring“基准分与量级”）。
+#: TASK-105 实测：100.0 使 base 分区间（1.6-4.9）远大于特征表（±0.2-2.0），
+#: 特征实际失效；降到 25.0 让特征重新具备区分度。
+RRF_BASE_SCALE = 25.0
+
+#: 向量语义特征的覆盖窗口：top-8 拿满分档，9-10 拿次档（TASK-105 实测定档）。
+VECTOR_TOP_K = 8
+VECTOR_NEAR_K = 10
 
 #: TASK-101 新增权重的环境变量覆盖名（A/B 用；见 :func:`weights_from_env`）。
 LITERAL_WEIGHT_ENV = "ZACE_W_LITERAL"
@@ -82,6 +99,8 @@ FEATURE_LITERAL = "literal hit"
 FEATURE_LITERAL_ROOT = "literal root name hit"
 FEATURE_SYMBOL_MATCH = "query symbol == chunk symbol"
 FEATURE_CONSENSUS3 = "3-channel consensus"
+FEATURE_VECTOR_TOP = "vector top-8 (semantic relevance)"
+FEATURE_VECTOR_NEAR = "vector top-10 (semantic relevance)"
 FEATURE_GRAPH_1HOP = "graph connected to top-1 seed (1 hop)"
 FEATURE_DOCTYPE = "high-value doctype"
 FEATURE_ENTRY_POINT = "entry point / exported symbol"
@@ -99,6 +118,8 @@ FEATURE_NAMES = (
     FEATURE_LITERAL_ROOT,
     FEATURE_SYMBOL_MATCH,
     FEATURE_CONSENSUS3,
+    FEATURE_VECTOR_TOP,
+    FEATURE_VECTOR_NEAR,
     FEATURE_GRAPH_1HOP,
     FEATURE_DOCTYPE,
     FEATURE_ENTRY_POINT,
@@ -157,6 +178,11 @@ class RerankWeights:
     literal_root: float = 0.4
     symbol_match: float = 1.0
     consensus3: float = 0.5
+    #: 向量 rank 语义特征（TASK-105）：命中文档在语义通道的排名就是它的相关度证据。
+    #: 原特征表没有“语义相关性”这一项，导致“多通道沾边”恒压过“语义最相关”（实测：正确答案
+    #: 常在 vector rank 1-3，却因只命中单通道而掉到 17-58）。拆成两档，避免硬阈值跳变。
+    vector_rank_top: float = 1.5
+    vector_rank_near: float = 0.7
     graph_1hop_top1: float = 0.5
     doctype_high_value: float = 0.8
     entry_point: float = 0.2
@@ -247,6 +273,16 @@ def features(
         )
 
     hit(FEATURE_CONSENSUS3, weights.consensus3, len(candidate.channel_ranks) >= 3)
+    # 向量 rank 语义特征：排名越靠前说明语义越贴近问题。分两档且仅覆盖 top-10——
+    # 向量通道自身召回上限是 50，再往后排名的区分度不足以作为证据。
+    vector_rank = candidate.channel_ranks.get(CHANNEL_VECTOR)
+    if vector_rank is not None:
+        hit(FEATURE_VECTOR_TOP, weights.vector_rank_top, vector_rank <= VECTOR_TOP_K)
+        hit(
+            FEATURE_VECTOR_NEAR,
+            weights.vector_rank_near,
+            VECTOR_TOP_K < vector_rank <= VECTOR_NEAR_K,
+        )
 
     parent = _graph_parent(candidate)
     hit(
