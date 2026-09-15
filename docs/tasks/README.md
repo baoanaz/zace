@@ -128,6 +128,7 @@
 | [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
 | [TASK-101](TASK-101-检索修复与跨主机基准.md) | **检索质量修复与跨主机基准复现**（字面量通道 / 查询覆盖率缺口 / `--project-id` 放行 / 离线回放 `--replay` / 工具分工文案 / `.zaceignore` 去回音）；cockpit 靶场 R5 0.733→**0.767**、MRR 0.408→**0.505** | 无 | `core/zace_core/{retrieval,storage,engine,cli}/`、`benches/`、`scripts/bench-bundle.sh`、`service/zace_service/mcp.py`(仅文案)、`.zaceignore` | **review**（2026-09-15，泳道 B） |
 | [TASK-102](TASK-102-embedding索引耗时模型.md) | **embedding 索引耗时模型与设备绑定基准**（`company-wsl`）：`耗时 ≈ chunk 数 × 21 ms`；瓶颈是**下载向量响应体**（21.3 KB/chunk）而非 TPM；实测推翻"2048 截断提速"与"并发 3 提速 3×"；免费 bge-m3 `conc=1` 是唯一安全档（langchain conc=3 **429 整次失败**） | 无（soft: TASK-049） | `benches/embed-bench/`、`benches/results/index-cost-model-company-wsl.md`、`benches/targets-benchmark.md` | **review**（2026-09-15，泳道 B） |
+| [TASK-104](TASK-104-同符号定义块优先聚合.md) | **同符号定义块优先聚合**（C/C++ 声明与定义去重时保留函数体；修复 leveldb L-09 pack miss） | TASK-103 | `core/zace_core/contextpack/assembly.py`、`core/tests/contextpack/test_assembly.py` | **review**（2026-09-15，泳道 B） |
 | [TASK-103](TASK-103-C与Cpp局部解析容错.md) | **C/C++ 局部解析容错**（保留正常符号 + 错误区间 fallback + parser 指纹升级） | TASK-091 | `core/zace_core/parsing/{base,c,cpp}.py`、`core/zace_core/chunking/fingerprint.py`、`core/tests/{parsing,chunking}/` | **review**（2026-09-15，泳道 B） |
 
 ### Phase 3 补充二（2026-09-14 晚：真实仓库实测后的返回结构优化）

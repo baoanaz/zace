@@ -230,6 +230,68 @@ def test_dedup_far_apart_chunks_are_not_merged(store, seed_file, sym, cand) -> N
     assert len(assemble(store, "q", candidates, config=config).evidence) == 2
 
 
+def test_dedup_same_symbol_prefers_cpp_definition_over_declaration(
+    store, seed_file, sym, cand
+) -> None:
+    seed_file(
+        store,
+        path="db/db_impl.h",
+        language="cpp",
+        symbols=[sym("Get", "DBImpl::Get", kind="method", start=10, end=11)],
+        bodies={"DBImpl::Get": "Status Get() override;"},
+    )
+    seed_file(
+        store,
+        path="db/db_impl.cc",
+        language="cpp",
+        symbols=[sym("Get", "DBImpl::Get", kind="method", start=100, end=104)],
+        bodies={
+            "DBImpl::Get": (
+                "Status DBImpl::Get() {\n"
+                "  read_memtable();\n"
+                "  read_immutable();\n"
+                "  return read_version();\n"
+                "}"
+            ),
+        },
+    )
+    candidates = [
+        cand("db/db_impl.h", "DBImpl::Get", 10, score=1.0, end=11),
+        cand("db/db_impl.cc", "DBImpl::Get", 100, score=0.9, end=104),
+    ]
+    config = BudgetConfig(hard_cap=10_000, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "Get 读取顺序", candidates, config=config)
+
+    assert len(pack.evidence) == 1
+    assert pack.evidence[0].path == "db/db_impl.cc"
+    assert pack.evidence[0].lines == (100, 104)
+    assert "同符号聚合×1" in pack.evidence[0].reason
+    assert pack.budget is not None and pack.budget.omitted_count == 1
+
+
+def test_dedup_cpp_declarations_keep_score_order(store, seed_file, sym, cand) -> None:
+    for path in ("include/db_impl.h", "include/db_impl_compat.h"):
+        seed_file(
+            store,
+            path=path,
+            language="cpp",
+            symbols=[sym("Get", "DBImpl::Get", kind="method", start=10, end=11)],
+            bodies={"DBImpl::Get": "Status Get() override;"},
+        )
+    candidates = [
+        cand("include/db_impl.h", "DBImpl::Get", 10, score=1.0, end=11),
+        cand("include/db_impl_compat.h", "DBImpl::Get", 10, score=0.9, end=11),
+    ]
+    config = BudgetConfig(hard_cap=10_000, framework_overhead=0, single_file_ratio=1.0)
+
+    pack = assemble(store, "Get", candidates, config=config)
+
+    assert len(pack.evidence) == 1
+    assert pack.evidence[0].path == "include/db_impl.h"
+    assert pack.budget is not None and pack.budget.omitted_count == 1
+
+
 def test_dedup_same_symbol_aggregation(store, seed_file, sym, cand) -> None:
     seed_file(
         store,

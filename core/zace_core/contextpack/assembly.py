@@ -58,6 +58,7 @@ from zace_core.storage import Store
 from zace_core.types import (
     Budget,
     Candidate,
+    ChunkDef,
     ContextPack,
     EvidenceItem,
     Flow,
@@ -107,6 +108,20 @@ CONTEXT_SCORE_RATIO = 0.50
 
 _AGGREGATION_NOTE = "同符号聚合"
 _MERGE_NOTE = "相邻区间合并"
+
+_CPP_SOURCE_SUFFIXES = frozenset({
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".ipp",
+    ".tpp",
+})
+_CPP_FUNCTION_KINDS = frozenset({"function", "method"})
 
 
 #: CJK 区段（汉字 / 假名 / CJK 标点 / 全角形式）——这些字符在 BPE 词表里通常 1-2 字符 1 token，
@@ -395,6 +410,79 @@ class _Slot:
         return estimate_render_tokens(self.item)
 
 
+def _is_cpp_definition_chunk(chunk: ChunkDef) -> bool:
+    """判断 C/C++ 函数切片是否包含函数体，而不是只含声明签名。"""
+    suffix = "." + chunk.file_path.replace("\\", "/").rsplit(".", 1)[-1].lower()
+    content = chunk.content.rstrip()
+    return (
+        chunk.symbol_kind in _CPP_FUNCTION_KINDS
+        and suffix in _CPP_SOURCE_SUFFIXES
+        and "{" in content
+        and content.endswith("}")
+    )
+
+
+def _prefer_definition_representatives(
+    store: Store, candidates: Sequence[Candidate]
+) -> tuple[list[Candidate], int]:
+    """同 FQN 同时有声明与定义时，选择可读的 C/C++ 函数体作为代表。
+
+    C/C++ extractor 为声明和类外定义保留同一个 ``symbol_fqn``，而它们的检索分数可能不同。
+    组装层原本按候选到达顺序聚合，容易把更短的 header 声明留在包内。这里只改变这一结构
+    冲突的代表选择；无函数体定义的符号完全保持原有分数优先行为。
+    """
+    groups: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        if candidate.symbol_fqn:
+            groups.setdefault(candidate.symbol_fqn, []).append(candidate)
+
+    if not groups:
+        return list(candidates), 0
+
+    chunks = {
+        chunk.id: chunk
+        for chunk in store.chunks_by_ids([candidate.chunk_id for candidate in candidates])
+    }
+    replacements: dict[str, Candidate] = {}
+    aggregation_counts: dict[str, int] = {}
+    for symbol, group in groups.items():
+        if len(group) < 2:
+            continue
+        definition = None
+        for candidate in group:
+            chunk = chunks.get(candidate.chunk_id)
+            if chunk is not None and _is_cpp_definition_chunk(chunk):
+                definition = candidate
+                break
+        if definition is None or definition is group[0]:
+            continue
+        replacements[symbol] = definition
+        aggregation_counts[symbol] = len(group) - 1
+        note = f"{_AGGREGATION_NOTE}×{aggregation_counts[symbol]}"
+        if note not in definition.reasons:
+            definition.reasons.append(note)
+
+    if not replacements:
+        return list(candidates), 0
+
+    selected: list[Candidate] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        symbol = candidate.symbol_fqn
+        if symbol not in replacements:
+            selected.append(candidate)
+            continue
+        if symbol in seen:
+            continue
+        selected.append(replacements[symbol])
+        seen.add(symbol)
+
+    selected.sort(
+        key=lambda candidate: (-candidate.score, -candidate.rrf_score, candidate.chunk_id)
+    )
+    return selected, sum(aggregation_counts.values())
+
+
 def assemble(
     store: Store,
     query: str,
@@ -414,6 +502,7 @@ def assemble(
     index_signals = signals if signals is not None else IndexSignals()
     fresh = freshness if freshness is not None else store.freshness()
     pool = sorted(candidates, key=lambda c: (-c.score, -c.rrf_score, c.chunk_id))
+    pool, pre_aggregated = _prefer_definition_representatives(store, pool)
 
     # R21：内容预算与 spec 份额上限。池里**存在代码候选**时 docs_ratio 才生效
     # （纯文档问题——如 spec 类查询——不应被本机制伤害）。
@@ -444,7 +533,7 @@ def assemble(
     below_floor = 0
 
     used = active.framework_overhead
-    omitted = 0
+    omitted = pre_aggregated
     capacity_cut = 0
     tier3_used = 0
     spec_used = 0
