@@ -74,6 +74,7 @@ class CParser(TreeSitterParser):
 
     language = "c"
     grammar_module = "tree_sitter_c"
+    recover_syntax_errors = True
 
     def extract(self, root: ts.Node, ctx: FileContext, out: Extraction) -> None:
         pointers = FunctionPointerMap()

@@ -57,7 +57,7 @@ EMBEDDING_MODEL_KEY = "embedding_model"
 EMBEDDING_DIM_KEY = "embedding_dim"
 
 #: 解析/切片规则版本：改解析口径或切分逻辑（含伪 fqn、骨架规则）时必须 +1。
-PARSER_CONFIG_VERSION = 1
+PARSER_CONFIG_VERSION = 2
 
 
 class Invalidation(StrEnum):

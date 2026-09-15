@@ -18,6 +18,10 @@ from zace_core.types import EdgeDef, ParsedFile, SymbolDef
 SAMPLE_DIR = Path(__file__).parent / "samples" / "c"
 SAMPLE_PREFIX = "core/tests/parsing/samples/c/"
 SYNTAX_ERROR_SOURCE = "#include \"broken.h\"\n\nint broken( {\n    return 1;\n}\n"
+PARTIAL_ERROR_SOURCE = """int before(void) { return 1; }
+struct Broken { int value @; };
+int after(void) { return 2; }
+"""
 
 
 @pytest.fixture(scope="module")
@@ -173,6 +177,14 @@ def test_struct_enum_typedef_shapes(parser: CParser) -> None:
     kinds = {item.name: item.kind for item in pf.symbols}
     assert "Rect" in kinds and "Value" in kinds
     assert len([s for s in pf.symbols if s.fqn == "Point"]) == 1
+
+
+def test_partial_syntax_error_keeps_unaffected_symbols(parser: CParser) -> None:
+    pf = parser.parse("partial.c", PARTIAL_ERROR_SOURCE)
+
+    assert pf.fallback is False
+    assert any("syntax error" in error for error in pf.parse_errors)
+    assert {item.fqn for item in pf.symbols} == {"before", "after"}
 
 
 def test_syntax_error_falls_back(parser: CParser) -> None:
