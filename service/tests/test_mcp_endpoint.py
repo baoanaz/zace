@@ -394,6 +394,53 @@ def test_ask_project_returns_llm_answer_when_configured(mcp_env: SimpleNamespace
     assert "degraded=false" in text, "状态行如实报不再降级"
 
 
+def test_ask_project_short_circuits_when_evidence_insufficient(
+    mcp_env: SimpleNamespace,
+) -> None:
+    """``answerable=false`` 时**不调 LLM**，直接返回尽力而为的上下文（D-24，TASK-107）。
+
+    与 HTTP ``ask`` 路由同语义。MCP 侧此前漏了这一步：证据不足时仍会消耗一次 LLM 调用，
+    且返回的回答没有证据支撑。这里用一个仓库里**不存在**的概念提问，逼出 ``answerable=false``。
+    """
+    calls: list[str] = []
+
+    class _RecordingProvider:
+        model = "fake-model"
+
+        def complete(self, *, system: str, user: str, max_tokens: int, temperature: float) -> str:
+            calls.append(user)
+            return "## Answer\n不该被调用 [E1]。\n"
+
+    mcp_env.app.state.settings = Settings(
+        data_root=mcp_env.app.state.settings.data_root,
+        local_mode=True,
+        local_rescan_interval_s=0.0,
+        answer_base_url="http://llm.invalid/v1",
+        answer_api_key="zace_fake",
+        answer_model="fake-model",
+    )
+    mcp_env.app.state.answer_provider = _RecordingProvider()
+    mcp_env.app.state.answer_provider_settings = mcp_env.app.state.settings
+
+    session_id = _connected(mcp_env.client)
+    result = _call_tool(
+        mcp_env.client,
+        session_id,
+        ASK_TOOL,
+        {
+            "question": "本项目里 Qdrant 向量库的量子态压缩实现位于哪个文件？",
+            "project_root": mcp_env.project_root,
+        },
+    )
+
+    text = _text(result)
+    assert result.get("isError") is not True, text
+    assert calls == [], "证据不足时不得调用 LLM（D-24 短路）"
+    assert "证据不足" in text, "要如实说明为何没给结论"
+    assert "## Relevant Context" in text, "仍要给出可直接使用的上下文包"
+    assert "[zace] answerable=false" in text
+
+
 # --------------------------------------------------------------------------- 并发与新鲜度
 
 

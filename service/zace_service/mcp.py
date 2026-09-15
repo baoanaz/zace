@@ -67,6 +67,7 @@ from zace_service.quota import append_warning, warning_for
 from zace_service.routers.query import (
     DEFAULT_MAX_TOKENS,
     DEGRADED_NOTICE,
+    INSUFFICIENT_NOTICE,
     LLM_FAILED_NOTICE,
     MAX_MAX_TOKENS,
     MAX_QUERY_CHARS,
@@ -106,29 +107,57 @@ TOOL_NAMES: frozenset[str] = frozenset({SEARCH_TOOL, ASK_TOOL})
 #:
 #: TASK-102：两个工具的分工按**答案形态**划分（不再是"深/浅"），并按真实失败模式写清"什么时候
 #: 该用哪个、拿到结果后该怎么走"。文案改动不改工具名/参数/类型（description 属可打磨面）。
+#:
+#: TASK-107：面向"Agent 自主选择工具"重写。三处关键改动：
+#: ① 把"**什么时候不要用我**"提到显眼位置（Agent 的决策成本主要在排除，不在理解功能）；
+#: ② 修正与实现不符的字段名——MCP 返回的是 `[zace] answerable=...` 状态行，**没有** `status`
+#:   字段（那是 HTTP router 的 D-24 短路包才有）；
+#: ③ 补救路径从"再问一次"改为可执行动作（换指纹 / 改问法 / 换工具），并写清引用编号契约。
 _SEARCH_DESCRIPTION = (
-    "【定位器】在当前项目工作区检索与问题最相关的上下文（代码/调用链/文档证据包），不调 LLM、"
-    "毫秒级返回，可放心多问几次。适合：某功能/符号/配置项/契约文件在哪里实现、范围与边界是什么、"
-    "以及一次模型调用最多能暴露几个 Tool 描述符这类需要先拿到一手证据的\"有哪些/在哪里/是谁\"问题。"
-    "查询技巧（显著影响命中）：把已知的标识符用反引号包住（`Runtime`、`cvi-agent-aibox`）、"
-    "带上文件名或目录（`docs/contracts/mcp-tools.json`）、带上配置键全名（`AGENT_GRAPH_BACKEND`）；"
-    "一次只问一个主题，效果远好于把多个问题拼成一句。"
-    "返回 ContextPack 的 Markdown：`### Code` 按 Core/Related/Tests 分组，每条带 `[E*]` 编号、"
-    "`文件:行号` 与它靠什么召回（reason）；`### Docs` 是设计文档证据。"
-    "**拿到结果后看两处**：`### Missing Evidence` 与正文里的 `query_partially_matched`——若提示"
-    "某关键词未覆盖，表示**你问的那个指纹没进包**（不等于仓库里没有），请换个更具体的符号/路径/"
-    "配置键再查一次，或直接用 grep 核对后再下结论；不要凭背景材料断言\"仓库里没有 X\"。"
-    "已知精确标识符的全量引用请用 grep，已知文件请直接 read。"
+    "【定位器｜不调 LLM｜毫秒级】在当前项目仓库中检索与问题最相关的证据包"
+    "（代码片段 + 行号 + 设计文档），返回 Markdown，由你自己阅读后作答。"
+    "\n\n**先用我（而不是 grep/read）当**：你不知道该看哪个文件/符号，需要在陌生仓库里"
+    "找到「答案的位置」——某功能在哪实现、某配置项有哪些取值、某机制的调用链与边界、"
+    "某契约/设计文档怎么说。一次调用即可跨文件批量取证，比逐文件 grep 快得多。"
+    "\n\n**不要用我**：已经知道确切文件 → 直接 read；需要完整/精确引用（每个调用点、"
+    "每次赋值）→ 直接 grep，我只返回相关度最高的若干块，不是穷举；需要深度推理与"
+    "跨文件综合判断并要一份带引用的结论 → 用 `ask_project`。"
+    "\n\n**查询写法（直接决定命中率）**：① 已知标识符用反引号包住（`Runtime`、"
+    "`DBImpl::Get`、`cvi-agent-aibox`）；② 带上文件名/目录（`db/db_impl.cc`、`docs/contracts/`）；"
+    "③ 带上配置键/常量全名（`AGENT_GRAPH_BACKEND`）；④ **一次只问一个主题**——把多个问题"
+    "拼成一句会让检索失焦。查不到时把查询改得更具体（加符号名/路径），而不是原样重问。"
+    "\n\n**返回格式**：首行是状态行（`[zace] answerable=... confidence=... evidence=N`"
+    "与 `docs=N`、`channels=...`），"
+    "随后 `### Code`（分 Core/Related/Tests 组，每条带 `[E*]` 编号、`文件:行号`、"
+    "`reason:` 召回依据与带行号的原文）、`### Docs`（设计文档）、`### Missing Evidence`、"
+    "`### Suggested Next Queries`。**引用证据时请直接沿用 `[E*]` 编号**，它可回验。"
+    "\n\n**读到结果后的纪律**：① `answerable=false` 或 `### Missing Evidence` 非空，表示"
+    "**证据不足**——请换更具体的符号/路径/配置键重查，或用 grep 核实后再下结论；"
+    "**不要**凭常识断言「仓库里没有 X」。② `confidence=low` 时先补证据再作答。"
+    "③ 正文里出现 `query_partially_matched`，说明你查询中的某些关键词没被覆盖，"
+    "那是换词的信号。\n"
+    "④ 若目标是**语义相近但措辞不同**的概念（如用中文描述一个英文命名的机制），"
+    "先用你猜的英文标识符试一次，再退化到自然语言描述。"
 )
 _ASK_DESCRIPTION = (
-    "【判断器】就当前项目提出**调查性问题**，返回基于证据包（含代码与设计文档）的带引用回答，"
-    "并在证据不足时给出缺口说明与改问建议。它是本服务唯一会调用 LLM 的工具（秒级、有成本），"
-    "适合需要结论而非清单的问题：为什么这么设计、实现与设计是否一致、两条链路如何对接、"
-    "某机制的取舍是什么。**不适合**单点定位（那用 search_context 更快更便宜）。"
-    "拿到回答后先看 `status`：`answered` 可直接采信（引用已回验）；"
-    "`insufficient_evidence` 表示按纪律不调 LLM、只回尽力而为的上下文——此时请改用 search_context"
-    "按返回的 nextQueries 补证据，而不是原样重复提问；`degraded` 表示总结模型不可用，"
-    "返回的仍是可用的检索包。回答与包内都带证据编号，落笔引用时请沿用它们。"
+    "【判断器｜调用 LLM｜秒级、有成本】就当前项目提出**需要综合判断的调查性问题**，"
+    "返回基于证据包的带引用回答（证据不足时如实说明缺口并给出改问建议）。"
+    "\n\n**先用我当**：问题需要**结论而非清单**——为什么这样设计、实现与设计是否一致、"
+    "两条链路如何对接、某处取舍的理由、某机制的整体流程。我已内建检索 + 总结 + 引用回验，"
+    "一次调用就能拿到可直接写入答复的段落。"
+    "\n\n**不要用我**：① 单点定位（「X 在哪个文件」）→ `search_context` 更快且免费；"
+    "② 你要读原始代码自己判断 → `search_context` 或直接 read；"
+    "③ 同一问题**不要连续问两次**——第二次不会带来新证据，只会重复消耗模型调用。"
+    "\n\n**提问写法**：用完整问句描述你的调查意图（中文即可），可在句中带上关键符号名/文件名帮助定位。"
+    "问题越具体（指明范围、版本、与其他机制的对比），回答越可靠。"
+    "\n\n**返回格式**：正文是带 `[E*]` 引用的回答，末行附状态行"
+    "（`[zace] answerable=... confidence=... degraded=...`）。"
+    "此外还可能看到两类**降级提示**（此时回答正文不可采信，请看完提示后改用 `search_context`）："
+    "① 提示**证据不足**（对应 `answerable=false`）——按纪律不调 LLM，返回的是尽力而为的上下文包；"
+    "② 提示**总结模型不可用**（`degraded=true`）——返回的仍是可用的检索包。"
+    "无论哪种情况，**都不要把降级包当作结论**；引用证据时请沿用返回的 `[E*]` 编号。"
+    "\n\n**成本纪律**：我是本服务唯一会调用 LLM 的工具。先用 `search_context` 摸清大概位置、"
+    "确认目标存在后，再用我做最后的综合判断；不要用我来试错式探索仓库。"
 )
 
 #: 懒构造 EngineManager 的互斥（MCP 工具没有 ``Request``，不能直接用 ``deps.get_engine_manager``）。
@@ -472,20 +501,31 @@ def _ask_text(
     max_tokens: int,
     provider_resolver: Callable[[], Any],
 ) -> str:
-    """``ask_project`` 的正体：grounded LLM 总结；未配置/失败一律降级（D-26，绝不空手）。"""
+    """``ask_project`` 的正体：grounded LLM 总结；未配置/失败一律降级（D-26，绝不空手）。
+
+    **证据优先（D-24，TASK-107）**：``answerable=false`` 时不调 LLM，直接返回尽力而为的
+    上下文包 + 缺口说明。HTTP ``ask`` 路由一直如此，MCP 侧此前漏了这一步（会在证据不足时
+    仍然消耗一次 LLM 调用，且返回的回答没有任何证据支撑）。现在两侧行为一致。
+    """
     _rescan_if_due(manager, settings, project_id)
     trace = _call_engine(lambda: manager.search(project_id, question, max_tokens))
     warning = _storage_warning(manager, settings, project_id)
+    insufficient = not trace.pack.answerable
     meta = pack_meta(
         trace.pack,
         project_id=project_id,
         channels=trace.channels_used,
         degraded=True,
-        reason=DEGRADED_NOTICE,
+        reason=INSUFFICIENT_NOTICE if insufficient else DEGRADED_NOTICE,
         candidate_count=trace.candidate_count,
     )
-    provider = provider_resolver()
     status_line = _status_line(meta)
+    if insufficient:
+        # 与 HTTP 路由的 D-24 短路同语义：先说清为何不调 LLM，再给可直接使用的上下文与补证据建议。
+        return append_warning(
+            f"{INSUFFICIENT_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}", warning
+        )
+    provider = provider_resolver()
     if provider is None:
         return append_warning(
             f"{DEGRADED_NOTICE}\n\n{status_line}\n\n{render_markdown(trace.pack)}", warning
