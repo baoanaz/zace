@@ -1,7 +1,7 @@
 # 请求日志与 trace id 报错手册（TASK-090）
 
 > 状态：2026-09-14 泳道 D 实施并实测（本机 WSL2，逐条命令真实跑过）。
-> 配套：`docs/handbook/agent接入与API-Key.md`（拿到 API Key）、`docs/handbook/M2a-验收手册.md`（本地模式起服务）。
+> 配套：`docs/handbook/getting-started/agent接入与API-Key.md`（拿到 API Key）、`docs/handbook/getting-started/M2a-验收手册.md`（本地模式起服务）。
 > 本手册只讲**报错之后怎么查**，不含部署与 embedding 配置。
 
 ## 0. 一句话

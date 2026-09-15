@@ -40,7 +40,7 @@ export const DEFAULT_MAX_TOKENS = 10_000;
 export const MAX_MAX_TOKENS = 20_000;
 export const MAX_QUERY_CHARS = 2_000;
 
-/** 服务未启动时的可操作提示（与 `docs/handbook/M2a-验收手册.md` §1 的命令一致）。 */
+/** 服务未启动时的可操作提示（与 `docs/handbook/getting-started/M2a-验收手册.md` §1 的命令一致）。 */
 export const SERVICE_DOWN_MESSAGE =
   "连不上 zace-service。请先启动服务（示例：uv run zace-service local --repo <你的仓库>），" +
   "或在开发模式下确认 Vite 代理的 ZACE_WEB_API 指向正确的地址。";

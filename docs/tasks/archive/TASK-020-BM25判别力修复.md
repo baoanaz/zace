@@ -146,7 +146,7 @@ DF 仅 19）——**稀有度本身在本语料上不可靠**，所以纯 IDF �
 
 ## 参考
 
-- `docs/plan/contracts.md` §3.3 R11（BM25 OR 语义的来源）、§3.5 R20（本卡背景裁定与**实测否决记录**）
+- `docs/contracts/PROCESS.md` §3.3 R11（BM25 OR 语义的来源）、§3.5 R20（本卡背景裁定与**实测否决记录**）
 - codegraph `source/codegraph/src/db/queries.ts:1505-1513`（OR + 列权重参考）
 - FTS5 文档：`bm25(fts, w1, w2, ...)` 与 `fts5vocab` 表（可作为 DF 查询的替代实现路径）
 

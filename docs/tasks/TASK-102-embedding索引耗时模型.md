@@ -4,7 +4,7 @@
 > 建议分支：`feature/task-102-embed-bench_xwz0915`
 > 交付物所有权：`benches/embed-bench/`、`benches/results/index-cost-model-company-wsl.md`、
 > `benches/targets-benchmark.md`、`benches/results/raw/`
-> （`docs/handbook/embedding-provider切换.md` 只做最小增量改动，见"执行记录"）
+> （`docs/handbook/operations/embedding-provider切换.md` 只做最小增量改动，见"执行记录"）
 
 ## 目标
 
@@ -16,7 +16,7 @@
 
 ## 输入文档
 
-1. `docs/handbook/embedding-provider切换.md`（现行参数与实测数字）
+1. `docs/handbook/operations/embedding-provider切换.md`（现行参数与实测数字）
 2. `docs/tasks/TASK-049-embedding架构整理.md` §7–§8（编排者参数标定，本卡对其复核）
 3. `benches/README.md`（靶场约定与报告格式）
 
@@ -72,7 +72,7 @@
 | # | 偏差 | 影响 | 建议 |
 |---|---|---|---|
 | 1 | **D-05 / Module-01 §2.4 写"embedding 截断 2048 token"**，但实测 2048 既不省时间，也不是当前生效的截断层（实际受 `EMBEDDING_BODY_MAX_CHARS=8000` 字符上界约束） | 设计文档口径与实测不符 | 由编排者决定是否更新 Module-01 §2.4 的措辞（本卡未改 `docs/design/**`） |
-| 2 | `docs/handbook/embedding-provider切换.md` §4 写"加大 batch 可提速" | 实测 batch 256→768 耗时**无变化**（54.9s / 55.6s / 54.6s） | 已在本卡报告中记录；手册修订建议由编排者统一处理 |
+| 2 | `docs/handbook/operations/embedding-provider切换.md` §4 写"加大 batch 可提速" | 实测 batch 256→768 耗时**无变化**（54.9s / 55.6s / 54.6s） | 已在本卡报告中记录；手册修订建议由编排者统一处理 |
 | 3 | 同上手册把 `EMBED_MAX_INPUT_TOKENS` 列为"一般不用改" | 实测确认不该改（调小无收益）——**与手册一致，无需修订** | — |
 
 ### 未决问题

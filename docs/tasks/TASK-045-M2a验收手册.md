@@ -3,7 +3,7 @@
 > 状态：review ｜ 阶段：Phase 2（M2a-2 收尾）｜ 硬依赖：TASK-034、TASK-040 ｜ soft 依赖：无
 > 建议分支：`feature/task-045_<你的缩写><MMDD>`（从 TASK-040 分支串联）
 > 交付物所有权：
-> - `docs/handbook/M2a-验收手册.md`（新建：唯一交付物）
+> - `docs/handbook/getting-started/M2a-验收手册.md`（新建：唯一交付物）
 > - `docs/tasks/TASK-045-M2a验收手册.md`（本卡）
 > - `docs/tasks/README.md`（本卡在任务板上的那一行）
 >
@@ -48,7 +48,7 @@ M2a 的验收凭证是"**用户本人在编辑器里用真实问题问到带行�
 
 ## 验收标准（DoD）
 
-- [x] `docs/handbook/M2a-验收手册.md` 存在，且**每一条命令都带真实输出**（含一条 MCP
+- [x] `docs/handbook/getting-started/M2a-验收手册.md` 存在，且**每一条命令都带真实输出**（含一条 MCP
       `tools/call` 的真实返回片段）；无"典型输出"式编造。
 - [x] 手册里出现的 URL / 字段名 / 报错文案与实现逐字核对过（至少覆盖：`/mcp`、`indexProgress`
       的六个字段、`mcp-config` 的两段片段、空索引与恶意 Origin 的报错文本）。
@@ -77,7 +77,7 @@ M2a 的验收凭证是"**用户本人在编辑器里用真实问题问到带行�
 
 ### 2026-09-11 · 实施 AI · 分支 `feature/task-045_xwz0911`（从 `feature/task-040_xwz0911` 串联）
 
-**交付物**：`docs/handbook/M2a-验收手册.md`（新建，§0–§9）+ 本卡 + 任务板一行。**无代码改动**。
+**交付物**：`docs/handbook/getting-started/M2a-验收手册.md`（新建，§0–§9）+ 本卡 + 任务板一行。**无代码改动**。
 
 **手册内容与实现逐字核对过的地方**（避免"照着做跑不通"）：
 

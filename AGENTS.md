@@ -43,7 +43,7 @@ cd /home/xuwenzheng/github/ACE/zace-lane-<lane>       # 切到自己的工作区
 - 不直推 `main`、不使用 `git push --force`；泳道模式下只需**本地提交**（无需 push/PR），评审与合并由总览 AI 执行。
 - 一次提交只做任务卡范围内的事；提交信息用英文祈使句 + 任务号，例：`task-001: add sqlite schema and FTS5 writer`。
 - **不在共享工作区用 `git add -A`**：它会把别人未提交的改动一起卷进你的提交。只 `git add` 自己的文件。
-- 共享文件（`docs/tasks/README.md` / `docs/plan/contracts.md` / 根 `pyproject.toml`）**只做最小改动**，不要顺手重排格式（会让别人的 diff 全部冲突）。
+- 共享文件（`docs/tasks/README.md` / `docs/contracts/PROCESS.md` / 根 `pyproject.toml`）**只做最小改动**，不要顺手重排格式（会让别人的 diff 全部冲突）。
 - 不提交运行时产物（数据库、`.zace/`、构建输出）；不提交任何 secret/token。
 
 ## 4. 验证纪律

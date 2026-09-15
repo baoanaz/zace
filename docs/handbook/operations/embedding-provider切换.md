@@ -1,7 +1,7 @@
 # embedding provider 切换手册（TASK-049）
 
 > 适用版本：TASK-049 合并后（`main` @ `31baf91` 起）。
-> 配套文档：`docs/handbook/云端embedding接入.md`（TASK-046，**接入**与排障）；
+> 配套文档：`docs/handbook/getting-started/cloud-embedding.md`（TASK-046，**接入**与排障）；
 > 本手册只管**切换**——换厂商、换模型、调批/并发参数、额度用完后怎么办。
 > 本手册所有命令与输出均在 WSL2 本机实测过（2026-09-13）。
 

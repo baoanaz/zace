@@ -80,7 +80,7 @@
 > 背景：用户要求 Web 具备「登入 / 注册 / 初始化账户 / API Key 管理 / 索引成功与失败次数 / 平均耗时 / 用量」等能力。
 > 现状盘点（`main` @ `42587cf`）：`/api/auth/*` 与 `/api/usage/projects/{id}` **全部是 501 占位**，
 > 索引统计**只存在于内存**（无 job 表、无历史），CF-05 **没有任何初始化账户入口**。
-> 另据 TASK-051 实测（`docs/plan/cloud-mcp-readiness.md` §1 A1）：非本地模式下**完全无鉴权**——
+> 另据 TASK-051 实测（`docs/evidence/task-051-cloud-mcp-readiness.md` §1 A1）：非本地模式下**完全无鉴权**——
 > 这是 Rust client 上云的**阻断级前置**，与本组卡片是同一件事。
 
 | 卡 | 标题 | 硬依赖 | 文件所有权根 | 状态 |
@@ -195,10 +195,10 @@
 | [TASK-015A](TASK-015-Bakeoff与校准.md) | embedding bake-off（模型选型） | TASK-013 | `benches/bakeoff/` | done |
 | [TASK-036](TASK-036-多仓库规模自举与健壮性.md) | 多仓库规模自举与索引健壮性（六靶场 / 崩溃修复 / 一致性自检） | — | `benches/results/robustness-scale.md`、`core/zace_core/{parsing,chunking,pipeline}/` | done |
 | [TASK-037](TASK-037-索引范围策略.md) | 索引范围策略（三层忽略规则 + 大小/二进制阈值，R42/R43） | — | `core/zace_core/pipeline/{ignore,source,indexer}.py` | **done（W6-lane A，已合并；§C/§D 测量缺口见备注）** |
-| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/云端embedding接入.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
+| [TASK-046](TASK-046-云端embedding接入.md) | **云端 embedding 接入与配置对齐**（硅基流动 bge-m3；修 registry 模型名不可用 + 上限默认值 + api 截断/分批；`docs/handbook/getting-started/cloud-embedding.md`） | TASK-008 | `core/zace_core/embedding/{registry,factory,api}.py`、`core/tests/embedding/` | **done（W6-lane B，已合并）** |
 | [TASK-047](TASK-047-新靶场与golden重建.md) | **新靶场建立与 golden 重建**（hello-agents）+ M2a 一键冒烟脚本 | — | `benches/golden/hello-agents/`、`scripts/m2a-smoke.sh`、`docs/handbook/` | **done（W6-lane C，已合并）** |
 | [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— TASK-046 漏接的配置路径 | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done（编排者直接完成） |
-| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数按模型配置化 + provider 解耦 + 并发 + 切换手册） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/embedding-provider切换.md` | **done（核心已合并；手册与 `.env.example` 待补）** |
+| [TASK-049](TASK-049-embedding架构整理.md) | **embedding 架构整理**（参数按模型配置化 + provider 解耦 + 并发 + 切换手册） | TASK-046 | `core/zace_core/embedding/{registry,api,factory}.py`、`docs/handbook/operations/embedding-provider切换.md` | **done（核心已合并；手册与 `.env.example` 待补）** |
 | [TASK-048](TASK-048-批参数环境变量入口.md) | 批参数环境变量入口（`EMBED_BATCH_TOKEN_BUDGET`）—— **已由编排者直接完成**（TASK-046 漏接的配置路径） | TASK-046 | `core/zace_core/embedding/factory.py`、`core/tests/embedding/` | done |
 | [TASK-038](TASK-038-本地embedding截断钳制.md) | 本地 embedding 的 `max_input_tokens` 钳制与友好报错（**降级**：本地路线暂缓，`min` 语义并入 TASK-046 §B） | — | `core/zace_core/embedding/**` | deferred（W6 不派活） |
 | [TASK-023](TASK-023-真实场景用例采集.md) | 真实场景用例采集（埋点 + 反馈信号） | TASK-031 | `service/zace_service/telemetry/` | pending |

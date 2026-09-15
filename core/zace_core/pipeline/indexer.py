@@ -1,7 +1,7 @@
 """索引流水线：``ChangeSet`` → 增量失效 → 向量对账（TASK-007）。
 
 设计依据：``docs/design/Module/01-切片存储.md`` §4.1（双层增量）、§4.2（配置指纹与分层失效）、
-§4.3（时序）；实现期口径：``docs/plan/contracts.md`` §3.2 R1（``.h`` 仓库级抬升）、
+§4.3（时序）；实现期口径：``docs/contracts/PROCESS.md`` §3.2 R1（``.h`` 仓库级抬升）、
 R4（``FileDelta`` 三集合）、R8（imports 边缘）、R10（向量相似度/rebuild 语义）。
 
 职责与边界：

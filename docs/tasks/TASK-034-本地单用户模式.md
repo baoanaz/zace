@@ -28,7 +28,7 @@ zace-service local --repo /path/to/repo        # 一条命令：绑定仓库 + �
 
 1. `docs/design/Module/05-MCP与同步.md` §3.5（首同步与进度反馈）、§3.6（freshness 语义）、§4（超时矩阵）
 2. `docs/design/Module/06-服务化与部署.md` §2.4（索引 job：**本卡只做单项目后台线程，不做 job 表/worker 池**）、§4B（本地形态）
-3. `docs/plan/contracts.md` §3.8（R34 本地模式免鉴权、R35 状态落文件、R36 source 参数、R37 projectId 可省略）
+3. `docs/contracts/PROCESS.md` §3.8（R34 本地模式免鉴权、R35 状态落文件、R36 source 参数、R37 projectId 可省略）
 4. `core/zace_core/engine.py`（`resolve_repo` / `ingest_repo` / `sync_status`：**attach 的既有能力已存在**）
 5. `core/zace_core/pipeline/indexer.py::IngestReport`（progress 字段来源）
 

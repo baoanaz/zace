@@ -20,7 +20,7 @@
 
 1. `docs/design/Module/05-MCP与同步.md` §3.1-§3.6（协议时序、缓存与幂等、checkpoint、首同步、freshness）
 2. `docs/contracts/openapi.yaml`（CF-05：sync 四条路径与"幂等语义"说明）
-3. `docs/plan/contracts.md` §3.8（R35 状态存储、R36 source、R37 projectId 可省略）
+3. `docs/contracts/PROCESS.md` §3.8（R35 状态存储、R36 source、R37 projectId 可省略）
 4. `docs/tasks/TASK-031-core接入.md`（账本与 blob 镜像的既有语义——本卡在其上做 HTTP 面）
 5. `core/zace_core/hashing.py`（`blob_hash(path, content)`：**含 path**，用于校验客户端上报）
 

@@ -3,7 +3,7 @@
 > 状态：review ｜ 阶段：Phase 2（M2c 前置，与 M2b 并行无冲突） ｜ 硬依赖：无（只读代码 + 文档） ｜ soft 依赖：TASK-040 / TASK-033（已 done）
 > 建议分支：`feature/task-051_<你的缩写><MMDD>`
 > 交付物所有权：
-> - `docs/plan/cloud-mcp-readiness.md`（**新建**：差距清单 + 远端身份预研 + 契约影响分级）
+> - `docs/evidence/task-051-cloud-mcp-readiness.md`（**新建**：差距清单 + 远端身份预研 + 契约影响分级）
 > - `docs/tasks/TASK-051-云端MCP就绪度与远端身份预研.md`（本卡）
 >
 > 清单外文件**一律不得修改**。**特别提示：本卡不改任何代码**——预研发现的问题以文档形式提交，
@@ -39,12 +39,12 @@
 
 | 路径 | 内容 |
 |---|---|
-| `docs/plan/cloud-mcp-readiness.md` | 唯一交付源码：差距清单（每项含实测证据与复现命令）+ 远端身份三方案对比与推荐 + 契约影响分级 + 未决问题 |
+| `docs/evidence/task-051-cloud-mcp-readiness.md` | 唯一交付源码：差距清单（每项含实测证据与复现命令）+ 远端身份三方案对比与推荐 + 契约影响分级 + 未决问题 |
 | `docs/tasks/TASK-051-*.md` | 本卡（状态与执行记录回填） |
 
 ## 验收标准（DoD）
 
-- [ ] `docs/plan/cloud-mcp-readiness.md` 落盘，且**每条差距都带可复现证据**（命令 + 真实输出片段 +
+- [ ] `docs/evidence/task-051-cloud-mcp-readiness.md` 落盘，且**每条差距都带可复现证据**（命令 + 真实输出片段 +
       代码行号锚点），不得只有论断；
 - [ ] 覆盖以下已确认的差距（编排者 2026-09-13 实测，实施 AI 须**独立复现**并在报告中给出自己的输出）：
   1. **A1 非本地模式下无任何鉴权**（最高优先级，安全）：实测服务在 `ZACE_LOCAL_MODE=false` 下
@@ -122,7 +122,7 @@ uv run python -c "from zace_core.engine import repo_identity; print(repo_identit
 
 | 文件 | 内容 |
 |---|---|
-| `docs/plan/cloud-mcp-readiness.md`（新建） | 云端 MCP 差距清单 A1–A10（含实测输出与行号锚点）+ 远端身份三方案对比与推荐 + 契约分级 + Q1–Q6 待裁定 |
+| `docs/evidence/task-051-cloud-mcp-readiness.md`（新建） | 云端 MCP 差距清单 A1–A10（含实测输出与行号锚点）+ 远端身份三方案对比与推荐 + 契约分级 + Q1–Q6 待裁定 |
 | `docs/tasks/TASK-051-…md`（新建） | 本卡 |
 | `docs/tasks/README.md`（**公共文件，按 orchestration §7 申请**） | 追加 TASK-051 行 + 波次说明 |
 

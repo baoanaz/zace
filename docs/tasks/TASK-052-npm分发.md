@@ -23,7 +23,7 @@ server 被拉起。覆盖用户点名的三类客户端：**Codex CLI**（`~/.co
 ## 输入文档
 
 1. `docs/tasks/TASK-040R-client骨架与同步代理.md`（本卡的前置：client 已可用）
-2. `docs/plan/cloud-mcp-readiness.md` A1（鉴权缺口，影响配置项语义）
+2. `docs/evidence/task-051-cloud-mcp-readiness.md` A1（鉴权缺口，影响配置项语义）
 3. 参考实现：`/home/xuwenzheng/github/ACE/example/notace-tool-rs` 的 `npm/run.js`、
    `npm/package.json`、`server.json`、`.github/workflows/release.yml`（**只读**）
 

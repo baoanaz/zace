@@ -162,7 +162,7 @@ Phase 2 service 必须提供 blobs 侧的 `list_files`（按上传目录/DB 列�
 2. **`Store` 缺「列举全部文件（path + language + content_hash）」原语**：TASK-013 计算 ChangeSet、
    Phase 2 同步对账都需它（当前只能靠 provider 清单 + 逐文件重解析）；建议 L2 时一并考虑。
 3. **`index_config.indexed_languages` 是否升格为契约键**：CF-01 表头只列举了 4 个键；若编排者
-   认为该键属跨卡契约（Phase 2 service 也要读），建议补记到 `docs/plan/contracts.md` §3.2。
+   认为该键属跨卡契约（Phase 2 service 也要读），建议补记到 `docs/contracts/PROCESS.md` §3.2。
 4. **`max_input_tokens` 不参与指纹**（同 TASK-006 未决问题 3），本卡按卡内口径未处理。
 
 **建议复核点**：增量嵌入判据（第 2 条，影响正确性）、R1 抬升的键选择（未决 3）、

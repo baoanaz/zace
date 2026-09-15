@@ -90,7 +90,7 @@ bash scripts/lane-worktrees.sh remove <lane>   # 有安全闸：脏/未合并/�
 | 文件 | 谁改 | 冲突避免方式 |
 |---|---|---|
 | `docs/tasks/README.md`（任务板） | 每张卡完工都改状态行 | 只改**自己那一行**；编排者合并时解决 |
-| `docs/plan/contracts.md`（决策登记） | 需要新裁定时 | 只在卡内"申请"，由编排者写入 |
+| `docs/contracts/PROCESS.md`（决策登记） | 需要新裁定时 | 只在卡内"申请"，由编排者写入 |
 | `gitignore` / `.env.example` / 根 `pyproject.toml` | 少见 | 改前在卡内申请 |
 
 **规则**：改这些文件时**只做最小改动**（一行/一段），不要顺手重排格式——重排会让别人的 diff 全部冲突。

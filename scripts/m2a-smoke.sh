@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # zace M2a 一键冒烟：起服务 → 等索引 → 调 MCP → 断言返回里有「文件:行号」。
 #
-# 用法（详见 docs/handbook/M2a-验收手册.md §10）：
+# 用法（详见 docs/handbook/getting-started/M2a-验收手册.md §10）：
 #   bash scripts/m2a-smoke.sh --repo /path/to/repo [--data-root /tmp/zace-smoke] [--port 8799]
 #                             [--query "…"] [--keep] [--timeout 1800] [--api-key-env VAR]
 #
@@ -40,7 +40,7 @@ usage() {
   cat <<'EOF'
 zace M2a 一键冒烟：起服务 → 等索引 → 调 MCP → 断言返回里有「文件:行号」。
 
-用法（详见 docs/handbook/M2a-验收手册.md §10）：
+用法（详见 docs/handbook/getting-started/M2a-验收手册.md §10）：
   bash scripts/m2a-smoke.sh --repo /path/to/repo [--data-root /tmp/zace-smoke] [--port 8799]
                             [--query "…"] [--keep] [--timeout 1800]
 
@@ -286,7 +286,7 @@ done
 MCP_CLIENT="$(mktemp)"
 trap 'rm -f "$MCP_CLIENT"; cleanup' EXIT
 cat >"$MCP_CLIENT" <<'PY'
-# 最小 MCP 客户端（官方 SDK / Streamable HTTP）——思路同 docs/handbook/M2a-验收手册.md §4.2。
+# 最小 MCP 客户端（官方 SDK / Streamable HTTP）——思路同 docs/handbook/getting-started/M2a-验收手册.md §4.2。
 import asyncio, os, sys
 os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
 from mcp import ClientSession

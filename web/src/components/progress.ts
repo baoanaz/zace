@@ -1,7 +1,7 @@
 /**
  * `IndexProgress` 的如实渲染（D-30 / Module 07 §2.3）。
  *
- * 三条不许妥协的规则（口径来自 `docs/handbook/M2a-验收手册.md` §2）：
+ * 三条不许妥协的规则（口径来自 `docs/handbook/getting-started/M2a-验收手册.md` §2）：
  * 1. **没有百分比**：core 的 ingest 无回调，中间态拿不到真实完成度——宁可信息少，不可信息假；
  * 2. `totalFiles` 与 `processedFiles` **不是同一量纲**（前者含二进制/构建产物，后者只数真正解析的文件），
  *    所以只并排显示，不做除法；

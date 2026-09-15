@@ -21,7 +21,7 @@
 
 1. `docs/design/Module/06-服务化与部署.md` §0.1（拆分与依赖方向）、§2.1（REST 路径清单）、§2.4（可观测）、§3（安全清单里与本卡相关的部分）
 2. `docs/contracts/openapi.yaml`（CF-05：**路径集合与 Error 形态是冻结合同**）
-3. `docs/plan/contracts.md` §3.8（R33-R37：本地模式免鉴权、`projectId` 可省略等裁定）
+3. `docs/contracts/PROCESS.md` §3.8（R33-R37：本地模式免鉴权、`projectId` 可省略等裁定）
 4. `docs/plan/phase2-roadmap.md` §1（M2a 卡序）
 5. `service/pyproject.toml`（现有依赖：fastapi / uvicorn / pydantic / argon2-cffi / itsdangerous；dev: pytest / ruff / httpx）
 

@@ -92,7 +92,7 @@ Web 管理面 + Playground；docker compose + TLS + 备份脚本；与"agent 纯
 |---|---|---|
 | **M1** core 闭环 | 在 zace 自身 + 2 个真实仓库上可用；改 1 函数只重嵌 1 chunk；golden set 出基线 | **已达成**（2026-09-10）：zace-core 11.5k 行 / 501 tests；aibox 434 文件 / 5760 chunks 索引成功；smoke 集 e2e recall@5 0.593 |
 
-**M1 遗留（有意延后，见 `docs/plan/contracts.md` §3.6）**：
+**M1 遗留（有意延后，见 `docs/contracts/PROCESS.md` §3.6）**：
 
 - R21 装填配比、R24 排序判别力、R31 answerable 脆弱点 —— 均**冻结待真实数据**（TASK-023 → TASK-050）；
 - 当前 60 条 golden set 降级为 smoke + 回归护栏（R29），**不作为优化目标**。

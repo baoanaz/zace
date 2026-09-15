@@ -37,7 +37,7 @@ service 直接索引本地仓库（TASK-034），同步环节整体消失。
 1. `docs/contracts/mcp-tools.json`（**CF-06：工具名/参数名/类型/默认值/上限是冻结合同**，description 文案可打磨）
 2. `docs/design/Module/05-MCP与同步.md` §2（工具语义）、§5（渲染在服务端——**客户端只透传 Markdown**）、§7（安全）
 3. `docs/design/Module/03-上下文组装.md` §4.4（answerable 与 confidence 的语义，工具返回值要如实反映）
-4. `docs/plan/contracts.md` §3.8（R34/R37：本地模式免鉴权、`projectId` 可省略）
+4. `docs/contracts/PROCESS.md` §3.8（R34/R37：本地模式免鉴权、`projectId` 可省略）
 5. `service/zace_service/routers/query.py` 与 `packmeta.py`（TASK-032：**复用**，不要重新实现检索与渲染）
 
 ## 冻结接口（本卡不得变更）

@@ -7,7 +7,7 @@
 > - `benches/README.md`（**仅**追加"靶场变更"章节；不改既有内容）
 > - `benches/results/phase2-helloagents-baseline.md`（**新建**：基线报告）
 > - `scripts/m2a-smoke.sh`（**新建**：一键冒烟）
-> - `docs/handbook/M2a-验收手册.md`（**仅**追加"§10 一键冒烟脚本"一节，指向脚本；不改既有章节）
+> - `docs/handbook/getting-started/M2a-验收手册.md`（**仅**追加"§10 一键冒烟脚本"一节，指向脚本；不改既有章节）
 > - `docs/tasks/TASK-047-新靶场与golden重建.md`（本卡）、`docs/tasks/README.md`（本行）
 >
 > 清单外文件不得改（尤其 `core/**`、`docs/contracts/**`、`docs/design/**`）。
@@ -42,8 +42,8 @@ commit: 4f7682c（git remote: https://github.com/datawhalechina/hello-agents.git
 1. `docs/plan/phase2-m2b-w6.md` §2.1/§2.5（本环境基线）/ §3.3（本卡定位）
 2. `benches/README.md`（**用例编写指南**：`expected` 的 `path`/`symbol` 语义、负例口径、目录分层规则）
 3. `docs/tasks/TASK-014-Golden集与基线.md`（历史口径与 DoD；**本次不重复它的靶场**，但沿用其纪律）
-4. `docs/plan/contracts.md` §3.6（R29/R30：60 条 smoke 集的定位与"不据此调参"的纪律）
-5. `docs/handbook/M2a-验收手册.md` §4.2（最小 MCP 客户端脚本——**冒烟脚本要复用它，不要重写**）
+4. `docs/contracts/PROCESS.md` §3.6（R29/R30：60 条 smoke 集的定位与"不据此调参"的纪律）
+5. `docs/handbook/getting-started/M2a-验收手册.md` §4.2（最小 MCP 客户端脚本——**冒烟脚本要复用它，不要重写**）
 
 ## 冻结接口（本卡不得变更）
 
@@ -106,7 +106,7 @@ commit: 4f7682c（git remote: https://github.com/datawhalechina/hello-agents.git
 3. **端口/数据根/仓库路径可配**（默认值合理，且**不硬编码本机绝对路径**为唯一选项）；
 4. **等索引**：轮询 `GET /api/projects/{id}` 直到 `state="done"`，**带上限**（如 30 分钟）并在超时时
    如实报当前进度（**不要伪造百分比**，D-30）；
-5. **调一次 `search_context`**（复用 `docs/handbook/M2a-验收手册.md` §4.2 的最小客户端思路），
+5. **调一次 `search_context`**（复用 `docs/handbook/getting-started/M2a-验收手册.md` §4.2 的最小客户端思路），
    **断言返回里有 `文件:行号`**（不能只看 exit code）；
 6. **清理**（可选 `--keep`）：结束时停服务；**不动被索引的仓库**；
 7. `set -euo pipefail`；失败时打印**可读的下一步**（不是裸堆栈）。
@@ -115,7 +115,7 @@ commit: 4f7682c（git remote: https://github.com/datawhalechina/hello-agents.git
 
 ### §E 手册补充（追加一节）
 
-在 `docs/handbook/M2a-验收手册.md` **追加** `## 10. 一键冒烟（可选）`：
+在 `docs/handbook/getting-started/M2a-验收手册.md` **追加** `## 10. 一键冒烟（可选）`：
 指向 `scripts/m2a-smoke.sh`，写清用法、前置（key 怎么给）、失败时怎么排查。
 **不要改**手册 0-9 节的既有内容。
 
@@ -146,7 +146,7 @@ commit: 4f7682c（git remote: https://github.com/datawhalechina/hello-agents.git
 
 - `benches/README.md`（**用例编写指南**：schema、负例口径、目录分层——**先读这一节再出题**）
 - `benches/run.py`（runner 实现：`--golden` 接受文件或目录、指标口径）
-- `docs/handbook/M2a-验收手册.md` §4.2（最小 MCP 客户端：**复用，不要重写**）
+- `docs/handbook/getting-started/M2a-验收手册.md` §4.2（最小 MCP 客户端：**复用，不要重写**）
 - `core/zace_core/pipeline/source.py`（`DEFAULT_SKIP_DIRS`：理解当前**已经**跳过了什么，
   这决定你的"索引范围摘要"怎么读——`venv/` 已被跳过，但 272 个 >128KB 文件没有）
 - `/home/xuwenzheng/github/hello-agents/`（靶场本体，**只读**：不要修改、不要在其中建文件）
@@ -237,7 +237,7 @@ $ bash scripts/m2a-smoke.sh --repo /home/xuwenzheng/github/hello-agents \
 
 #### §E 手册补充
 
-`docs/handbook/M2a-验收手册.md` **追加** `## 10. 一键冒烟（可选）`（+80 行，**0 删除**；0-9 节未动）。
+`docs/handbook/getting-started/M2a-验收手册.md` **追加** `## 10. 一键冒烟（可选）`（+80 行，**0 删除**；0-9 节未动）。
 
 #### 索引范围实测
 

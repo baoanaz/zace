@@ -19,7 +19,7 @@
 
 ## 输入文档（按序读）
 
-1. `docs/plan/cloud-mcp-readiness.md`（**本卡的直接前置**：A1 鉴权 / A2 身份 / A3 归一化 / A5 新鲜度 / A10 现成资产）
+1. `docs/evidence/task-051-cloud-mcp-readiness.md`（**本卡的直接前置**：A1 鉴权 / A2 身份 / A3 归一化 / A5 新鲜度 / A10 现成资产）
 2. `docs/design/Background/01-notace-tool-rs.md`（参考实现的完整报告）
 3. `docs/design/Module/05-MCP与同步.md` §2-§5
 4. `docs/contracts/mcp-tools.json`（CF-06）、`docs/contracts/openapi.yaml`（CF-05）

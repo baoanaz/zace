@@ -118,7 +118,7 @@
 ## 6. 复现命令
 
 ```bash
-# 环境（key 从 .bashrc 提取；非交互 shell 拿不到，见 docs/handbook/云端embedding接入.md）
+# 环境（key 从 .bashrc 提取；非交互 shell 拿不到，见 docs/handbook/getting-started/cloud-embedding.md）
 export EMBED_API_KEY=$(sed -n 's/^export zace_embeding_API_KEY=//p' ~/.bashrc | tr -d '"')
 export EMBED_MODE=api EMBED_MODEL=BAAI/bge-m3 EMBED_BASE_URL=https://api.siliconflow.cn
 export NO_PROXY=127.0.0.1,localhost

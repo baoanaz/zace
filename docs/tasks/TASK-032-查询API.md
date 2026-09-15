@@ -22,7 +22,7 @@
 3. `docs/contracts/openapi.yaml`（CF-05：`SearchResponse {markdown, meta}` / `AskResponse {answer, status, evidenceSummary, meta}`）
 4. `docs/contracts/contextpack.schema.json`（CF-03，`includePack=true` 时返回）
 5. `core/zace_core/contextpack/{render.py,assembly.py}`（`render_markdown` / `to_json`；`assemble` 的 `_assess`）
-6. `docs/plan/contracts.md` §3.6 R29/R30/R31（**不得为了指标调参**）
+6. `docs/contracts/PROCESS.md` §3.6 R29/R30/R31（**不得为了指标调参**）
 
 ## 冻结接口（本卡不得变更）
 

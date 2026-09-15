@@ -92,7 +92,7 @@ TASK-031 的 `EngineManager.ingest` 目前直接调 `Engine._ingest`（**跨包�
 - 不做 provider 预热（`EmbeddingConfig.preload` 已有开关，何时预热归 TASK-042/062 决定）。
 - 不改 `EmbeddingConfig` 或 provider 实现（那是 core 的 TASK-008 范围）。
 - 不改 `/healthz` 的既有字段语义（`?deep=1` 已有探测；本卡只加 sync/query 的错误映射）。
-- 不动 CF-05 的状态码集合以外的东西（新增 503 属**扩展**，在卡内登记并同步 `docs/plan/contracts.md`；
+- 不动 CF-05 的状态码集合以外的东西（新增 503 属**扩展**，在卡内登记并同步 `docs/contracts/PROCESS.md`；
   **不要**自己改 `docs/contracts/openapi.yaml`——那是编排者的事）。
 
 ## 参考源码锚点（只读）
@@ -214,11 +214,11 @@ HTTP=200
 | `OSError`（含故障链） | 507 `storage_error` |
 | 其它 | 不映射 → 500 `internal_error`（兜底未被吞，有回归断言） |
 
-#### 契约影响（扩展，已在卡内登记；**未**改 `docs/plan/contracts.md`）
+#### 契约影响（扩展，已在卡内登记；**未**改 `docs/contracts/PROCESS.md`）
 
 新增两个状态码属 CF-05 的**扩展**（状态码集合扩充，信封形态与路径不变）：
 `503 embedding_unavailable` / `503 embedding_unreachable` / `507 storage_error`。
-`docs/plan/contracts.md` **不在本卡文件所有权清单内**（清单写"清单外文件不得改"），
+`docs/contracts/PROCESS.md` **不在本卡文件所有权清单内**（清单写"清单外文件不得改"），
 按仓库 `AGENTS.md` §2 的"公共文件先在执行记录里提出"办理，建议编排者在 §3.8 追加：
 
 ```text
@@ -231,7 +231,7 @@ HTTP=200
 
 #### 未决问题
 
-1. **`docs/plan/contracts.md` 未改（见上）**：所有权清单未列该文件，故只在卡内登记 + 给出可粘贴的 R39 行；
+1. **`docs/contracts/PROCESS.md` 未改（见上）**：所有权清单未列该文件，故只在卡内登记 + 给出可粘贴的 R39 行；
    若编排者认为该文件属"流程回填"而非"清单外文件"，可在评审时直接采纳上面那段。
 2. **发现的 1 请裁定**：非空索引 + provider 故障 → 200（`degraded=true`）而不是 503。TASK-042 的懒同步
    若按"收到 503 才重试同步"实现，行为会与卡内 DoD 的直觉不一致；建议 TASK-042 改为"看 `meta.degraded`

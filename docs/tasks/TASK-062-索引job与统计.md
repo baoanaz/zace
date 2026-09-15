@@ -26,7 +26,7 @@ Web 上你想要的三个数字——**索引成功次数、失败次数、平�
 1. `docs/design/Module/06-服务化与部署.md` §2.4（索引 job 与可观测；job 表字段的原始设想）
 2. `service/zace_service/indexer.py`（现有 `IndexProgress` 与 `_finish` / `_fail` 两条结束路径）
 3. `service/zace_service/runtime.py`（`index_progress` 现状；`attach`/`rescan` 入口）
-4. `docs/handbook/M2a-验收手册.md` §2（为什么没有百分比；**本卡的统计口径不得与之矛盾**）
+4. `docs/handbook/getting-started/M2a-验收手册.md` §2（为什么没有百分比；**本卡的统计口径不得与之矛盾**）
 5. `core/zace_core/pipeline/indexer.py::IngestReport`（可落库的字段来源）
 
 ## 冻结接口（本卡不得变更）

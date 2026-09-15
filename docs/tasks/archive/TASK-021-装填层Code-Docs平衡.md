@@ -95,7 +95,7 @@ Q: Where does the retention maintenance loop live and what does it clean up?
 ## 参考
 
 - `docs/design/Module/03-上下文组装.md` §4.1（装填主流程与 spec 保底）、§4.3（Fast/Deep 差异）
-- `docs/plan/contracts.md` §3.5 R21（机制裁定）
+- `docs/contracts/PROCESS.md` §3.5 R21（机制裁定）
 - `benches/results/phase1-baseline.md` §4（失败 Top10 归因）
 
 ## 完成报告（回填）

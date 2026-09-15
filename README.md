@@ -89,7 +89,7 @@ V1 开发中。已完成：Phase 0 骨架 ｜ Phase 1 = core 最小闭环 ｜ M2
 两个工具，见 `npm/README.md`。
 
 设计与分工入口：`docs/design/INDEX.md`（设计）、`docs/tasks/README.md`（任务板）、
-`docs/plan/cloud-mcp-readiness.md`（云端接入的已知缺口，**含服务端鉴权未落地**这一硬前置）。
+`docs/evidence/task-051-cloud-mcp-readiness.md`（云端接入的已知缺口，**含服务端鉴权未落地**这一硬前置）。
 
 ## 许可
 

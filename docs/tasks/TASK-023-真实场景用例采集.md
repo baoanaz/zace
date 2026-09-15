@@ -83,7 +83,7 @@
 
 - `docs/design/Module/04-AI总结.md` §8（审计存档的既有设计，本卡在其上扩展）
 - `docs/design/Module/06-服务化与部署.md` §2.4（审计归属 service）
-- `docs/plan/contracts.md` §3.6 R29-R32（本卡的立项依据与纪律）
+- `docs/contracts/PROCESS.md` §3.6 R29-R32（本卡的立项依据与纪律）
 
 ## 完成报告（回填）
 

@@ -111,7 +111,7 @@ class ApiTransportSpec:
 | `core/zace_core/embedding/api.py` | 批参数三级回落、并发（`EMBED_CONCURRENCY`）、错误详情字段可配 |
 | `core/zace_core/embedding/factory.py` | 新增 `EMBED_CONCURRENCY` / `EMBED_PROVIDER` 配置解析与校验 |
 | `core/tests/embedding/**` | 新增测试（见 §5） |
-| `docs/handbook/embedding-provider切换.md` | **新建**：怎么换模型/厂商、各参数含义、免费额度用完后怎么办 |
+| `docs/handbook/operations/embedding-provider切换.md` | **新建**：怎么换模型/厂商、各参数含义、免费额度用完后怎么办 |
 | `.env.example` | 补新变量与 voyage 示例 |
 
 **不改**：`docs/contracts/**`、`core/zace_core/interfaces.py`（`EmbeddingProfile` 是 CF-09 冻结；
@@ -242,7 +242,7 @@ bge-m3         → transport=siliconflow  batch= 256 budget= 75000 conc=1
 
 ### 未完成（后续）
 
-- `docs/handbook/embedding-provider切换.md` 手册（含"额度用完怎么换"）；
+- `docs/handbook/operations/embedding-provider切换.md` 手册（含"额度用完怎么换"）；
 - `.env.example` 补新变量与 voyage 示例；
 - 并发失败语义的专项测试（当前只验证了正常路径）。
 

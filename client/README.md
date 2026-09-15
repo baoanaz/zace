@@ -67,7 +67,7 @@ uv run python -c "from zace_core.engine import repo_identity, project_id_for as 
 ## 已知边界（勿当 bug）
 
 1. **服务端鉴权尚未实现**（TASK-060/061）：`--token` 会发送，但服务端当前放行所有请求；
-   上云前必须完成鉴权（见 `docs/plan/cloud-mcp-readiness.md` A1）。
+   上云前必须完成鉴权（见 `docs/evidence/task-051-cloud-mcp-readiness.md` A1）。
 2. **D-29 身份未做协议形式归一化**：`git@host:path` 与 `https://host/path` 得到**两个** projectId
    （就绪度报告 A3，属 L3）。
 3. **`ignore` crate 豁免 git 已跟踪文件**，core 的 Python 实现不豁免（约 1.9% 差异，R42 要求前者语义）。

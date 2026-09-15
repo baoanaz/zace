@@ -84,7 +84,7 @@ zace 自身仓库必崩：`uv.lock` 是 1518 行的无解析器文件，正好�
 
 ## 参考
 
-- `docs/plan/contracts.md` §3.3 R11-R13（集成期裁定纪律）
+- `docs/contracts/PROCESS.md` §3.3 R11-R13（集成期裁定纪律）
 - TASK-013 执行记录 U1（发现者，含原始复现资料 `/tmp/zace-self-ingest`）
 
 ## 明确不做

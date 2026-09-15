@@ -4,7 +4,7 @@
 
 - ``docs/design/Module/05-MCP与同步.md`` §3.1（D-28 三层忽略；``>128KB`` / ``>10%`` 不可打印判
   二进制）；
-- ``docs/plan/contracts.md`` §3.9 **R42**（本地模式落 Python 实现；契约是"忽略语义"不是库）
+- ``docs/contracts/PROCESS.md`` §3.9 **R42**（本地模式落 Python 实现；契约是"忽略语义"不是库）
   与 **R43**（阈值下推 core，跳过必须如实进 ``skipped_files`` 并带原因）；
 - 边界说明见 ``docs/tasks/TASK-037-索引范围策略.md`` §A/§B。
 
@@ -207,7 +207,8 @@ DEFAULT_ALLOWLIST_FILENAMES: tuple[str, ...] = (
 #: ``skills`` 命中任意层级：``skills/`` / ``.claude/skills/`` / ``tools/mine/skills/`` 都算。
 #: 用户原话是"skills/ 文件夹里面的都上传吧？代替 SKILL.md"——因此**不限文件名**，
 #: ``SKILL.md`` 与同目录的参考文件、脚本、模板一起进来。
-#: 风险（已写进 ``docs/handbook/索引白名单.md``）：这是个通用目录名，可能与其他项目的同名目录撞车
+#: 风险（已写进 ``docs/handbook/operations/索引白名单.md``）：这是个通用目录名，
+#: 可能与其他项目的同名目录撞车
 #: （如依赖包的 ``node_modules/*/skills/``）；后者由内置目录剪枝拦住（不参与白名单）。
 DEFAULT_ALLOWLIST_DIRS: tuple[str, ...] = ("skills",)
 

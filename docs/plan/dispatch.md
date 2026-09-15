@@ -356,7 +356,7 @@ core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问�
 
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的“泳道模式”一节、docs/tasks/README.md、
-   以及 docs/plan/contracts.md §3.2（R1-R10 实现口径——本波两张卡都直接受影响）。
+   以及 docs/contracts/PROCESS.md §3.2（R1-R10 实现口径——本波两张卡都直接受影响）。
 2. 按顺序完成 2 张任务卡（做完一张立刻做下一张）：
    docs/tasks/TASK-006-Chunk模型与解析.md
    docs/tasks/TASK-007-索引流水线.md
@@ -398,7 +398,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的“泳道模式”一节、docs/tasks/README.md、
-   以及 docs/plan/contracts.md §3.2（R1-R10 实现口径，尤其 R2 的 embed_query）。
+   以及 docs/contracts/PROCESS.md §3.2（R1-R10 实现口径，尤其 R2 的 embed_query）。
 2. 按顺序完成 3 张任务卡（做完一张立刻做下一张）：
    docs/tasks/TASK-010-检索通道与RRF.md
    docs/tasks/TASK-011-图扩展与Rerank.md
@@ -439,7 +439,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
    docs/tasks/TASK-016-BM25多词召回修复.md（含完整背景、修复要求 A/B/C/D 与验收标准）、
-   docs/plan/contracts.md §3.3（R11-R13 裁定）。
+   docs/contracts/PROCESS.md §3.3（R11-R13 裁定）。
 2. 完成 TASK-016 一张卡。特别注意：
    - 卡内已给出 codegraph 的参考实现位置（source/codegraph/src/db/queries.ts:1505-1513，只读），
      修复方向（OR 连接 + 列权重）已定，不要自行发明其他方案；若你判断方案有问题，先停下写进"未决问题"。
@@ -483,7 +483,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
    docs/tasks/TASK-017-证据块行序修复.md（含根因分析、修复要求、DoD）、
-   docs/plan/contracts.md §3.3（R12）。
+   docs/contracts/PROCESS.md §3.3（R12）。
 2. 完成 TASK-017 一张卡。要点：
    - 只改 合并区间的存储与渲染顺序 与 elidedLines 语义；阈值/配额/保底/E 编号顺序等行为保持不变。
    - 卡内"DoD"第一条是修一处 flaky 性能断言（test_assembly.py 的 elapsed_ms < 50），
@@ -516,7 +516,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
-   docs/tasks/TASK-013-CLI与Eval.md、benches/README.md、docs/plan/contracts.md §3.2/§3.3。
+   docs/tasks/TASK-013-CLI与Eval.md、benches/README.md、docs/contracts/PROCESS.md §3.2/§3.3。
 2. 完成 TASK-013 一张卡（**本波只做这一张**，不要提前做 014/015——它们必须等 BM25/行序修复合并后才跑，
    否则黄金集指标会系统性失真）。
 3. 已知事项（避免踩坑）：
@@ -554,7 +554,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
    docs/tasks/TASK-018-兜底行号与ID唯一性修复.md（含完整根因分析、修复要求 A/B/C、DoD）、
-   docs/plan/contracts.md §3.4（R14）。
+   docs/contracts/PROCESS.md §3.4（R14）。
 2. 完成 TASK-018 一张卡。要点：
    - §A 根因：parsing/fallback.py 的 _split 在分隔符分支递归时丢失基准偏移（顶层 offset=0 掩盖了它）。
      卡内给了最小复现，先跑一遍确认，再修。
@@ -597,7 +597,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【开工】
 1. 读：AGENTS.md、docs/plan/orchestration.md 的"泳道模式"一节、docs/tasks/README.md、
    docs/tasks/TASK-019-spec保底重复装填修复.md（含根因代码定位、修复要求、DoD）、
-   docs/plan/contracts.md §3.4（R15）。
+   docs/contracts/PROCESS.md §3.4（R15）。
 2. 完成 TASK-019 一张卡。要点：
    - 根因：assembly.py 里 `reserved not in slots` 用 _Slot 对象身份比较（无 __eq__）恒为 True；
      贪心循环会先装填同一候选，随后保底分支又装一次。
@@ -642,7 +642,7 @@ W1 的存储（TASK-001）、向量（TASK-009）、embedding（TASK-008）已�
 【必读（每张卡开工前）】
   docs/tasks/README.md
   docs/plan/orchestration.md 的"泳道模式"一节
-  docs/plan/contracts.md §3.8（R33-R37：本波四张卡的直接口径）
+  docs/contracts/PROCESS.md §3.8（R33-R37：本波四张卡的直接口径）
   docs/contracts/openapi.yaml（CF-05 是冻结合同：路径与错误信封不得改）
   各卡的"输入文档"节（只读所需章节）
 
@@ -701,7 +701,7 @@ core/zace_core/{types,interfaces,hashing}.py；遇到契约/设计冲突先停�
 【必读】
   docs/tasks/README.md、docs/plan/orchestration.md 的"泳道模式"一节、
   docs/contracts/mcp-tools.json（CF-06：工具 schema 是冻结合同）、
-  docs/plan/contracts.md §3.8（R33-R38；**R38 是本波 MCP 形态的裁定依据**，务必读）、
+  docs/contracts/PROCESS.md §3.8（R33-R38；**R38 是本波 MCP 形态的裁定依据**，务必读）、
   各卡"输入文档"节。
 
 【本波特别提醒（每一条都是踩过的坑或硬纪律）】
@@ -1045,7 +1045,7 @@ core/zace_core/{types,interfaces,hashing}.py；冲突先停下写进"未决问�
 4. §D 冒烟脚本**必须真的跑过**：脚本里要把本环境的两个坑固定下来——
    (a) key 注入（`.bashrc` 非交互 shell 拿不到）；(b) `NO_PROXY=127.0.0.1,localhost`（本机有 http_proxy）。
    断言必须是“返回里有 `文件:行号`”，不能只看 exit code。
-5. §D/§E 只**复用** `docs/handbook/M2a-验收手册.md` §4.2 的最小 MCP 客户端思路，**不要重写**那份手册的 0-9 节（只追加 §10）。
+5. §D/§E 只**复用** `docs/handbook/getting-started/M2a-验收手册.md` §4.2 的最小 MCP 客户端思路，**不要重写**那份手册的 0-9 节（只追加 §10）。
 6. 不要碰 `core/**`（泳道 A 在改 `pipeline/**`、泳道 B 在改 `embedding/**`）。
 
 【工艺】

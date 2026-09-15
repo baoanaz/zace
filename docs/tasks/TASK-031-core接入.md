@@ -18,7 +18,7 @@
 
 ## 输入文档（按序读，只读所需章节）
 
-1. `docs/plan/contracts.md` §3.8（**R33/R35/R36 直接约束本卡**）
+1. `docs/contracts/PROCESS.md` §3.8（**R33/R35/R36 直接约束本卡**）
 2. `core/zace_core/interfaces.py`（CF-07；`ingest` 的 `source` 参数已由编排者冻结，见 R36）
 3. `docs/design/Module/06-服务化与部署.md` §1（core 纯库边界）、§2.3（租户双层：本卡只做物理层的 project 目录）
 4. `core/zace_core/engine.py`（`Engine` 的全部公开方法）、`core/zace_core/pipeline/source.py`（`SourceProvider` 协议）

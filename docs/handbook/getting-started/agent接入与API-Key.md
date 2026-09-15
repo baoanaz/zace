@@ -2,7 +2,7 @@
 
 > 状态：2026-09-14 编排者实测（本机 WSL2，逐条命令真实跑过）。
 > 结论：**用户期望的接入形态已经可用**，无需改代码。
-> 配套：`docs/handbook/云端embedding接入.md`（embedding 配置）、`docs/handbook/M2a-验收手册.md`（本地模式 demo）。
+> 配套：`docs/handbook/getting-started/cloud-embedding.md`（embedding 配置）、`docs/handbook/getting-started/M2a-验收手册.md`（本地模式 demo）。
 
 ## 0. 一句话
 

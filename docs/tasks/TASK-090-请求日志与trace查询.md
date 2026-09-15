@@ -247,6 +247,6 @@ prune 后: ['request.log']                     | 计数 = 1
 
 - [x] 本执行记录
 - [x] `docs/tasks/README.md` 中 TASK-090 行 → `review`
-- [x] 新增手册 `docs/handbook/请求日志与trace-id报错手册.md`（未改动既有四份手册）
+- [x] 新增手册 `docs/handbook/operations/请求日志与trace-id报错手册.md`（未改动既有四份手册）
 - [x] 本地提交（`task-090: ...`），**未 push**
 

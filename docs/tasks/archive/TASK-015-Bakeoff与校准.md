@@ -23,7 +23,7 @@
 2. `docs/design/INDEX.md` 的 D-44（embedding 双实现）、D-45（jieba 预分词）
 3. `benches/README.md`、`benches/results/phase1-baseline.md`（TASK-014 基线）
 4. `core/zace_core/embedding/`（`registry.py` / `local.py` / `api.py`：现有实现与模型注册表）
-5. `docs/plan/contracts.md` §3.6（R29/R30：**为什么不能在本卡调参**）
+5. `docs/contracts/PROCESS.md` §3.6（R29/R30：**为什么不能在本卡调参**）
 
 ## 交付内容
 

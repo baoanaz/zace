@@ -39,7 +39,7 @@ systemservice：含 76 MB 单文件；cameraservice：含 lib/libcv.a（308 MB�
 
 1. `docs/design/Module/05-MCP与同步.md` §3.1（**三层优先级 + 通用过滤的确切参数：128KB / 10% 不可打印**）
 2. `docs/design/Module/01-切片存储.md` §6（"一 project 一 repo"与忽略相关的开放问题）
-3. `docs/plan/contracts.md` §3.9（**R42/R43 是本卡的直接依据**）
+3. `docs/contracts/PROCESS.md` §3.9（**R42/R43 是本卡的直接依据**）
 4. `docs/tasks/TASK-036-多仓库规模自举与健壮性.md` 的报告（前后对照的基线数字）
 
 ## 冻结接口（本卡不得变更）

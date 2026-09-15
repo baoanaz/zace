@@ -63,7 +63,7 @@ pending ──认领──► in_progress ──自测通过+回填──► rev
 
 ## 4. 契约变更协议（重要）
 
-契约文件清单见 `docs/plan/contracts.md`。任何变更分三级：
+契约文件清单见 `docs/contracts/PROCESS.md`。任何变更分三级：
 
 | 级别 | 场景 | 流程 |
 |---|---|---|

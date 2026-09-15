@@ -1,7 +1,7 @@
 """zace-service 配置（TASK-030 §交付物）。
 
 设计依据：``docs/design/Module/06-服务化与部署.md`` §2.4（可观测：secret 全部环境变量注入）、
-``docs/plan/contracts.md`` §3.8 R34（专用 ``local`` 命令：无鉴权、绑 127.0.0.1）。
+``docs/contracts/PROCESS.md`` §3.8 R34（专用 ``local`` 命令：无鉴权、绑 127.0.0.1）。
 
 口径（本卡冻结，后续卡只读不改）：
 

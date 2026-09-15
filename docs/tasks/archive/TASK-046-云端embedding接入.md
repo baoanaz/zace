@@ -7,7 +7,7 @@
 > - `core/zace_core/embedding/factory.py`（**仅** API 分支的 spec 解析与上限默认值）
 > - `core/zace_core/embedding/api.py`（**仅** 若别名替换必须在发送前发生）
 > - `core/tests/embedding/**`（新增/调整测试）
-> - `docs/handbook/云端embedding接入.md`（**新建**：用户照做能跑通的完整命令序列）
+> - `docs/handbook/getting-started/cloud-embedding.md`（**新建**：用户照做能跑通的完整命令序列）
 >
 > 清单外文件不得改。**尤其不得改** `docs/contracts/**`、`core/zace_core/interfaces.py`（`EmbeddingProfile`
 > 字段与 `EmbeddingProvider` 签名是 CF-09 冻结）、`core/zace_core/embedding/local.py`（本地钳制属 TASK-038）。
@@ -136,7 +136,7 @@ $ bash -c  'echo "${zace_embeding_API_KEY:-NO}"'   # → NO（子进程/脚本/C
 $ bash -lc 'echo "${zace_embeding_API_KEY:-NO}"'   # → NO（登录 shell 也拿不到）
 ```
 
-**交付**：`docs/handbook/云端embedding接入.md`，必须包含：
+**交付**：`docs/handbook/getting-started/cloud-embedding.md`，必须包含：
 
 1. **一条从零到跑通的完整命令序列**（含 `NO_PROXY=127.0.0.1,localhost`；本机设了 `http_proxy`）；
 2. **key 注入的推荐做法**（择一写清，并说明为何不依赖 `.bashrc`）：
@@ -448,7 +448,7 @@ elapsed: 347.8s
 **不推荐 `.bashrc`**：非交互进程拿不到（实测 `env -i bash -c ...` 与 `env -i bash -lc ...` 均为空），
 且把 key 与项目的绑定关系藏在 shell 配置里，换机器即失效。
 
-手册：`docs/handbook/云端embedding接入.md`（§2 完整命令序列、§3 实测数字区分来源、§4 行为说明、§5 隐私告知、§6 排查表）。
+手册：`docs/handbook/getting-started/cloud-embedding.md`（§2 完整命令序列、§3 实测数字区分来源、§4 行为说明、§5 隐私告知、§6 排查表）。
 
 #### 10. 验收命令与结果
 

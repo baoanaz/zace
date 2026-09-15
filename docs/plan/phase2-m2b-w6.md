@@ -138,7 +138,7 @@ U1 之下 38 降级（不派人），但 46 的修法应**顺带覆盖 38 的 `m
 3. `benches/results/phase2-helloagents-baseline.md`：新靶场基线（reproducible，标注 commit）；
 4. 旧靶场文件**保留**，在 `benches/README.md` 标注"靶场不可得，暂停"；
 5. `scripts/m2a-smoke.sh`：一键冒烟（起服务 → 等索引 → MCP 调用 → 断言命中），把 F3（key 注入）写进脚本。
-6. 复用 `docs/handbook/M2a-验收手册.md` 的 §4.2 最小 MCP 客户端；**不重写**手册，只加脚本。
+6. 复用 `docs/handbook/getting-started/M2a-验收手册.md` 的 §4.2 最小 MCP 客户端；**不重写**手册，只加脚本。
 
 **hello-agents 靶场特性**（实测）：227 md + 749 py（排除 venv 后 976 个有效文件）；文档与代码**一一对应**
 （`docs/chapterN/` ↔ `code/chapterN/`）→ **天然适合验证 spec 检索与 code/docs 平衡**（R21 的靶场）；
@@ -201,7 +201,7 @@ uv run ruff check . && uv run python scripts/check_dependency_direction.py && uv
 ```
 
 集成通过后更新：`docs/tasks/README.md`（状态与波次表）、
-`docs/plan/contracts.md` §3.10（**已登记 R47–R50**：云端主路径 / TASK-038 降级 / TASK-037 靶场替换 / 评测靶场变更）、
+`docs/contracts/PROCESS.md` §3.10（**已登记 R47–R50**：云端主路径 / TASK-038 降级 / TASK-037 靶场替换 / 评测靶场变更）、
 本文件的“实际结果”节（实施后追加）。
 
 ### 编号说明（避免悬空引用）

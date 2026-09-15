@@ -27,7 +27,7 @@
 2. `docs/design/INDEX.md` §3 的 **D-40**（V1 = 管理面 + Playground；**复用服务端渲染，不自研渲染层**）
 3. `docs/contracts/openapi.yaml`（CF-05：本卡只消费 `/api/projects*`、`/api/query/*`、`/healthz`）
 4. `service/zace_service/packmeta.py`（`meta` 字段集；Playground 的元数据面板据此渲染）
-5. `docs/handbook/M2a-验收手册.md` §2（`indexProgress` 六字段口径与"为什么没有百分比"）、§4.1（返回形态与判读）
+5. `docs/handbook/getting-started/M2a-验收手册.md` §2（`indexProgress` 六字段口径与"为什么没有百分比"）、§4.1（返回形态与判读）
 
 ## 冻结接口（本卡不得变更）
 
@@ -87,7 +87,7 @@
 - **调试友好**：可折叠的"原始响应 JSON"（本卡不引 Monaco，用 `<pre>` 即可）；
   一键复制 Markdown；查询历史（内存 + `sessionStorage`，仅本机）
 - 未索引/索引中/空索引的错误（409 `index_in_progress`、500 `index_failed`、503 `embedding_unavailable`）
-  → 走统一错误组件，保留 `code`，并给出下一步指引（引用 `docs/handbook/M2a-验收手册.md` §6）
+  → 走统一错误组件，保留 `code`，并给出下一步指引（引用 `docs/handbook/getting-started/M2a-验收手册.md` §6）
 
 ## §E 页面：接入指南（`/connect`）——本卡的第二优先页面
 

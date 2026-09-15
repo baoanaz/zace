@@ -199,7 +199,7 @@ _AGENT_INSTRUCTION_NAMES = frozenset({
 
 | 契约 | 影响 | 需要的动作 |
 |---|---|---|
-| **R42**（忽略规则三层） | 新增第 0 层白名单 → 从"三层"变"四层" | 需编排者更新 `docs/plan/contracts.md` 的 R42 |
+| **R42**（忽略规则三层） | 新增第 0 层白名单 → 从"三层"变"四层" | 需编排者更新 `docs/contracts/PROCESS.md` 的 R42 |
 | **Module/05 §3.1**（忽略规则设计） | 同上 | 需编排者更新设计文档 |
 | CF-03（`doctype` 枚举） | 若只扩名表**不影响**；若新增 doctype 取值**会影响** | 取决于你 §C 的实现选择 |
 
@@ -266,7 +266,7 @@ _AGENT_INSTRUCTION_NAMES = frozenset({
 - **关键产物**：`core/zace_core/pipeline/{ignore,source}.py`、`core/zace_core/parsing/markdown.py`、
   `core/zace_core/pipeline/__init__.py`、`client/src/{ignore,index}.rs`、
   `core/tests/pipeline/test_allowlist.py`、`client/tests/allowlist_parity.rs`、
-  `docs/handbook/索引白名单.md`
+  `docs/handbook/operations/索引白名单.md`
 
 > **环境注意**：`.env` 里的 `EMBED_MODE=api` 会让 `core/tests/embedding/test_factory.py::test_default_is_local_onnx_provider`
 > 失败（该测试断言默认是本地 provider，被环境变量覆盖）。这是既有环境敏感测试，与本卡无关；
@@ -397,7 +397,7 @@ _AGENT_INSTRUCTION_NAMES = frozenset(
 
 | 契约 | 现状 | 拟更新为 |
 |---|---|---|
-| **R42**（`docs/plan/contracts.md` §3.9） | "本地模式落 Python 实现：`{repo}/.zaceignore` > `.gitignore`（含否定规则）> 内置默认"——**三层** | **四层**：新增**第 0 层"索引白名单"（强制包含）**，来源 `.zaceinclude` ∪ 内置默认 ∪ `ZACE_INDEX_ALLOWLIST`；语义：命中即越过第 1/2 层；**不得突破**内置目录剪枝；下钻须"名字定向 + 有深度上限"；语法不支持通配 |
+| **R42**（`docs/contracts/PROCESS.md` §3.9） | "本地模式落 Python 实现：`{repo}/.zaceignore` > `.gitignore`（含否定规则）> 内置默认"——**三层** | **四层**：新增**第 0 层"索引白名单"（强制包含）**，来源 `.zaceinclude` ∪ 内置默认 ∪ `ZACE_INDEX_ALLOWLIST`；语义：命中即越过第 1/2 层；**不得突破**内置目录剪枝；下钻须"名字定向 + 有深度上限"；语法不支持通配 |
 | **Module/05 §3.1**（忽略规则设计） | 三层忽略规则 | 同上四层 + 白名单语义（含"白名单不突破内置剪枝"与"下钻有界"两条硬约束） |
 | CF-03（`doctype` 枚举） | `agent-instructions` 等 7 值 | **不受影响**（只扩 `_AGENT_INSTRUCTION_NAMES` 名表，未新增取值） |
 
@@ -414,7 +414,7 @@ _AGENT_INSTRUCTION_NAMES = frozenset(
   "未命中白名单"的路径**逐字不变**（有回归测试 `test_no_allowlist_matches_task_037_behaviour`
   与 `test_non_allowlisted_paths_behave_unchanged` 守护）。TASK-037 的代码注释/docstring 需要
   由编排者（或后续卡）同步为四层表述——**本卡已就地更新 `ignore.py`/`source.py`/`client/src/ignore.rs`
-  的模块 docstring 与优先级表**，但 `docs/design/Module/05` 与 `docs/plan/contracts.md` 的正式
+  的模块 docstring 与优先级表**，但 `docs/design/Module/05` 与 `docs/contracts/PROCESS.md` 的正式
   表述**未改**（越界）。
 - **TASK-040R**（client 骨架与同步代理，已合并）：`client/src/index.rs::scan()` 的迭代源从
   `rules.walker()` 改为 `rules.walk_union()`（+ 去重）；缓存指纹新增 `.zaceinclude` 内容。
@@ -493,6 +493,6 @@ skills files indexed: 109
 2. `client/src/ignore.rs::walk_union` + `index.rs::scan` 的去重是否与 core 清单一致
    （已用真实仓库对照，37/37 完全相同）；
 3. `Allowlist` 的语法收窄（无通配、`!` 取消、含点/不含点启发式）是否与手册
-   `docs/handbook/索引白名单.md` §4 描述一致；
+   `docs/handbook/operations/索引白名单.md` §4 描述一致；
 4. 缓存指纹新增 `.zaceinclude` 是否会让 TASK-040R 的既有客户端出现一次非预期重扫（预期行为，
    但值得在发布说明里提一句）。

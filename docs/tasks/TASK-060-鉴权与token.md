@@ -14,7 +14,7 @@
 ## 目标
 
 让 `ZACE_LOCAL_MODE=false`（云端形态）真正要求凭据。当前状态是**阻断级安全缺口**：
-TASK-051 实测（`docs/plan/cloud-mcp-readiness.md` §1 A1）非本地模式下**不带凭据、甚至带无效
+TASK-051 实测（`docs/evidence/task-051-cloud-mcp-readiness.md` §1 A1）非本地模式下**不带凭据、甚至带无效
 Bearer token 都能成功检索**，而 `/healthz` 却自报 `auth: enabled`。
 
 本卡交付：
@@ -30,11 +30,11 @@ TASK-040R（Rust client 的 token 注入）。
 ## 输入文档（按序读，只读所需章节）
 
 1. `docs/design/Module/06-服务化与部署.md` §2.2（鉴权：token/session/密码算法/401 不区分细节）、§2.4
-2. `docs/plan/cloud-mcp-readiness.md` §1（A1 的实测证据与处置建议：本卡是它的修复）
+2. `docs/evidence/task-051-cloud-mcp-readiness.md` §1（A1 的实测证据与处置建议：本卡是它的修复）
 3. `docs/contracts/openapi.yaml`（CF-05 的 `/api/auth/*` 段：路径与响应形状已冻结）
 4. `service/zace_service/routers/auth.py`（现有 501 占位与"不声明请求体"的纪律）
 5. `service/zace_service/deps.py`（现有依赖注入形态；本卡在此增加"当前用户"依赖）
-6. `docs/plan/contracts.md` §3.8（R34：本地模式免鉴权——**本卡不得破坏它**）
+6. `docs/contracts/PROCESS.md` §3.8（R34：本地模式免鉴权——**本卡不得破坏它**）
 
 ## 冻结接口（本卡不得变更）
 
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
       `bootstrap` → `login` → 带 cookie `search` 得 200 → 创建 token → 用 Bearer `search` 得 200 →
       revoke 后同一 token 得 401。
 - [ ] 基线三条命令全绿：`uv run ruff check .`、`uv run python scripts/check_dependency_direction.py`、`uv run pytest`
-- [ ] `docs/plan/cloud-mcp-readiness.md` §1 A1 的处置建议在报告中逐条勾选（哪些本卡已消除、哪些留给 TASK-061）
+- [ ] `docs/evidence/task-051-cloud-mcp-readiness.md` §1 A1 的处置建议在报告中逐条勾选（哪些本卡已消除、哪些留给 TASK-061）
 - [ ] 任务卡"执行记录"已回填；任务板 `docs/tasks/README.md` 对应行状态改 `review`
 
 ## 参考源码锚点（只读；`../source/` 在本机不存在）

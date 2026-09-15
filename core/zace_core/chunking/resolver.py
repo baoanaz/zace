@@ -2,7 +2,7 @@
 
 设计依据：``docs/design/Module/01-切片存储.md`` §2.2 / §4.1（全局二遍解析）、
 ``docs/design/Background/02-codegraph.md`` §4（pending → resolved(删) / failed(保留重试)）；
-实现期口径：``docs/plan/contracts.md`` §3.2 R5（边按 source 归属、spec 引用重挂）、
+实现期口径：``docs/contracts/PROCESS.md`` §3.2 R5（边按 source 归属、spec 引用重挂）、
 R8（imports 边 target_name 形态与相对导入语义由本卡处理）。
 
 算法口径（评审关键）：

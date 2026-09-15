@@ -88,7 +88,7 @@ answerable = explicit_hits >= 1 or consensus >= 2 or structural_result
 
 - `docs/design/Module/03-上下文组装.md` §4.4（answerable/confidence 规则）、§5（MissingEvidence 合同）
 - `docs/design/Module/04-AI总结.md` §3（answerable=false 短路）
-- `docs/plan/contracts.md` §3.5 R22（负例弱点裁定）、R17（dogfood 负例口径）
+- `docs/contracts/PROCESS.md` §3.5 R22（负例弱点裁定）、R17（dogfood 负例口径）
 
 ## 完成报告（回填）
 
