@@ -302,7 +302,8 @@ uv run python benches/embed-bench/local_only_probe.py --repo /root/xuwenzheng/AC
 
 1. **无 golden 用例**：三个靶场只测了索引耗时，未测检索质量；要回归质量需按
    `benches/README.md` 的 JSONL 格式出题（`expected[].path` 用仓库相对路径）；
-2. **未进 `targets.json`**：该文件的 schema 要求 `golden` 字段，三靶场暂无用例集，故登记在本文件；
+2. **已进 `targets.json`**：题库补齐后，三个持久索引登记为 `leveldb-v1`、`helloagents-v1`、
+   `langchain-v1`；统一入口直接复用本数据根，不再 ingest；
 3. **本地/网络流水线（本轮最大的单点优化机会）**：先纠一个常见误读——**这台机器的现行上限不是 141s**：
    141.9s 是探针口径（含 21.7s 计量开销），**不动 core 的前提下的现行数字是 115.9s**，
    而本地零网络地板是 84.6s（§3.1）⇒ 所以还能动的只有"让本地和网络重叠"。

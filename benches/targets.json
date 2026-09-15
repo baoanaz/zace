@@ -47,6 +47,42 @@
         "how": "internal-bundle",
         "hint": "内部靶场，**不在默认流程**：索引含公司内部源码，只能经内网获得（scripts/bench-bundle.sh pack/unpack）；公开服务器一律不参与"
       }
+    },
+    "leveldb-v1": {
+      "role": "primary",
+      "golden": "benches/golden/leveldb",
+      "repo_hint": "leveldb",
+      "commit": "7ee830d02b623e8ffe0b95d59a74db1e58da04c5",
+      "project_id": "3ed886ce58bc0e47",
+      "embedding": {"model": "api:voyage-4-lite", "dim": 1024},
+      "index": {
+        "how": "vps-persistent",
+        "hint": "VPS 持久索引：--data /root/.zace/bench/voyage-4-lite-d1024；直接 eval，不要 ingest"
+      }
+    },
+    "helloagents-v1": {
+      "role": "primary",
+      "golden": "benches/golden/HelloAgents",
+      "repo_hint": "HelloAgents",
+      "commit": "93e77ea60c13436636c9b39b6761ff8dfe940ba2",
+      "project_id": "06078cc80c7ce7d7",
+      "embedding": {"model": "api:voyage-4-lite", "dim": 1024},
+      "index": {
+        "how": "vps-persistent",
+        "hint": "VPS 持久索引：--data /root/.zace/bench/voyage-4-lite-d1024；直接 eval，不要 ingest"
+      }
+    },
+    "langchain-v1": {
+      "role": "primary",
+      "golden": "benches/golden/langchain",
+      "repo_hint": "langchain",
+      "commit": "41d357287c0470f70e45e232c711013258c0ac1a",
+      "project_id": "ca2050db0db5b1e2",
+      "embedding": {"model": "api:voyage-4-lite", "dim": 1024},
+      "index": {
+        "how": "vps-persistent",
+        "hint": "VPS 持久索引：--data /root/.zace/bench/voyage-4-lite-d1024；直接 eval，不要 ingest"
+      }
     }
   }
 }

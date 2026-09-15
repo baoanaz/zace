@@ -1,0 +1,428 @@
+{
+  "schema": 1,
+  "golden": "benches/golden/HelloAgents/HelloAgents.jsonl",
+  "project_id": "06078cc80c7ce7d7",
+  "data_root": "/root/.zace/bench/voyage-4-lite-d1024",
+  "counts": {
+    "total": 20,
+    "search": 14,
+    "ask": 6
+  },
+  "search": {
+    "cases": 14,
+    "recall_at_5": 0.8462,
+    "recall_at_10": 0.9231,
+    "mrr": 0.7418,
+    "negatives_passed": 0,
+    "negatives_total": 1,
+    "degraded": 0,
+    "per_case": [
+      {
+        "id": "H-01",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/tools/response.py:19-51 (ToolResponse)",
+          "docs/tool-response-protocol.md:91-146 (工具响应协议（ToolResponse Protocol） > 💡 核心概念)",
+          "docs/tool-response-protocol.md:41-59 (工具响应协议（ToolResponse Protocol） > 🚀 快速开始 > 1. 创建成功响应)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-02",
+        "category": "symbol",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/tools/base.py:50-66 (Tool)",
+          "examples/custom_tools/simple_tool_template.py:1-33 (SimpleToolTemplate)",
+          "docs/custom_tools_guide.md:134-190 (HelloAgents 自定义工具开发指南 > 🎯 三种实现方式 > 方式 2：标准工具类（推荐）)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-03",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/tools/registry.py:30-55 (ToolRegistry.register_tool)",
+          "hello_agents/agents/simple_agent.py:296-313 (SimpleAgent.add_tool)",
+          "skills/podcast-generate/SKILL.md:21-27 (Podcast Generate Skill（TypeScript 版本） > 能力说明 > 本 Skill 可以做什么)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-04",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/tools/registry.py:132-220 (ToolRegistry.execute_tool)",
+          "skills/LLM/SKILL.md:442-527 (LLM (Large Language Model) Skill > Advanced Use Cases > Code Generation and Debugging)",
+          "tests/test_tool_response_protocol.py:235-248 (TestFunctionToolException.test_function_raises_exception)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-07",
+        "category": "behavior",
+        "rank": 7,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "docs/todowrite-usage-guide.md:70-147 (TodoWrite 进度管理工具使用指南 > 核心特性 > 2. 单线程强制)",
+          "docs/todowrite-usage-guide.md:329-342 (TodoWrite 进度管理工具使用指南 > 最佳实践 > 3. 状态转换)",
+          "examples/todowrite_demo.py:95-124 (demo_2_constraint_validation)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-08",
+        "category": "path",
+        "rank": 4,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "docs/devlog-guide.md:456-500 (开发日志系统指南（DevLog System） > ❓ 常见问题)",
+          "docs/devlog-guide.md:7-16 (开发日志系统指南（DevLog System） > 📖 概述 > 核心特性)",
+          "docs/logging-system-guide.md:189-212 (日志系统指南（Logging System） > 📝 使用指南 > 3. DevLogTool 详细说明)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-09",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/skills/loader.py:50-85 (SkillLoader)",
+          "docs/skills-usage-guide.md:380-388 (Skills 知识外化系统使用指南 > 🔧 高级功能 > 3. 热重载)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-11",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/core/session_store.py:1-48 (SessionStore)",
+          "docs/session-persistence-guide.md:488-491 (会话持久化使用指南 > 📚 API 参考 > SessionStore 方法 > `save(...) -> str`)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-13",
+        "category": "symbol",
+        "rank": 4,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "docs/context-engineering-guide.md:416-454 (上下文工程指南（Context Engineering） > 🔧 高级用法 > 3. 序列化历史)",
+          "docs/context-engineering-guide.md:3-22 (上下文工程指南（Context Engineering） > 📖 概述)",
+          "docs/context-engineering-guide.md:116-149 (上下文工程指南（Context Engineering） > 💡 核心组件 > 1. HistoryManager - 历史管理器)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-14",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/context/token_counter.py:15-47 (TokenCounter)",
+          "docs/context-engineering-guide.md:150-203 (上下文工程指南（Context Engineering） > 💡 核心组件 > 2. TokenCounter - Token 计数器（新增）)",
+          "examples/context_engineering_demo.py:27-58 (demo_token_counter)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-16",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/observability/trace_logger.py:16-31 (TraceLogger)",
+          "docs/observability-guide.md:1-16 (可观测性指南（Observability） > 📖 概述)",
+          "docs/observability-guide.md:298-330 (可观测性指南（Observability） > ❓ 常见问题)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-17",
+        "category": "behavior",
+        "rank": 1,
+        "hit": true,
+        "passed": true,
+        "answerable": true,
+        "top3": [
+          "hello_agents/core/streaming.py:41-62 (StreamEvent.to_sse)",
+          "hello_agents/core/streaming.py:108-127 (stream_to_sse)",
+          "docs/streaming-sse-guide.md:115-136 (流式输出与 SSE 指南（Streaming & SSE） > 💡 核心概念 > StreamEvent 数据结构)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-19",
+        "category": "behavior",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "examples/file_tools_demo.py:70-124 (demo_optimistic_locking)",
+          "tests/test_file_tools.py:133-158 (TestWriteTool.test_write_conflict_detection)",
+          "tests/test_file_tools.py:358-391 (TestOptimisticLocking.test_external_modification_detection)"
+        ],
+        "error": null
+      },
+      {
+        "id": "H-20",
+        "category": "negative",
+        "rank": null,
+        "hit": false,
+        "passed": false,
+        "answerable": true,
+        "top3": [
+          "README.md:100-141 (HelloAgents > 🏗️ 项目结构)",
+          ".env.example:1-91 ((module))",
+          "docs/custom_tools_guide.md:296-298 (HelloAgents 自定义工具开发指南 > 🎓 实战示例 > 3. code_formatter_tool.py - 代码格式化工具)"
+        ],
+        "error": null
+      }
+    ]
+  },
+  "ask": {
+    "cases": 6,
+    "answered": 6,
+    "short_circuited": 0,
+    "answer_hits": 1,
+    "pack_hits": 5,
+    "pack_complete": 3,
+    "answers_citing_expected": 5,
+    "latency_p50_ms": 7110.0,
+    "latency_p95_ms": 14577.9,
+    "per_case": [
+      {
+        "id": "H-05",
+        "category": "behavior",
+        "question": "一个工具的输出被截断了，按 ToolResponse 协议应该怎么表达？为什么不能直接返回 SUCCESS？",
+        "expected": [
+          "hello_agents/tools/response.py",
+          "hello_agents/context/truncator.py"
+        ],
+        "expected_mode": "all",
+        "pack_rank": 2,
+        "pack_expected_ranks": [
+          2,
+          null
+        ],
+        "pack_expected_hits": 1,
+        "pack_expected_total": 2,
+        "pack_expected_coverage": 0.5,
+        "pack_complete": false,
+        "pack_answerable": true,
+        "evidence_count": 10,
+        "status": "answered",
+        "answer_hit": false,
+        "answer_path_mentioned": false,
+        "answer_cites_expected": true,
+        "cited_expected_ids": [
+          "E2",
+          "E4"
+        ],
+        "latency_ms": 6676.6,
+        "answer_tokens": 727,
+        "valid_citations": 18,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n按 ToolResponse 协议，被截断的输出**不应**返回 SUCCESS，而应落在三态中的\"部分成功\"（partial）档位：`status=partial`，用 `text` 说明已获得的内容并标注截断，`data` 携带已解析出的结构化载荷 [E2][E1]。\n\n**为什么不能直接返回 SUCCESS**：协议存在的理由就是解决字符串返回\"状态不明确\"的问题——文档明确列出它要区分的是「成功 / 失败 / 部分成功」三种情形，而不是成功/失败二元 [E1]。`ToolResponse.status` 的注释同样写明取值范围是 `success/partial/error` [E2]。截断意味着数据不完整，若标记为 SUCCESS，文本层与状态层会向调用方（LLM）传递\"结果完整可用\"的错误信号，与该字段的语义直接冲突 [E2][E1]。\n\n## Key Evidence\n\n- `ToolResponse` 数据结构：`status` 注释为「执行状态（success/partial/error）」，另有 `text`、`data`、`error_info`、`stats`、`context` 字段 [E2]。\n- 文档说明协议要解决的问题：字符串返回「无法区分成功/失败/部分成功」[E1]。\n- 现有实现仅给出 `ToolResponse.success(...)` 便捷构造器，内部固定 `status=ToolStatus.SUCCESS` [E4]；测试也围绕该路径断言 `status == ToolStatus.SUCCESS`、`error_info is None` [E6]，另有断言 `status.value == \"success\"` 的用例 [E8]。\n\n## Spec vs Implementation\n\n- 设计侧（Doc）：明确承认三态 `success/partial/error`，即存在\"部分成功\"这一合法表达 [E1][E2]。\n- 实现侧（Code）：证据中只可见 `success()` 构造器把状态固定为 `SUCCESS` [E4]，**未出现**任何创建 partial 状态的代码或便捷方法。因此\"截断 → partial\"在实现层是否有对应 API，证据不可见。这点上\"实现与设计可能不一致\"——设计声明了三态，但实现证据只覆盖了 success 一条路径。\n\n## Missing Evidence\n\n1. `docs/tool-response-protocol.md` 被省略 436 行、`docs/custom_tools_guide.md` 被省略 571 行 [E1][E5]，其中是否含「截断 / truncated」的显式处理规范无法确认——证据中**没有任何出现\"截断\"字样的原文**，把截断映射到 `partial` 是基于三态语义的推断，而非文档明文。\n2. 缺 `ToolStatus` 枚举的原始定义（是否真的存在 `PARTIAL` 成员名）。\n3. 缺 `ToolResponse.partial()` / `error()` 等构造器与 `ToolStatus.PARTIAL` 的代码证据 [E2][E4]。\n4. 缺\"截断时应写入 `context` 还是 `error_info`\"的规范依据。\n5. 无任何 [F*] 调用链证据，故不给出 Code Flow。"
+      },
+      {
+        "id": "H-06",
+        "category": "behavior",
+        "question": "CircuitBreaker 在什么条件下 open，一个成功调用或 recovery timeout 后如何恢复？",
+        "expected": [
+          "hello_agents/tools/circuit_breaker.py"
+        ],
+        "expected_mode": "any",
+        "pack_rank": 1,
+        "pack_expected_ranks": [
+          1
+        ],
+        "pack_expected_hits": 1,
+        "pack_expected_total": 1,
+        "pack_expected_coverage": 1.0,
+        "pack_complete": true,
+        "pack_answerable": true,
+        "evidence_count": 5,
+        "status": "answered",
+        "answer_hit": false,
+        "answer_path_mentioned": false,
+        "answer_cites_expected": true,
+        "cited_expected_ids": [
+          "E1"
+        ],
+        "latency_ms": 7823.4,
+        "answer_tokens": 924,
+        "valid_citations": 33,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n**Open 条件**：同一工具**连续失败达到 `failure_threshold`** 次后熔断；熔断期间返回 `CIRCUIT_OPEN` 错误，不再真正执行工具。[E1][E5][E3]\n\n**恢复途径**：证据中只支持**一种**恢复方式 —— 等待 `recovery_timeout` 秒后自动恢复（超时自动恢复），之后 `is_open` 重新变为 `False`，允许再次调用。[E1][E4][E3][E2]\n\n**关于\"成功调用后恢复\"**：证据不足。现有文档、示例与测试都只演示/验证了基于 recovery timeout 的恢复路径，没有证据表明一次成功调用会立即关闭熔断器或重置失败计数。缺 `record_result()` / `is_open()` 的实现体（证据中均被截断）。[E1][E2][E3][E4]\n\n## Code Flow\n\n- 触发熔断：连续失败 × `failure_threshold` → `is_open(tool) == True` → 后续调用被拦截，返回 `ToolErrorCode.CIRCUIT_OPEN`。[E3][E4][E2]\n- 超时恢复：`is_open(tool)` 在 `recovery_timeout` 过后自行返回 `False` → 调用被放行至工具本身（测试中返回的是普通执行错误，而**不是** `CIRCUIT_OPEN`）。[E4][E3]\n- 调用链证据：[F1] `test_circuit_breaker_recovery_allows_retry → CircuitBreaker`；[F2] `test_auto_recovery → CircuitBreaker`；[F3] `demo_auto_recovery → CircuitBreaker`（均标注\"已截断\"，未见内部函数级链路）。\n\n## Key Evidence\n\n- 状态机定义：`Closed (正常) → Open (熔断) → Closed (恢复)`，特性为\"连续失败自动禁用工具\"\"超时自动恢复\"。[E1]\n- 配置含义：`failure_threshold=10 # 10 次失败后熔断`；`recovery_timeout=1800 # 30 分钟后恢复`。[E5]\n- 测试（自动恢复）：`failure_threshold=2`，两次 `record_result` 错误后 `is_open(...) is True`；`time.sleep(1.1)` 后 `is_open(...) is False`。[E4]\n- 测试（集成恢复后可重试）：熔断后等 `1.1s`，重试**不再**返回 `CIRCUIT_OPEN`。[E3]\n- 示例：`failure_threshold=2, recovery_timeout=2`，熔断后 `time.sleep(2.1)`，恢复后调用返回 `SUCCESS`。[E2]\n\n## Spec vs Implementation\n\n- **设计（Doc）**：状态机只有三态 `Closed → Open → Closed`，只描述\"超时自动恢复\"，未提及成功调用恢复、也不含 `Half-Open` 态。[E1][E5]\n- **实现（Code/Test）**：测试与示例同样只覆盖超时恢复路径，未见与设计冲突之处；但**代码实现体（`record_result`、`is_open`、成功分支）不在证据中**，因此\"成功调用是否会重置计数/关闭熔断器\"无法与设计对照。**此处实现与设计的一致性问题无法判定**，只能标注为证据不足。[E1][E2][E3][E4]\n\n## Missing Evidence\n\n1. `CircuitBreaker.record_result()`、`is_open()`、以及失败计数/时间戳维护逻辑的实现源码 —— 决定成功调用是否重置计数、熔断判定的精确语义。\n2. `failure_threshold` 是\"连续失败\"还是\"窗口内累计失败\"的实现依据（[E1] 文字写\"连续\"，但测试未区分）。\n3. 是否存在 Half-Open 半开态、是否有请求级/全局级区分、成功调用是否触发 `Closed` 转换。\n4. 调用链 [F1]-[F3] 均\"已截断\"，缺少内部函数级调用关系。"
+      },
+      {
+        "id": "H-10",
+        "category": "behavior",
+        "question": "子代理 `TaskTool` 调用时，parent agent 和 subagent 的 tool set 是怎么隔离的？",
+        "expected": [
+          "hello_agents/tools/builtin/task_tool.py",
+          "hello_agents/tools/tool_filter.py"
+        ],
+        "expected_mode": "all",
+        "pack_rank": 1,
+        "pack_expected_ranks": [
+          1,
+          null
+        ],
+        "pack_expected_hits": 1,
+        "pack_expected_total": 2,
+        "pack_expected_coverage": 0.5,
+        "pack_complete": false,
+        "pack_answerable": true,
+        "evidence_count": 5,
+        "status": "answered",
+        "answer_hit": false,
+        "answer_path_mentioned": false,
+        "answer_cites_expected": true,
+        "cited_expected_ids": [
+          "E1"
+        ],
+        "latency_ms": 14577.9,
+        "answer_tokens": 994,
+        "valid_citations": 19,
+        "invalid_citations": 0,
+        "citation_coverage": 0.95,
+        "answer": "## Answer\n依据现有证据，`TaskTool` 对子代理 tool set 的隔离/限制在设计上是通过 `tool_filter` 参数和工具过滤器实现的，而不是让子代理获得与 parent 完全相同的工具集。文档说明子代理可以访问主 Agent 的工具，但受过滤器限制，例如 `ReadOnlyFilter`、`FullAccessFilter`、`CustomFilter` [E4]；`TaskTool` 参数中也包含 `tool_filter`，取值为 `readonly / full / none` [E3]。\n\n但从代码证据只能看到：`TaskTool` 接收并保存 `tool_registry`，并声称支持工具过滤 [E1]；`Agent._register_task_tool` 注册时，把 parent 的 `self.tool_registry` 传给 `default_subagent_factory` [E5]。给定证据没有展示 `tool_filter` 如何解析、过滤器如何应用到子代理工具集，也没有展示 `default_subagent_factory` 内部如何构建子代理工具集。因此，完整的 tool set 隔离链路证据不足，无法确认运行时具体隔离方式。\n\n## Code Flow\n基于现有代码证据，不是 [F*] 调用链：\n\n1. `Agent._register_task_tool()` 创建 `agent_factory`，内部调用 `default_subagent_factory(agent_type, llm, tool_registry=self.tool_registry, config=self.config)` [E5]。\n2. 创建 `TaskTool(agent_factory=..., tool_registry=self.tool_registry, config=self.config)` [E5]。\n3. `TaskTool` 初始化时保存 `agent_factory`、`tool_registry`、`config` [E1]。\n4. 文档声明 `TaskTool` 支持 `tool_filter`，用于限制子代理可用工具 [E3][E4]。\n\n## Key Evidence\n- [E1] `TaskTool` 类定义，接收 `tool_registry`，描述中称“工具过滤（控制子代理可用工具）”。\n- [E5] `Agent._register_task_tool` 将 parent 的 `self.tool_registry` 传给 `default_subagent_factory`，并注册 `TaskTool`。\n- [E3] 文档列出 `TaskTool` 参数 `tool_filter: readonly / full / none`。\n- [E4] 文档说明子代理可访问主 Agent 工具，但受 `ReadOnlyFilter`、`FullAccessFilter`、`CustomFilter` 限制。\n- [E2] 文档核心特性称“工具过滤：限制子代理可用工具（只读、完全访问、自定义）”。\n\n## Spec vs Implementation\n- **设计意图**：通过 `tool_filter` 和过滤器类限制子代理可用工具，实现工具权限控制 [E2][E3][E4]。\n- **代码可见实现**：`TaskTool` 接收 `tool_registry`，注册时传入 parent 的 `tool_registry` 给 `default_subagent_factory` [E1][E5]。\n- **结论**：现有代码证据未展示过滤逻辑，因此无法确认设计中的工具过滤是否已落实。就给定证据而言，实现与设计可能不一致，或关键实现未包含在证据中；不能断言子代理 tool set 已完全隔离，也不能断言其与 parent 共享同一工具集。\n\n## Missing Evidence\n- `TaskTool` 的执行方法，例如 `run` / `execute` 中如何处理 `tool_filter`。\n- `default_subagent_factory` 的实现，尤其是它如何基于 `tool_registry` 和 `config` 构建子代理工具集。\n- `ReadOnlyFilter`、`FullAccessFilter`、`CustomFilter` 的实现代码。\n- 子代理创建后其工具列表如何被裁剪、替换或封装的代码。\n- 调用链 [F*] 证据缺失，当前只能依据代码片段推断流程，不能确认完整运行时调用关系。"
+      },
+      {
+        "id": "H-12",
+        "category": "behavior",
+        "question": "恢复一个历史会话时，会做哪些一致性检查，由谁触发？",
+        "expected": [
+          "hello_agents/core/agent.py",
+          "hello_agents/core/session_store.py",
+          "hello_agents/core/session_store.py"
+        ],
+        "expected_mode": "all",
+        "pack_rank": null,
+        "pack_expected_ranks": [
+          null,
+          null,
+          null
+        ],
+        "pack_expected_hits": 0,
+        "pack_expected_total": 3,
+        "pack_expected_coverage": 0.0,
+        "pack_complete": false,
+        "pack_answerable": true,
+        "evidence_count": 10,
+        "status": "answered",
+        "answer_hit": false,
+        "answer_path_mentioned": false,
+        "answer_cites_expected": false,
+        "cited_expected_ids": [],
+        "latency_ms": 6400.9,
+        "answer_tokens": 720,
+        "valid_citations": 15,
+        "invalid_citations": 0,
+        "citation_coverage": 0.625,
+        "answer": "## Answer\n\n恢复历史会话时会做**两类**一致性检查，且**由 `Agent.load_session()` 触发**（默认开启）：\n\n**1. 配置一致性检查**\n- 检查项包括：LLM 提供商、LLM 模型、最大步数（max_steps）[E2]\n- 通过 `session_store.check_config_consistency(saved_config, current_config)` 执行 [E4]\n\n**2. 工具 Schema 一致性检查**\n- 比较保存时的 `tool_schema_hash` 与当前 `_compute_tool_schema_hash()` [E4]\n- 若工具定义变化，会输出警告及建议 [E2][E4]\n\n**触发方式与开关**：\n- 由调用方（Agent 实例）在 `load_session(filepath, check_consistency=True)` 时触发，`check_consistency` 默认值为 `True` [E4]\n- 传入 `check_consistency=False` 可跳过全部检查 [E1][E4]\n- 检查结果只输出警告（`print`），**不会阻止会话加载**；历史、元数据、Read 工具缓存仍会照常恢复 [E4][E5]\n\n## Code Flow\n\n依据 E4 的代码内容（无独立 [F*] 调用链证据）：\n`Agent.load_session` → 若 `check_consistency=True`：\n- → `self.session_store.check_config_consistency(...)`\n- → `self.session_store.check_tool_schema_consistency(...)`\n→ 之后恢复 history / metadata / read_cache [E4]\n\n## Key Evidence\n\n- [E4] `Agent.load_session` 默认 `check_consistency: bool = True`，调用 `check_config_consistency` 与 `check_tool_schema_consistency`，不一致仅打印警告后继续恢复\n- [E2] 文档列出配置一致性检查项（LLM 提供商/模型/max_steps）与工具 Schema 一致性\n- [E1] 文档说明可用 `check_consistency=False` 跳过检查\n- [E5] demo 中新增工具后加载会话，会检测到工具变化但仍成功加载\n\n## Spec vs Implementation\n\n文档（E1/E2）与代码（E4）在检查项与触发方式上一致：均由 `load_session` 触发、均可通过 `check_consistency=False` 跳过、均仅警告不中断。证据中未见冲突。\n\n## Missing Evidence\n\n- 无 [F*] 形式的正式调用链证据，调用关系仅由 E4 代码段推断\n- `check_config_consistency` / `check_tool_schema_consistency` 的具体实现（如比对字段细节、hash 计算方式）未在证据中给出\n- 除配置与工具 Schema 外是否存在其他一致性检查项，证据不足"
+      },
+      {
+        "id": "H-15",
+        "category": "behavior",
+        "question": "工具输出特别长时，ObservationTruncator 怎么处理，原始输出会丢吗？",
+        "expected": [
+          "hello_agents/context/truncator.py"
+        ],
+        "expected_mode": "any",
+        "pack_rank": 1,
+        "pack_expected_ranks": [
+          1
+        ],
+        "pack_expected_hits": 1,
+        "pack_expected_total": 1,
+        "pack_expected_coverage": 1.0,
+        "pack_complete": true,
+        "pack_answerable": true,
+        "evidence_count": 3,
+        "status": "answered",
+        "answer_hit": false,
+        "answer_path_mentioned": false,
+        "answer_cites_expected": true,
+        "cited_expected_ids": [
+          "E1"
+        ],
+        "latency_ms": 8895.7,
+        "answer_tokens": 718,
+        "valid_citations": 18,
+        "invalid_citations": 0,
+        "citation_coverage": 1.0,
+        "answer": "## Answer\n\n工具输出特别长时，`ObservationTruncator` 会按配置的 `max_lines` / `max_bytes` 上限进行截断，按 `truncate_direction` 生成预览，并返回结构化结果：`truncated`、`preview`、`full_output_path`、`stats`[E1][E3]。\n\n原始输出**不会丢**，前提是完整输出保存成功：设计上它会“自动保存完整输出”，并在结果中给出 `full_output_path`[E1][E3]。示例中也明确验证了 `full_output_path` 指向的文件存在，并打印“完整输出已保存”[E2]。\n\n截断方向包括[E3]：\n- `head`：保留开头，适合日志、错误信息\n- `tail`：保留结尾，适合实时输出\n- `head_tail`：保留开头和结尾，适合长文件\n\n`stats` 会记录原始与截断后的行数、字节数，例如 `original_lines`、`truncated_lines`、`original_bytes`、`truncated_bytes`[E3]。\n\n## Code Flow\n\n调用链证据显示 `demo_observation_truncator` 会调用 `ObservationTruncator`[F1]。示例流程是：构造截断器 → 生成长输出 → 调用 `truncator.truncate(\"search_tool\", long_output)` → 读取 `result['truncated']`、`result['preview']`、`result.get('full_output_path')`，并检查保存文件是否存在[E2]。\n\n## Key Evidence\n\n- `ObservationTruncator` 类文档声明支持多方向截断、自动保存完整输出、返回结构化结果[E1]。\n- 文档示例展示截断后返回 `preview`、`full_output_path` 和统计信息[E3]。\n- 示例中完整输出保存后，通过断言确认文件存在[E2]。\n\n## Spec vs Implementation\n\n设计/文档与代码类文档都承诺“自动保存完整输出”，这一点一致[E1][E3]。\n\n但返回类型存在可能不一致：`ObservationTruncator` 类文档中一处写“返回标准 `ToolResponse.partial()` 响应”[E1]，而同一段代码注释和文档示例又将结果描述/使用为字典，包含 `truncated`、`preview`、`full_output_path`、`stats`[E1][E3]，示例代码也按字典访问[E2]。因此“实际返回是 dict 还是 `ToolResponse.partial()`”在现有证据下不能完全确认，属于实现与文档可能不一致的点。\n\n## Missing Evidence\n\n缺少 `truncate()` 方法内部实现证据，因此无法确认：\n- 具体截断算法及 `max_lines` / `max_bytes` 同时超限时的优先级；\n- 完整输出文件的实际命名、格式、写入与异常处理；\n- 返回类型最终是 dict 还是 `ToolResponse.partial()`；\n- 保存失败时原始输出是否仍可能丢失，或是否有兜底策略。"
+      },
+      {
+        "id": "H-18",
+        "category": "behavior",
+        "question": "HelloAgentsLLM 是怎么决定用哪个厂商的适配器的？",
+        "expected": [
+          "hello_agents/core/llm.py"
+        ],
+        "expected_mode": "any",
+        "pack_rank": 1,
+        "pack_expected_ranks": [
+          1
+        ],
+        "pack_expected_hits": 1,
+        "pack_expected_total": 1,
+        "pack_expected_coverage": 1.0,
+        "pack_complete": true,
+        "pack_answerable": true,
+        "evidence_count": 3,
+        "status": "answered",
+        "answer_hit": true,
+        "answer_path_mentioned": true,
+        "answer_cites_expected": true,
+        "cited_expected_ids": [
+          "E1"
+        ],
+        "latency_ms": 7110.0,
+        "answer_tokens": 859,
+        "valid_citations": 12,
+        "invalid_citations": 0,
+        "citation_coverage": 0.6,
+        "answer": "## Answer\n\n按现有证据，HelloAgentsLLM 的适配器选择是**自动检测**的，而不是调用方显式指定（至少默认路径如此）：\n\n- **总体机制**：`HelloAgentsLLM` 的类文档写明\"自动适配：根据 `base_url` 自动选择适配器（OpenAI/Anthropic/Gemini）\"[E1]。\n- **具体判定条件**（README 的提供商表格）[E2]：\n - `base_url` 包含 `anthropic.com` → Anthropic 适配器\n - `base_url` 包含 `googleapis.com` 或 `generativelanguage` → Gemini 适配器\n - 其余情况 → OpenAI 兼容适配器（**默认**，覆盖 DeepSeek/Qwen/Kimi/GLM/vLLM/Ollama 等）\n- **优先级**：README 把 OpenAI 兼容适配器标为\"默认\"，Anthropic / Gemini 是两条基于 URL 特征的专门分支 [E2]。\n\n## Code Flow\n\n现有证据中**没有** [F*] 调用链证据，因此无法给出从 `HelloAgentsLLM()` 构造到适配器实例化的实际代码路径。可确认的只有：`HelloAgentsLLM` 是 `hello_agents/core/llm.py` 中的统一客户端类 [E1]，以及 `Agent._register_task_tool` 内的 `agent_factory` 在需要子代理轻量模型时会构造 `HelloAgentsLLM(provider=..., model=...)`，即存在**显式传入 provider 的用法**（这属于子代理轻量模型路径，不代表默认自动检测路径）[E3]。\n\n## Key Evidence\n\n- [E1] `hello_agents/core/llm.py:12-27` — 类文档：自动适配依据 `base_url`，适配器为 OpenAI/Anthropic/Gemini\n- [E2] README 🚀 快速开始 — 检测条件表 + \"框架根据 `base_url` 自动选择适配器，无需手动指定\"\n- [E3] `hello_agents/core/agent.py:1148-1169` — 子代理工厂中以 `provider=`/`model=` 参数显式构造 HelloAgentsLLM\n\n## Spec vs Implementation\n\n**实现与设计可能不一致（文档内部就有分歧）**：\n- 支持\"仅按 base_url 检测\"的证据：[E1]（\"根据 base_url 自动选择适配器\"）、[E2] 表格（检测条件均只列 `base_url` 包含关系）\n- 支持\"按 API Key 格式 + Base URL 检测\"的证据：[E2] 同节另一处\"框架会根据 **API 密钥格式**和 Base URL 自动选择合适的 provider\"，以及注释中的示例 `HelloAgentsLLM() # 框架自动检测为 modelscope`\n- 另有证据表明可绕过自动检测、直接显式传 `provider`：[E3]\n\n由于未提供适配器选择函数的具体实现代码，无法判定实际实现究竟只读 `base_url`、还是同时解析 API Key 格式；也无法确认 `provider=` 显式参数与自动检测的优先关系。\n\n## Missing Evidence\n\n缺少以下内容，故无法给出完整实现级答案：\n1. `hello_agents/core/llm.py` 中实际的 provider/适配器选择逻辑（`__init__` 或检测函数体）——即\"base_url / api_key 如何被匹配、匹配顺序、是否有 provider 显式覆盖、未命中时的默认分支\"。\n2. 选择逻辑与适配器类的调用链证据（[F*]）。\n3. API Key 格式检测规则的具体定义（README 提及但未列出格式规则）。"
+      }
+    ]
+  }
+}

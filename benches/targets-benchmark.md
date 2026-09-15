@@ -80,9 +80,10 @@ uv run zace-core search "<query>" --project-id ca2050db0db5b1e2 \
   瓶颈是 2 vCPU 而非带宽；TPM 用不满是结构性上限（跑满 16 M 需 18.5 MB/s，本机链路只有 9.2–11.6 MB/s）。
   实测见 `benches/results/index-cost-model-vps.md` §3。
 
-## 未做的事
+## 质量题库与统一入口（2026-09-15 补齐）
 
-- **未出 golden 用例**：本轮只测索引耗时，不测检索质量。若要在这三个靶场上做质量回归，
-  需按 `benches/README.md` 的 JSONL 格式出题（`expected[].path` 用仓库相对路径）。
-- **未进 `targets.json`**：该文件绑定"用例集 + 预建索引"，本靶场暂无用例，故不登记
-  （VPS 侧的预建索引登记在本文件上一节 + 数据根 `INDEXES.json`）。
+- 三仓库各 20 题，共 60 题；当前 v2 题目、答案与依据见
+  `benches/golden/{leveldb,HelloAgents,langchain}/qa.md`；
+- 审计、v2 基线和 core 建议见 `benches/results/qa-audit-2026-09-15.md`；
+- 三个持久索引已登记进 `targets.json`，名字分别是 `leveldb-v1`、`helloagents-v1`、
+  `langchain-v1`。可用 `uv run python benches/run.py --list-targets` 查看，直接 eval，不重建索引。

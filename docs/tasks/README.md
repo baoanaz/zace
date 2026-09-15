@@ -122,7 +122,7 @@
 |---|---|---|---|---|
 | [TASK-089](TASK-089-MCP面归属校验.md) | **MCP 面归属校验**（上云前最后越权口；不含改 CF-06） | TASK-061 | `service/zace_service/{mcp,deps}.py`、`service/tests/` | **review**（2026-09-14，泳道 C） |
 | [TASK-090](TASK-090-请求日志与trace查询.md) | **请求日志持久化 + trace id 查询**（用户报错可追溯，有界窗口保留） | TASK-084 | `service/zace_service/{logging,requestlog,metadb,config,routers/ops}.py`、`.env.example` | **review**（2026-09-14，泳道 D） |
-| [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（60-100 条真实用例 + 指标设计；为 TASK-050 建立可信标尺） | 无 | `benches/**` | pending |
+| [TASK-091](TASK-091-评测靶场打磨.md) | **评测靶场与 golden 集打磨**（三仓库 60 题事实审计 + v2 多语言/完整证据指标；为 TASK-050 建立可信标尺） | 无 | `benches/**` | **review**（2026-09-15；18 tests，v2 三仓实测完成） |
 | [TASK-092](TASK-092-VPS部署.md) | **VPS 部署**（compose 单栈 + Caddy TLS + 公网发布） | **TASK-089/090** | `deploy/`、`*/Dockerfile`、`docs/handbook/部署.md` | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | **真实使用数据闭环**（TASK-023 落地：真实查询 → 候选 → 标尺；**不含调参**） | TASK-084/091 | `benches/`、`docs/handbook/质量数据.md` | pending |
 | [TASK-094](TASK-094-内存配额与trace关联.md) | **项目内存可见性 + 存储配额 tool 告警 + 历史记录 trace id + 项目删除入口**（用户 4 条需求） | ~~TASK-090/088~~ ✅ 均已合并 | `service/zace_service/{quota,runtime,metadb,config,routers/*}.py`、`web/src/pages/{Dashboard,History}Page.tsx`、`web/src/api/{client,types}.ts` | review |
