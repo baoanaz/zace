@@ -56,6 +56,8 @@
 | `uv run python scripts/check_dependency_direction.py` | 依赖方向检查通过 |
 | `uv run pytest -o addopts="" -q` | 1026 passed, 2 skipped |
 | 真实 leveldb parser/chunker 探针 | `fallback=False`；60 symbols / 590 edges；四个目标方法均恢复；L1063-L1065 三条诊断保留并形成单独 fallback chunk |
+| WSL 三仓持久索引 | leveldb 36.9s / HelloAgents 46.0s / langchain 331.1s；均使用 `api:voyage-4-lite@1024` 与 parser fingerprint v2 |
+| leveldb 重复 ingest | `invalidation=none`；0 files parsed / 0 vectors upserted；0.3s |
 
 ### 实施口径
 
@@ -72,10 +74,33 @@
 - ragcode：只有 parser 抛异常才整文件 fallback，tree-sitter 恢复树继续参与抽取。
 - notace-tool-rs：未使用 tree-sitter，不提供局部 AST 恢复参考。
 
+### WSL 持久索引与 v2 对照
+
+数据根：`~/.zace/bench/voyage-4-lite-d1024`；环境文件：`~/.config/zace/benchmark.env`（仓库外，权限 `0600`，仅保存 embedding 配置）。
+
+| 靶场 | project id | files | chunks | symbols | 磁盘 |
+|---|---|---:|---:|---:|---:|
+| leveldb | `3ed886ce58bc0e47` | 152 | 2642 | 2202 | 17 MiB |
+| HelloAgents | `06078cc80c7ce7d7` | 236 | 2729 | 1082 | 28 MiB |
+| langchain | `ca2050db0db5b1e2` | 2950 | 20673 | 15735 | 179 MiB |
+
+三仓总占用约 223 MiB。三个 `index.db` 的 `parser_config_hash` 均为 v2 同一值，query vector 通道无降级。
+
+| QA 指标 | v2 旧索引 | TASK-103 新索引 | 结论 |
+|---|---:|---:|---|
+| leveldb search R@5 / R@10 | 0.6429 / 0.6429 | 0.6429 / 0.6429 | 持平 |
+| leveldb search MRR | 0.4607 | 0.4179 | 排名仍需后续路由/rerank 处理，本卡不调参 |
+| leveldb ask pack any | 1/5 | 4/5 | L-10/L-14/L-16 恢复证据，P0 修复生效 |
+| leveldb ask pack complete | 1/5 | 3/5 | L-10/L-14 完整，L-16 覆盖 2/4 |
+| HelloAgents search / pack / complete | 0.8462 / 0.9231 / 0.7418；5/6；3/6 | 完全一致 | Python 无回归 |
+| langchain search / pack / complete | 0.7143 / 0.7143 / 0.6429；5/5；4/5 | 完全一致 | Python 无回归 |
+
+leveldb L-14（显式查询 `DBImpl::Get`）从 pack miss 变为 top-1；L-19 的 README 正例从 `answerable=false` 修正为 true。L-09 目标实现虽已入库，但仍未进入 pack，属于候选排序/路由问题而非索引缺失。
+
 ### 与设计的偏差
 
 修订 TASK-002/TASK-004 的“任何 ERROR 整文件 fallback”实现口径，但不改变 D-08“尽力而为 + unresolved 如实标注”，也不修改冻结契约。建议编排者评审后把此漂移回记 Module 01。
 
 ### 未验证项
 
-当前用户无权读取 `/etc/zace/zace.env`，无法在本机新建 Voyage embedding 索引并复跑 `leveldb-v1` 端到端分数。旧持久索引不能用于验证新 parser；需在具备 embedding 配置的环境全量重建后复跑 v2，不能增量复用旧索引。
+WSL 无法访问 VPS 的 `127.0.0.1:8080` AnswerProvider 网关，因此本轮 QA probe 只比较 search 与 ContextPack，未重跑实际 LLM 答案、引用命中率和 ask 延迟。该限制不影响 parser、索引与 pack coverage 的验证。
