@@ -87,3 +87,19 @@
 - 全部实测在 **lane-b 工作区**执行，未触碰 `main`；参考仓库**只读**；
 - 索引产物落在 `~/.cache/zace-bench/`（**不入仓库**）；`benches/results/raw/` 只留日志与 JSON（68 KB）；
 - **单 key 独占**：实测期间无其他 ingest/eval 进程（用户已确认并会持续遵守）。
+
+### 交接：VPS 验证（2026-09-15 用户决定）
+
+后续验证由 **VPS 侧 AI** 执行。验证清单（前置检查 / 靶场 commit / 三个脚本入口 /
+判定标准 / 回报格式）已写在主报告
+`benches/results/index-cost-model-company-wsl.md` **§8**，无需额外交接文档。
+
+**给 VPS 侧 AI 的三条要点**：
+1. **别改本卡脚本**：三个入口（`profile_repo.py` / `throughput_probe.py` / `run_targets.sh`）
+   已带设备自适应参数，直接跑即可；
+2. **画像数字必须逐位一致**（`chunks` / `tokens`）——不一致就是解析口径问题，先修口径再比耗时；
+3. **`response_MB_per_s` 是关键对比数**，它直接给出 VPS 相对 company-wsl 的带宽倍数，
+   模型成立与否由它判定。
+
+**我在文档里修正的一处自身错误**（供复核）：初稿把降维写成"zace 侧有 `output_dimension` 支持"，
+核实后发现该字段仅在 `registry.py:116` 登记、**无消费方也无 env**，已改为"需先开卡"。

@@ -138,7 +138,7 @@ embedding：硅基流动 `BAAI/bge-m3`，1024 维，max_input_tokens=8192，batc
 
 | 手段 | 实测/推算收益 | 状态 | 代价 |
 |---|---|---|---|
-| **① 降维**（1024→256） | 响应体 ÷4 → 大仓库 440s→110s | 未实测（zace 侧有 `output_dimension` 支持） | **改变向量空间** → 触发 D-07 全量重嵌；检索质量需评估 |
+| **① 降维**（1024→256） | 响应体 ÷4 → 大仓库 440s→110s | **需先开卡**：`output_dimension` 仅登记未接线（无 env、无消费方） | **改变向量空间** → 触发 D-07 全量重嵌；检索质量需评估 |
 | **② 调整 chunk 数量**（更大切片） | 线性减少（chunk 数 ÷2 → 耗时 ÷2） | 未实测 | 检索粒度变粗，正撞 D-02 的切片设计 |
 | **③ 网络（仅两种部署形态）** | 线性减少 | **VPS 侧待实测** | — |
 | ~~④ 换 16M TPM 模型（Voyage）~~ | **仅约 1.28×** | 已推算 | 75% 时间是下载向量，换模型躲不掉 |
@@ -188,7 +188,86 @@ uv run python benches/embed-bench/throughput_probe.py \
 bash benches/embed-bench/run_targets.sh run1
 ```
 
-## 8. 未决问题
+## 8. VPS 验证清单（交接给 VPS 侧 AI）
+
+> 目的：把本文 §3 的**外推列换成实测列**，并验证"耗时 ∝ 响应体字节/带宽"这一模型是否跨机器成立。
+> 预期：若模型成立，VPS 上耗时 ≈ 本机耗时 × (1 / 带宽倍数)，即 10 MB/s → **约本机的 1/10**。
+
+### 8.1 前置检查（3 条，缺一不可）
+
+```bash
+# ① 单 key 独占（最重要：共用 key 会互相抢配额，表现为远低于配额就 429）
+pgrep -af "zace-core|ingest|pytest" || echo "独占 OK"
+
+# ② 记录设备指纹（绑进报告，VPS 与 company-wsl 的数据不能混）
+nproc; free -g | head -2; uname -r
+
+# ③ 记录实际带宽（本模型的自变量，必须单独测）
+#    用固定 500 条探测，读 MB/s 与 TTFB；这是与 company-wsl 对比的关键数字
+```
+
+### 8.2 三档靶场（**必须与本机同 commit**，否则不可比）
+
+| 档 | 仓库 | commit | chunks | 本机实测（conc=1） | VPS 预期（@10MB/s） |
+|---|---|---|---|---|---|
+| 小 | `leveldb` | `7ee830d` | 1,898 | 52.7s | ~5s |
+| 中 | `HelloAgents` | `93e77ea` | 2,729 | 83.9s | ~8s |
+| 大 | `langchain` | `41d3572` | 20,673 | 589.3s | ~59s |
+
+若 VPS 上没有这三个 checkout，可用**任意仓库**先验证模型（见 8.4 的判定式）。
+
+### 8.3 执行（复用本卡脚本，三个入口）
+
+```bash
+cd <zace checkout，需含本卡提交>
+export HF_ENDPOINT=https://hf-mirror.com NO_PROXY=127.0.0.1,localhost
+set -a; source .env; set +a
+export EMBED_MODE=api EMBED_MODEL=bge-m3 EMBED_BASE_URL=https://api.siliconflow.cn
+
+# ① 画像（免 API）：确认 chunk 数与 token 数一致 —— 跨机器这两个数**必须完全相同**
+uv run python benches/embed-bench/profile_repo.py --repo <路径> --out /tmp/prof.json
+
+# ② 吞吐标定（需 key）：只需跑 conc=1，重点看 response_MB_per_s
+uv run python benches/embed-bench/throughput_probe.py --repo <路径> \
+  --sample 4000 --concurrency 1 --out /tmp/thr.json
+
+# ③ 端到端（本卡靶场驱动；BENCH_ROOT 指向 VPS 上的三个 checkout）
+BENCH_ROOT=<三个仓库的父目录> bash benches/embed-bench/run_targets.sh vps1
+```
+
+### 8.4 判定标准（模型成立 / 不成立）
+
+| 项 | 期望值 | 若不成立说明 |
+|---|---|---|
+| `chunks` / `tokens`（画像） | **与本机逐位相同** | 解析口径有差异 → 先修口径再比耗时 |
+| `response_mb`（吞吐） | **与本机逐位相同** | 维度或 chunk 数不同 → 同上 |
+| `response_MB_per_s` | ≈ VPS 链路带宽（本机 0.76–1.01） | 这是**关键对比数**，直接给出带宽倍数 |
+| `elapsed` | ≈ 本机耗时 ÷ 带宽倍数（±20%） | 偏差大 → 说明除下载外还有别的项（如 TTFB 占比变高） |
+| `status_counts` | 全 200 | 出现 429 → 记录 conc 与仓库规模，作为边界证据 |
+
+### 8.5 回报格式（最小集）
+
+```text
+设备：<VPS 规格 / 内核 / 带宽实测>
+靶场 commit：<三个 hash>
+conc=1 端到端：leveldb __s / HelloAgents __s / langchain __s
+响应体速率：__ MB/s（本机为 0.76–1.01）
+chunks 是否一致：是/否
+429 情况：无 / 有（记录 conc 与仓库）
+结论：模型成立 / 不成立（附偏差最大的那一项）
+```
+
+### 8.6 建议顺便验证的两项
+
+1. **并发上限**：本机 conc=3 在 langchain 上 429，VPS 链路更快 → **是否也 429** 很关键
+   （若是，说明 429 由**请求节奏**触发而非带宽；若否，说明本机并发受限有带宽因素）；
+2. **降维（256 维）——注意：当前代码不支持，需先开卡**。
+   `ApiModelSpec.output_dimension` 只是 `registry.py:116` 的**登记字段，无任何代码消费**，
+   也没有 `EMBED_OUTPUT_DIMENSION` 环境变量（2026-09-15 核实：`rg output_dimension core/ service/` 只命中该定义）。
+   要实测降维，必须先给 provider 加"请求体带 `output_dimension`"的支持（属 TASK-049 遗留项）。
+   若将来做了，可同时拿到"提速倍数"与"响应体是否整除 4"两个数字。
+
+## 9. 未决问题
 
 1. **VPS 10 MB/s 待实测**：需在目标 VPS 上重跑 §7，把 §3 的外推列替换成实测列；
 2. **降维质量代价未评估**：需用 golden 集对比 1024 vs 256 的 recall@5；
