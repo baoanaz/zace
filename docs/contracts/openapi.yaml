@@ -262,7 +262,7 @@ paths:
                 projectId: { type: string }
                 checkpointId: { type: string }
                 query: { type: string }
-                maxTokens: { type: integer, default: 10000 }
+                maxTokens: { type: integer, default: 14000 }
       responses: { '200': { description: SearchResponse } }
   /api/query/ask:
     post:

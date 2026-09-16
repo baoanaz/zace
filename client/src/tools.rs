@@ -3,7 +3,11 @@
 //!
 //! **参数名与 CF-06 一致**：编辑器侧仍传 `project_root`（本地绝对路径）。云端语义下
 //! `project_root` 不用于服务端定位，而是**客户端**用来算 D-29 身份（就绪度报告 §2 方案乙：
-//! 零契约变更）。`max_tokens` 上限与 CF-06 一致（search 16000 / ask 200000）。
+//! 零契约变更）。
+//!
+//! `max_tokens`（TASK-MCP-BUDGET，2026-09-16）：**不再出现在 `inputSchema` 里**——
+//! 包大小由服务端按证据密度决定，不由调用方猜；结构体仍保留该字段以便接收旧版编辑器
+//! 发来的值（不报错），但不再向 AI 声明。
 //!
 //! 会话状态（进程内 `project_root → SessionState`，Module 05 §3.6）：缓存最后一次的
 //! `projectId` / `scope` / `checkpointId`，避免每次 tool call 都重建 checkpoint。
@@ -18,12 +22,20 @@ use crate::identity::repo_identity;
 use crate::index::{require_non_empty, IndexManager};
 use crate::remote::{validate_project_root, CallContext, RemoteClient};
 
-/// `search_context.max_tokens` 上限（CF-06 冻结值）。
-pub const MAX_TOKENS_SEARCH: i64 = 16_000;
-/// `ask_project.max_tokens` 上限（service 侧 `MAX_MAX_TOKENS`，服务端兜底同值）。
+/// `max_tokens` 的可接受上限（服务端 `MAX_MAX_TOKENS`，运行时兜底）。
+///
+/// TASK-MCP-BUDGET：该参数已从 `inputSchema` 移除（不再向 AI 声明），但**仍可接收**——
+/// 故校验与默认值保留，保证旧编辑器发来的值不会变成参数错误。
 pub const MAX_TOKENS_ASK: i64 = 20_000;
+/// 未收到 `max_tokens` 时发给服务端的值。
+///
+/// 实际很可能被服务端忽略（service 以自己的默认档位为准，Fast 14K / Deep 16K）；
+/// 这里保留 10000 只为与旧版服务端（仍读该字段）兼容，不参与本地的预算决策。
 pub const DEFAULT_MAX_TOKENS: i64 = 10_000;
 /// 查询长度上限（与 service 侧 `MAX_QUERY_CHARS` 同口径）。
+///
+/// TASK-MCP-BUDGET：2000→8000（服务端已放宽到 8000）。此前客户端 8000 / 服务端 2000，
+/// 2000～8000 字符的查询会在服务端被 400 拒，而调用方自认为合法。
 const MAX_QUERY_CHARS: usize = 8_000;
 
 /// 工具层错误（→ 协议层的三分类，Module 05 §2.2）。
@@ -44,21 +56,24 @@ impl ToolError {
 }
 
 /// 两个工具的 JSON Schema（CF-06；`additionalProperties: false`）。
+///
+/// TASK-MCP-BUDGET：不声明 `max_tokens`——包大小是服务端按证据密度决定的内部量，
+/// 让 AI 去猜它只会猜小（实测把长函数截断成“签名 + 前 15 行”）。运行时仍接受该字段。
 pub fn definitions() -> Value {
     json!([
         {
             "name": "search_context",
             "description": "在当前项目工作区检索与问题最相关的上下文（代码/调用链/文档证据包）。\
-                适合'XX 在哪里实现/谁在调用它'这类需要跨文件定位的问题；已知精确标识符的全量引用请用 grep，\
-                已知文件请直接 read。返回 ContextPack 的 Markdown 渲染（含证据 id、行号与 Missing Evidence）。",
+                适合'XX 在哪里实现'这类需要跨文件定位的问题；已知精确标识符的全量引用请用 grep，\
+                已知文件请直接 read。调用链（Flow 节）只给一跳且遇分叉即停，想穷举调用方请用 grep。\
+                返回 ContextPack 的 Markdown 渲染（含证据 id、行号与 Missing Evidence）。",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["query", "project_root"],
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "description": "自然语言或符号混合查询，中英均可"},
-                    "project_root": {"type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠"},
-                    "max_tokens": {"type": "integer", "minimum": 1, "maximum": MAX_TOKENS_SEARCH, "default": DEFAULT_MAX_TOKENS}
+                    "project_root": {"type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠"}
                 }
             }
         },
@@ -66,15 +81,16 @@ pub fn definitions() -> Value {
             "name": "ask_project",
             "description": "就当前项目提出调查性问题，返回基于证据包（含代码与设计文档）的带引用回答，并在证据不足时\
                 给出缺口说明与改问建议。需要直接结论（'为什么/如何设计/实现与设计是否一致'）时用它；\
-                只想要原始上下文时用 search_context。",
+                只想要原始上下文时用 search_context。**长函数/内部流程类问题请改用 search_context**：\
+                超长符号的证据块会降级为'签名 + 前 15 行'，容易恰好丢掉你要问的正文——\
+                先用 search_context 拿到完整正文自己读。",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["question", "project_root"],
                 "properties": {
                     "question": {"type": "string", "minLength": 1, "description": "需要项目级回答的问题，中英均可"},
-                    "project_root": {"type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠"},
-                    "max_tokens": {"type": "integer", "minimum": 1, "description": "answer 输出上限（token）"}
+                    "project_root": {"type": "string", "minLength": 1, "description": "项目根绝对路径，正斜杠"}
                 }
             }
         }
@@ -121,7 +137,7 @@ impl ToolLayer {
             "search_context" => {
                 let args: SearchArguments = decode(tool_name, arguments)?;
                 require_query(&args.query, "query")?;
-                require_max_tokens(args.max_tokens, MAX_TOKENS_SEARCH, "max_tokens")?;
+                require_max_tokens(args.max_tokens, MAX_TOKENS_ASK, "max_tokens")?;
                 self.search(
                     &remote,
                     &args.project_root,
@@ -361,15 +377,18 @@ mod tests {
                 .as_array()
                 .expect("required");
             assert_eq!(required.len(), 2);
+            // TASK-MCP-BUDGET：max_tokens 不再对 AI 声明（服务端按证据密度决定包大小）
+            let props = tool["inputSchema"]["properties"]
+                .as_object()
+                .expect("properties");
+            assert!(
+                !props.contains_key("max_tokens"),
+                "{} 不应再声明 max_tokens：{:?}",
+                tool["name"],
+                props.keys().collect::<Vec<_>>()
+            );
+            assert_eq!(props.len(), 2);
         }
-        assert_eq!(
-            array[0]["inputSchema"]["properties"]["max_tokens"]["maximum"],
-            MAX_TOKENS_SEARCH
-        );
-        assert_eq!(
-            array[0]["inputSchema"]["properties"]["max_tokens"]["default"],
-            DEFAULT_MAX_TOKENS
-        );
     }
 
     #[test]
@@ -381,23 +400,18 @@ mod tests {
     }
 
     #[test]
-    fn max_tokens_validation_enforces_per_tool_limits() {
-        assert!(require_max_tokens(Some(0), MAX_TOKENS_SEARCH, "max_tokens").is_err());
-        assert!(
-            require_max_tokens(Some(MAX_TOKENS_SEARCH + 1), MAX_TOKENS_SEARCH, "max_tokens")
-                .is_err()
-        );
-        assert!(
-            require_max_tokens(Some(MAX_TOKENS_SEARCH), MAX_TOKENS_SEARCH, "max_tokens").is_ok()
-        );
-        assert!(require_max_tokens(None, MAX_TOKENS_SEARCH, "max_tokens").is_ok());
-        // ask 的上限更高（CF-06 未声明上限，服务端兜底 20000）
-        assert!(
-            require_max_tokens(Some(MAX_TOKENS_SEARCH + 1), MAX_TOKENS_ASK, "max_tokens").is_ok()
-        );
+    fn max_tokens_validation_still_accepts_legacy_callers() {
+        // TASK-MCP-BUDGET：参数已从 schema 移除，但旧编辑器仍可能发送——不得变成参数错误。
+        assert!(require_max_tokens(Some(0), MAX_TOKENS_ASK, "max_tokens").is_err());
         assert!(
             require_max_tokens(Some(MAX_TOKENS_ASK + 1), MAX_TOKENS_ASK, "max_tokens").is_err()
         );
+        assert!(
+            require_max_tokens(Some(MAX_TOKENS_ASK), MAX_TOKENS_ASK, "max_tokens").is_ok()
+        );
+        assert!(require_max_tokens(None, MAX_TOKENS_ASK, "max_tokens").is_ok());
+        // 旧版常用的 10000 仍放行（现在两面共用一个上限）
+        assert!(require_max_tokens(Some(DEFAULT_MAX_TOKENS), MAX_TOKENS_ASK, "max_tokens").is_ok());
     }
 
     #[tokio::test]

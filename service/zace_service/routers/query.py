@@ -84,10 +84,24 @@ router = APIRouter(tags=["query"])
 
 logger = get_logger("zace_service.routers.query")
 
-#: ``query`` / ``question`` 的最大字符数（卡内冻结；防超长输入拖垮检索）。
-MAX_QUERY_CHARS = 2000
-#: ``maxTokens`` 的默认值与上限（卡内冻结：(0, 20000]）。
-DEFAULT_MAX_TOKENS = 10_000
+#: ``query`` / ``question`` 的最大字符数（防超长输入拖垮检索）。
+#:
+#: TASK-MCP-BUDGET：2000→8000。旧值 2000 与 client 侧 ``MAX_QUERY_CHARS = 8000`` 不一致——
+#: 客户端放行的 2000～8000 字符查询会在服务端 400 被拒，而报错来自一个 Agent
+#: 自认为合法的输入（真实踩到：MCP 面传长问题只能拿到 ``invalid_query``）。
+#: 统一取两边较大值；上限本身仍有防范作用，只是不再比客户端更严。
+MAX_QUERY_CHARS = 8000
+#: ``maxTokens`` 的默认值与上限（(0, 20000]）。
+#:
+#: TASK-MCP-BUDGET：默认 10_000→14_000（对齐 core ``FAST_BUDGET``）。旧值让 MCP/REST 两面
+#: **恒定按 10K 装填**，实测长函数（如 ``process_with_streaming`` 199 行）被 skeleton 降级成
+#: “签名 + 15 行”，恰好丢掉问题要问的正文。默认值不再由工具参数决定（见 CF-06 变更）。
+DEFAULT_MAX_TOKENS = 14_000
+#: ``ask`` 的装填预算：Deep 档（对齐 core ``DEEP_BUDGET`` 16K）。
+#:
+#: 此前 ``ask`` 写死用 ``DEFAULT_MAX_TOKENS`` 调 ``manager.search(..., deep=True)``，
+#: 而 Deep 的补检配额更大、装填预算却与 Fast 同值——“Deep 只多补检不多装填”。
+ASK_MAX_TOKENS = 16_000
 MAX_MAX_TOKENS = 20_000
 
 #: ``ask`` 的降级说明（D-26 要求写清"为什么不是答案"与"包可以直接用"）。
@@ -198,7 +212,7 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
             ctx["elapsed"] = elapsed
             rescan = await run_in_threadpool(_rescan_before_query, manager, request, project_id)
             trace = await run_in_threadpool(
-                manager.search, project_id, question, DEFAULT_MAX_TOKENS, deep=True
+                manager.search, project_id, question, ASK_MAX_TOKENS, deep=True
             )
         pack = trace.pack
         # 两条路都如实记 ``degraded=True``（都不含 LLM 总结），但"为什么"不同：
@@ -673,6 +687,7 @@ def _progress_hint(manager: EngineManager, project_id: str) -> str:
 
 
 __all__ = [
+    "ASK_MAX_TOKENS",
     "AskRequest",
     "DEGRADED_NOTICE",
     "DEFAULT_MAX_TOKENS",

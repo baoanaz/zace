@@ -20,6 +20,7 @@ from zace_core.contextpack import (
     evidence_markdown_lines,
     render_markdown,
 )
+from zace_core.contextpack.assembly import _single_file_cap
 from zace_core.types import Flow, FlowNode, Freshness, SpecBlockDef
 
 
@@ -96,11 +97,27 @@ def test_flow_tokens_count_but_do_not_compete(store, seed_file, sym, cand) -> No
 
 
 def test_budget_defaults_per_mode(store) -> None:
-    assert FAST_BUDGET.hard_cap == 10_000
-    assert DEEP_BUDGET.hard_cap == 12_000
-    assert budget_for("deep").hard_cap == 12_000
+    """TASK-MCP-BUDGET：Fast 14K / Deep 16K（旧值 10K/12K）。"""
+    assert FAST_BUDGET.hard_cap == 14_000
+    assert DEEP_BUDGET.hard_cap == 16_000
+    assert budget_for("deep").hard_cap == 16_000
+    assert budget_for("fast").hard_cap == 14_000
     with pytest.raises(ValueError):
         budget_for("turbo")
+
+
+def test_single_file_cap_is_absolute_in_production_budgets() -> None:
+    """单文件上限在**生产预设**里是绝对值（2_500），不随 hard_cap 缩放。
+
+    TASK-MCP-BUDGET：预算 10K→14K 时若仍按 25% 算，单文件上限会 2500→3500，
+    一个文件就能吃掉近三分之一包体；新增预算应当给“更多文件”而不是“同一个文件更多行”。
+    字段默认 0 时仍走旧比例口径（测试与 param_sweep 靠它）。
+    """
+    assert _single_file_cap(FAST_BUDGET) == 2_500
+    assert _single_file_cap(DEEP_BUDGET) == 2_500  # 不随 16K 变成 4000
+    # 未显式设置 → 旧比例口径逐字不变（包括显式关闸的 ratio=1.0）
+    assert _single_file_cap(BudgetConfig(hard_cap=10_000)) == 2_500
+    assert _single_file_cap(BudgetConfig(hard_cap=100_000, single_file_ratio=1.0)) == 100_000
 
 
 def test_no_candidates_yields_empty_pack(store) -> None:
@@ -802,3 +819,75 @@ def test_gap_message_lists_unresolved_symbol_names(store, seed_file, sym, cand) 
     # 最多列 3 个（余下用"等"带过），避免 message 自身膨胀；`symbol` 取首个。
     assert "getattr, execute, workflow_id 等" in message
     assert "5 个符号引用无法解析" in message
+
+
+def test_first_backfill_candidate_is_not_skeleton_degraded(store, seed_file, sym, cand) -> None:
+    """补检首位候选不被 skeleton 降级（TASK-MCP-BUDGET）。
+
+    实测来源（cockpit-agents-server，2026-09-16）：``StreamingService.process_with_streaming``
+    199 行 / 2016 token，是**补检池首位**、也是唯一能回答"流式完整链路"的证据。但补检的单成员
+    公平上限（``backfill_single_ratio`` 0.25 × ``backfill_ratio`` 0.35 × hard_cap）在 16K 下
+    只有 1400 token，它被强制降级成"签名 + 前 15 行"——恰好丢掉了问题要问的那段正文
+    （memory_query / preference_updated / complete 三个事件与知识检索调用点）。
+
+    公平上限的原始目的是"防止一个大调度器独吞配额、让后面 13 个成员无处可放"
+    （cockpit-0035 的 ``_invoke``）——那个场景里目标是**多个小成员**；当首位目标本身就是
+    唯一答案时，让位换不来任何东西。故只豁免首位，其余候选仍按原上限排队。
+    """
+    # 首位：一个超长方法（远超 backfill_skeleton_lines，也超单成员 token 上限）
+    # 声明多行（``_long`` 默认 start=end，无法触发按行数降级）
+    seed_file(
+        store,
+        path="src/big.py",
+        symbols=[sym("huge_method", "huge_method", start=1, end=220)],
+        bodies={"huge_method": "x" * 6000},
+    )
+    # 后面：若干小成员，证明豁免没有让它们全部落空
+    for i in range(4):
+        _long(store, seed_file, sym, f"src/small{i}.py", f"small{i}", 1, 40)
+    # 主循环先装一个种子，其余（含 huge_method）走补检
+    _long(store, seed_file, sym, "src/seed.py", "seed", 1, 40)
+    config = BudgetConfig(hard_cap=14_000, single_file_tokens=2_500, docs_tokens=950)
+    pack = assemble(
+        store,
+        "q",
+        [cand("src/seed.py", "seed", 1, score=1.0)],
+        config=config,
+        backfill=[(cand("src/big.py", "huge_method", 1, score=0.3), "gap backfill: G1")],
+    )
+    items = [*pack.evidence, *pack.docs]
+    huge = next(item for item in items if item.symbol == "huge_method")
+    # 未被降级：省略行数为 0（降级后是 6000 行正文只留 15 行）
+    assert huge.elided_lines == 0, f"首位补检候选被降级了（elided={huge.elided_lines}）"
+    assert huge.lines is not None and huge.lines[1] - huge.lines[0] + 1 > 100
+    assert "gap backfill" in huge.reason  # 来源标注仍在
+
+
+def test_non_first_backfill_candidate_respects_single_cap(
+    store, seed_file, sym, cand
+) -> None:
+    """非首位补检候选仍受单成员上限约束（豁免只给首位，别把防独吞闸门拆掉）。"""
+    _long(store, seed_file, sym, "src/seed.py", "seed", 1, 40)
+    _long(store, seed_file, sym, "src/first.py", "first_small", 1, 40)
+    seed_file(
+        store,
+        path="src/huge.py",
+        symbols=[sym("huge_method", "huge_method", start=1, end=220)],
+        bodies={"huge_method": "x" * 6000},
+    )
+    config = BudgetConfig(hard_cap=14_000, single_file_tokens=2_500, docs_tokens=950)
+    pack = assemble(
+        store,
+        "q",
+        [cand("src/seed.py", "seed", 1, score=1.0)],
+        config=config,
+        backfill=[
+            (cand("src/first.py", "first_small", 1, score=0.4), "gap backfill: G1"),
+            (cand("src/huge.py", "huge_method", 1, score=0.3), "gap backfill: G1"),
+        ],
+    )
+    items = [*pack.evidence, *pack.docs]
+    huge = next((item for item in items if item.symbol == "huge_method"), None)
+    if huge is not None:
+        # 作为第二位候选不得免检：要么被降级，要么被放弃；不能整段进包
+        assert huge.elided_lines > 0, "非首位候选不应享受首位豁免"

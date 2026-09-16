@@ -272,16 +272,13 @@ def test_tools_list_matches_cf06_field_by_field(
     # 关键字段单独再确认一次（防上面的比对被整体改坏而静默通过）
     search = next(tool for tool in tools if tool["name"] == SEARCH_TOOL)
     assert search["inputSchema"]["required"] == ["query", "project_root"]
-    assert set(search["inputSchema"]["properties"]) == {"query", "project_root", "max_tokens"}
-    assert search["inputSchema"]["properties"]["max_tokens"]["maximum"] == 16_000
-    assert search["inputSchema"]["properties"]["max_tokens"]["default"] == 10_000
+    # TASK-MCP-BUDGET：``max_tokens`` 不再出现在 inputSchema（对 AI 隐藏，仍可接收）
+    assert set(search["inputSchema"]["properties"]) == {"query", "project_root"}
     assert search["inputSchema"]["additionalProperties"] is False
 
     ask = next(tool for tool in tools if tool["name"] == ASK_TOOL)
     assert ask["inputSchema"]["required"] == ["question", "project_root"]
-    assert "maximum" not in ask["inputSchema"]["properties"]["max_tokens"], (
-        "CF-06 未给 ask_project.max_tokens 声明上限（服务端另有运行时兜底）"
-    )
+    assert set(ask["inputSchema"]["properties"]) == {"question", "project_root"}
 
 
 def test_mcp_mount_is_not_part_of_cf05_paths(mcp_env: SimpleNamespace) -> None:
@@ -532,8 +529,12 @@ def test_empty_query_is_rejected(mcp_env: SimpleNamespace) -> None:
 
 
 def test_overlong_query_is_rejected(mcp_env: SimpleNamespace) -> None:
-    """超长 query（>2000 字符，与 REST 面同一上限）→ isError。"""
-    result = _search(mcp_env, "令牌" * 1200)
+    """超长 query（> ``MAX_QUERY_CHARS``，与 REST 面同一上限）→ isError。
+
+    TASK-MCP-BUDGET：上限 2000→8000（此前比 client 侧的 8000 更严，客户端放行的
+    2000～8000 字符查询会在服务端莫名其妙 400）。这里用 8001 字符卡边界。
+    """
+    result = _search(mcp_env, "令牌" * 4001)
     assert result["isError"] is True
     assert "过长" in _text(result)
 
