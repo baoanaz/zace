@@ -55,12 +55,19 @@ impl ToolError {
     }
 }
 
-/// CF-06 冻结合同（**description 的单一来源**）。
+/// CF-06 冻结合同（**description 的单一来源**，权威文件在 `docs/contracts/mcp-tools.json`）。
 ///
-/// `include_str!` 在**编译时**嵌入：运行时读文件在用户机器上不可靠（`npx zace-client`
-/// 只装了二进制，没有仓库的 `docs/`），所以把文本固化进二进制。
-/// 与 service 侧读的是**同一个文件**，两端描述不会再漂移。
-const CF06_CONTRACT: &str = include_str!("../../docs/contracts/mcp-tools.json");
+/// 这里读的是 crate **内**的构建期副本 `client/contract/mcp-tools.json`：
+/// `include_str!` 是**编译期**展开，而 `aarch64-unknown-linux-musl` 走 `cross`（Docker），
+/// **只把 crate 根目录挂载进容器**——实测容器内 `/project/..` 是容器的 `/`（`bin/boot/dev/...`），
+/// 仓库上层的 `docs/` 完全不可见，直接写 `../../docs/...` 会让该平台构建失败
+/// （2026-09-16 实测事故：Release 资产不全 → `npm publish` 后用户拿到 404）。
+///
+/// 副本与权威文件的一致性由两边测试守住：
+/// - client：`contract_copy_matches_repo_copy`（本文件测试模块）逐字节比对；
+/// - 仓库层：`scripts/check-version.sh` 之外，CI 与本地均可跑同一比对。
+/// 改描述时**先改 `docs/contracts/mcp-tools.json`，再同步到此副本**（否则测试红）。
+const CF06_CONTRACT: &str = include_str!("../contract/mcp-tools.json");
 
 /// 从 CF-06 契约取指定工具的 `description`。
 ///
@@ -483,5 +490,32 @@ mod tests {
                 .await,
             Err(ToolError::InvalidArguments(_))
         ));
+    }
+
+    /// 构建期副本必须与仓库权威契约**逐字节一致**。
+    ///
+    /// 为什么要这条：`aarch64-unknown-linux-musl` 走 `cross`（Docker），容器里看不到
+    /// 仓库上层的 `docs/`，所以编译时读的是 crate 内的 `contract/mcp-tools.json`。
+    /// 副本一旦与权威文件漂移，AI 拿到的就是过期描述——而这和“两端漂移”是同一类
+    /// 静默故障（构建成功、行为错误），必须由测试拦住。
+    ///
+    /// 只拷了 `client/` 出来构建时（权威文件不在位）本测试自动跳过。
+    #[test]
+    fn contract_copy_matches_repo_copy() {
+        let repo_copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/contracts/mcp-tools.json");
+        if !repo_copy.is_file() {
+            eprintln!("跳过：仓库权威契约不在位（{}）", repo_copy.display());
+            return;
+        }
+        let expected = std::fs::read_to_string(&repo_copy).expect("读权威契约");
+        let vendored = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contract/mcp-tools.json"),
+        )
+        .expect("读构建副本");
+        assert_eq!(
+            vendored, expected,
+            "client/contract/mcp-tools.json 与 docs/contracts/mcp-tools.json 不一致：\n"
+        );
     }
 }
