@@ -12,8 +12,9 @@
  * TASK-100：新增「项目」页（用户 2026-09-14 要求放在控制台下面，与控制台同级）；
  * 删掉页脚版本说明文案（用户："用户不需要知道这些"）。
  *
- * TASK-110：新增「账户」页；「后台」入口**只对管理员显示**（入口由
- * ``account.capabilities.isAdmin`` 决定，不在这里写 ``role === "admin"``）。
+ * TASK-110：新增「后台」入口，**只对管理员显示**（由 ``account.capabilities.isAdmin``
+ * 决定，不在这里写 ``role === "admin"``）；「账户」项已移除——账户信息合并进控制台
+ * （用户 2026-09-15 要求，/account 保留为跳转）。
  *
  * 窄屏（<768px）：侧边栏变成**抽屉**，由顶栏的汉堡按钮开关，点导航后自动关闭
  * （用户 2026-09-14 拍板；不引任何库）。
@@ -37,7 +38,6 @@ const NAV = [
   { to: "/connect", label: "接入指南", end: false },
   { to: "/keys", label: "API Key", end: false },
   { to: "/history", label: "历史记录", end: false },
-  { to: "/account", label: "账户", end: false },
   { to: "/settings", label: "设置", end: false },
 ];
 

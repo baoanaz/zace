@@ -373,13 +373,24 @@ paths:
   /api/admin/projects:
     get:
       tags: [admin]
-      summary: 全部项目 + 索引健康（跨用户；排查异常索引：失败原因 / 跳过文件）
-      responses: { '200': { description: 'AdminProject[]' } }
+      summary: 全部项目 + 索引健康（跨用户；按占用降序；可按 userId 筛选）
+      parameters:
+        - { name: userId, in: query, required: false, schema: { type: string }, description: "不传 = 全部人员" }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 0 }, description: "0 = 不限制" }
+      responses: { '200': { description: '{ projects, totalBytes, owners }' } }
+  /api/admin/projects/{projectId}:
+    delete:
+      tags: [admin]
+      summary: 删除任意项目（管理员；级联删除索引数据，归属行一并清理）
+      parameters: [{ name: projectId, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content }, '404': { description: project_not_found } }
   /api/admin/stats:
     get:
       tags: [admin]
-      summary: 调用统计（Search/Ask 次数、Token、错误率；与用户侧 usage_summary **同源**）
-      parameters: [{ name: days, in: query, required: false, schema: { type: integer, default: 30 } }]
+      summary: 调用统计（Search/Ask 次数、Token、错误率；可按 userId 查询单个用户）
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, default: 30 } }
+        - { name: userId, in: query, required: false, schema: { type: string }, description: "不传 = 全站" }
       responses: { '200': { description: AdminStats } }
   /api/admin/system:
     get:

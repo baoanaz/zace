@@ -25,7 +25,7 @@ from typing import Any
 from zace_service.config import Settings
 from zace_service.metadb import MetaDB
 
-__all__ = ["IndexStatsBundle", "account_overview", "dir_size_bytes"]
+__all__ = ["IndexStatsBundle", "account_overview", "dir_size_bytes", "host_memory"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +65,68 @@ def dir_size_bytes(path: Path) -> int:
         except OSError:  # 并发删除/权限：跳过该文件，不让统计失败
             continue
     return total
+
+
+def host_memory() -> dict[str, Any]:
+    """主机内存占用（后台系统状态展示；用户 2026-09-15 要求）。
+
+    数据源 ````/proc/meminfo``（Linux，零依赖）：服务跑在 2C2G 的 VPS 上，
+    "内存还剩多少"是判断能不能再收一个用户的实际依据。
+
+    诚实性口径（与全库一致）：
+
+    - ``MemAvailable`` 优先（内核估计的**还能用**的量，含可回收缓存）；没有它时退回
+      ``MemFree``，并**如实标注**用的是哪个口径（``availableBasis``）；
+    - 读不到（非 Linux / 权限）→ 三个字段全 ``None`` + 一行 ``reason``，**不编 0**：
+      "没读到"与"用了 0"是两件事。
+    """
+    path = Path("/proc/meminfo")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "totalBytes": None,
+            "availableBytes": None,
+            "usedBytes": None,
+            "usedRatio": None,
+            "availableBasis": None,
+            "reason": f"读不到 /proc/meminfo（{type(exc).__name__}）：仅 Linux 可测",
+        }
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if not parts:
+            continue
+        try:
+            kib = int(parts[0])  # /proc/meminfo 的值以 kB 为单位
+        except ValueError:
+            continue
+        values[name.strip()] = kib * 1024
+    total = values.get("MemTotal")
+    if total is None:
+        return {
+            "totalBytes": None,
+            "availableBytes": None,
+            "usedBytes": None,
+            "usedRatio": None,
+            "availableBasis": None,
+            "reason": "/proc/meminfo 里没有 MemTotal（格式意外）",
+        }
+    available = values.get("MemAvailable")
+    basis = "MemAvailable"
+    if available is None:
+        available = values.get("MemFree", 0)
+        basis = "MemFree"
+    used = max(0, total - available)
+    return {
+        "totalBytes": total,
+        "availableBytes": available,
+        "usedBytes": used,
+        "usedRatio": round(used / total, 4) if total else None,
+        "availableBasis": basis,
+        "reason": None,
+    }
 
 
 def account_overview(

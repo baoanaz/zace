@@ -185,6 +185,12 @@ _USER_COLUMNS: tuple[tuple[str, str], ...] = (
     ("banned_at", "INTEGER"),
     #: 最后活跃时间（后台用户模块展示；每次凭据校验时刷新）。
     ("last_seen_at", "INTEGER"),
+    #: 顺序号（所有人都有，从 1 开始）。控制台展示为 ``ID #001``。
+    #:
+    #: 与 ``early_member_no`` 的区别：那个是**内测收藏品编号**（只发前 100 名，降级时会被清掉），
+    #: 这个是**全站注册顺序**（永不变、永不复用）。两者同时存在是因为它们回答不同的问题：
+    #: “我是不是最早那批内测”与“我是第几个用户”。
+    ("user_no", "INTEGER"),
 )
 
 #: ``api_tokens`` 的**增量列**（TASK-110 §3.4）：自定义 Key 标记（审计用）。
@@ -197,6 +203,11 @@ _TOKEN_COLUMNS: tuple[tuple[str, str], ...] = (
 #: 同一类坑）。
 _AUDIT_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_audit_request ON query_audit(request_id)",
+)
+
+#: 迁移后要确保存在的**唯一索引**（旧行回填之后再建，否则 NULL 会随之多个而冲突）。
+_UNIQUE_INDEXES: tuple[str, ...] = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_no ON users(user_no)",
 )
 
 
@@ -269,6 +280,8 @@ class User:
     banned_at: int | None = None
     #: 最后活跃时间。
     last_seen_at: int | None = None
+    #: 全站注册顺序号（从 1 开始；控制台展示为 ``ID #001``）。
+    user_no: int | None = None
 
     @property
     def banned(self) -> bool:
@@ -300,6 +313,8 @@ class User:
             "role": self.role,
             "title": title_for(self.role),
             "earlyMemberNo": self.early_member_no,
+            #: 全站顺序号（所有人都有）。与 ``earlyMemberNo`` 并存：后者是内测收藏品编号。
+            "userNo": self.user_no,
             "banned": self.banned,
             "capabilities": capabilities_for(
                 self.role,
@@ -577,6 +592,9 @@ class MetaDB:
         传了则同时写 ``title`` 冗余快照（两个字段一次落库，不会出现"角色是 beta 而头衔是旅人"）。
         ``early_member_no`` 只对 ``beta`` 有意义，调用方负责分配
         （见 :meth:`next_early_member_no`）。
+
+        ``user_no``（全站顺序号）在**同一事务内**自增取号（``MAX(user_no)+1``），
+        因此并发注册不会发重号；由唯一索引兼底。
         """
         created = int(now if now is not None else time.time())
         user_id = secrets.token_hex(16)
@@ -589,8 +607,11 @@ class MetaDB:
         if early_member_no is not None:
             columns += ", early_member_no"
             values.append(int(early_member_no))
-        placeholders = ", ".join("?" for _ in values)
         with self._write() as conn:
+            user_no = _next_user_no(conn)
+            columns += ", user_no"
+            values.append(user_no)
+            placeholders = ", ".join("?" for _ in values)
             conn.execute(f"INSERT INTO users ({columns}) VALUES ({placeholders})", values)
         return User(
             id=user_id,
@@ -600,6 +621,7 @@ class MetaDB:
             role=resolved or "public",
             title=title_for(resolved or "public"),
             early_member_no=early_member_no,
+            user_no=user_no,
         )
 
     def get_user_by_name(self, name: str) -> tuple[User, str] | None:
@@ -847,7 +869,7 @@ class MetaDB:
                 member_no = candidate if candidate <= EARLY_MEMBER_MAX else None
             conn.execute(
                 "INSERT INTO users (id, name, password_hash, created_at, is_local, role, title,"
-                " early_member_no, last_seen_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)",
+                " early_member_no, last_seen_at, user_no) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     name,
@@ -857,6 +879,7 @@ class MetaDB:
                     title_for(role),
                     member_no,
                     current,
+                    _next_user_no(conn),
                 ),
             )
             conn.execute(
@@ -1115,6 +1138,20 @@ class MetaDB:
             "SELECT 1 FROM projects WHERE project_id = ? AND user_id = ?", (project_id, user_id)
         ).fetchone()
         return row is not None
+
+    def delete_project_owner(self, project_id: str) -> int:
+        """删掉该项目的归属行（返回删除行数；供**管理员删项目**用）。
+
+        为什么必须删：项目目录由 ``EngineManager.delete_project`` 删掉后，
+        ``projects`` 表里那行就成了幽灵——``GET /api/projects`` 会列出一个目录已不存在的项目，
+        点进去就报 404。归属行与目录必须同生共死。
+
+        历史数据（``index_runs`` / ``query_audit``）**不删**：它们是运营证据（TASK-093 的真实
+        使用数据闭环就靠它），而且删了会让后台统计凭空缩水。
+        """
+        with self._write() as conn:
+            cursor = conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+            return cursor.rowcount
 
     def list_projects(self, user_id: str) -> list[str]:
         rows = self._connect().execute(
@@ -1540,9 +1577,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "index_runs", _INDEX_RUN_COLUMNS)
     _add_columns(conn, "users", _USER_COLUMNS)
     _add_columns(conn, "api_tokens", _TOKEN_COLUMNS)
+    _backfill_user_no(conn)
     # 索引在列存在之后建（见 _AUDIT_INDEXES 的注释：放 _SCHEMA 里会让旧库打开直接失败）。
     for statement in _AUDIT_INDEXES:
         conn.execute(statement)
+    # 唯一索引必须在**回填之后**建：回填前全是 NULL，而唯一索引允许多个 NULL（不会冲突），
+    # 但一旦回填错了就很难发现。先回填再建，让约束在建立时就校验一遍。
+    for statement in _UNIQUE_INDEXES:
+        conn.execute(statement)
+
+
+def _backfill_user_no(conn: sqlite3.Connection) -> None:
+    """给没有顺序号的账户技号（旧库升级；按 ``created_at`` 升序，同刻按 ``rowid``）。
+
+    幂等：只碰 ``user_no IS NULL`` 的行，已发号的不动。为什么要回填而不是发新号时补：
+    用户看到的 ``ID #001`` 必须是**注册顺序**，晚补的话首位用户会拿到一个大数字，
+    而他明明是最早注册的。
+    """
+    row = conn.execute("SELECT MAX(user_no) AS n FROM users").fetchone()
+    next_no = 1 if row is None or row["n"] is None else int(row["n"]) + 1
+    pending = conn.execute(
+        "SELECT rowid FROM users WHERE user_no IS NULL ORDER BY created_at ASC, rowid ASC"
+    ).fetchall()
+    for item in pending:
+        conn.execute("UPDATE users SET user_no = ? WHERE rowid = ?", (next_no, item["rowid"]))
+        next_no += 1
 
 
 def _llm_config_record(row: sqlite3.Row) -> LlmConfigRecord:
@@ -1591,6 +1650,7 @@ def _user(row: sqlite3.Row) -> User:
         quota_bytes=_optional_int(row, keys, "quota_bytes"),
         banned_at=_optional_int(row, keys, "banned_at"),
         last_seen_at=_optional_int(row, keys, "last_seen_at"),
+        user_no=_optional_int(row, keys, "user_no"),
     )
 
 
@@ -1600,6 +1660,16 @@ def _optional_int(row: sqlite3.Row, keys: set[str], column: str) -> int | None:
         return None
     value = row[column]
     return None if value is None else int(value)
+
+
+def _next_user_no(conn: sqlite3.Connection) -> int:
+    """下一个全站顺序号（``MAX(user_no) + 1``，空表从 1 开始）。
+
+    用 ``MAX`` 而不是 ``COUNT(*)``：顺序号必须**永不复用**。删过一个用户（或将来的清理）
+    后 ``COUNT`` 会把他的号发给新人，而他递出去的名片上的 ``ID #N`` 就撞车了。
+    """
+    row = conn.execute("SELECT MAX(user_no) AS n FROM users").fetchone()
+    return 1 if row is None or row["n"] is None else int(row["n"]) + 1
 
 
 def _index_run(row: sqlite3.Row) -> IndexRun:

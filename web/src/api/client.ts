@@ -301,6 +301,13 @@ export interface Account {
   title: string;
   /** 内测编号（仅前 100 名内测玩家非 null；展示为 `拓荒者 #0027`）。 */
   earlyMemberNo: number | null;
+  /**
+   * 全站注册顺序号（所有人都有；控制台展示为 `ID #001`）。
+   *
+   * 与 `earlyMemberNo` 并存：那个是**内测收藏品编号**（只发前 100 名），
+   * 这个是**注册顺序**（永不变）。两者回答不同的问题。
+   */
+  userNo: number | null;
   capabilities: Capabilities;
 }
 
@@ -628,6 +635,8 @@ export interface AdminUser {
   role: "admin" | "beta" | "public";
   title: string;
   earlyMemberNo: number | null;
+  /** 全站注册顺序号（所有人都有）。 */
+  userNo?: number | null;
   /** 后台对该用户的**单人覆盖**（null = 按角色默认）。 */
   quotaBytes: number | null;
   /** 实际生效的上限（含角色默认与单人覆盖）。 */
@@ -676,6 +685,9 @@ export interface AdminProject {
   displayName: string;
   attachedRoot: string | null;
   ownerId: string | null;
+  /** 归属人展示名（用户要求“显示名称”）；未认领为 null。 */
+  ownerName: string | null;
+  ownerNo: number | null;
   diskBytes: number;
   indexProgress: IndexProgressView | null;
   history: {
@@ -693,6 +705,8 @@ export interface AdminProject {
 /** 后台统计（`GET /api/admin/stats`）。 */
 export interface AdminStats {
   days: number;
+  /** 查询范围：`null` = 全站；否则是某个用户。 */
+  userId: string | null;
   projectCount: number;
   search: UsageSummary;
   index: IndexStats;
@@ -700,6 +714,28 @@ export interface AdminStats {
   errorRate: number | null;
   totalQueries: number;
   tokens: number;
+  /** 用户下拉选项（全站查询用）。 */
+  owners: AdminOwnerOption[];
+}
+
+/** 后台“按用户筛选”的下拉选项。 */
+export interface AdminOwnerOption {
+  userId: string;
+  name: string;
+  userNo: number | null;
+  role: "admin" | "beta" | "public";
+}
+
+/** VPS 主机内存（`/api/admin/system` 的 `host`）。 */
+export interface HostMemory {
+  totalBytes: number | null;
+  availableBytes: number | null;
+  usedBytes: number | null;
+  usedRatio: number | null;
+  /** `MemAvailable`（含可回收缓存）或 `MemFree`（退让口径）。 */
+  availableBasis: "MemAvailable" | "MemFree" | null;
+  /** 读不到时的原因（非 Linux 等）；成功时为 null。 */
+  reason: string | null;
 }
 
 export function listAdminUsers(): Promise<{ users: AdminUser[]; limit: number }> {
@@ -750,12 +786,25 @@ export function revokeAdminInvite(code: string): Promise<void> {
   return request<void>(`/api/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
-export function listAdminProjects(): Promise<{ projects: AdminProject[] }> {
-  return request<{ projects: AdminProject[] }>("/api/admin/projects");
+export function listAdminProjects(
+  userId?: string | null,
+): Promise<{ projects: AdminProject[]; totalBytes: number; owners: AdminOwnerOption[] }> {
+  const query = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+  return request<{ projects: AdminProject[]; totalBytes: number; owners: AdminOwnerOption[] }>(
+    `/api/admin/projects${query}`,
+  );
 }
 
-export function getAdminStats(days = 30): Promise<AdminStats> {
-  return request<AdminStats>(`/api/admin/stats?days=${days}`);
+/** 管理员删除任意项目（级联删除索引数据；不可恢复）。 */
+export function deleteAdminProject(projectId: string): Promise<void> {
+  return request<void>(`/api/admin/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function getAdminStats(days = 30, userId?: string | null): Promise<AdminStats> {
+  const scope = userId ? `&userId=${encodeURIComponent(userId)}` : "";
+  return request<AdminStats>(`/api/admin/stats?days=${days}${scope}`);
 }
 
 export function getAdminSystem(): Promise<Health> {

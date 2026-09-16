@@ -67,23 +67,26 @@ router = APIRouter(tags=["auth"])
 
 logger = get_logger("zace_service.routers.auth")
 
-#: 密码最短长度（TASK-081：用户要求放宽到 3 位；上限防 DoS：argon2 对超长输入要算很久）。
-MIN_PASSWORD_CHARS = 3
+#: 密码规则（TASK-110 用户 2026-09-15 拍板：“密码不做限制，任意想要的都行”）。
+#:
+#: 因此**只拒空密码**：空密码意味着任何人输个名字就能登进去，那不是“不限制”而是“没锁”。
+#: 上限仍保留（argon2 对超长输入要算很久，是 DoS 面）。
+MIN_PASSWORD_CHARS = 1
 MAX_PASSWORD_CHARS = 200
 #: 账户名长度上限。
 MAX_NAME_CHARS = 64
-#: 自定义 Key 的正文最小长度（TASK-110 §3.4：**禁止短于 16 字符**——用户自选 Key 的熵
-#: 远低于服务端 256 位随机串，16 字符是这个数量级下的**下限**而不是推荐值）。
-MIN_CUSTOM_KEY_CHARS = 16
-#: 自定义 Key 的正文长度上限（防超长输入；与随机 Key 的体量同量级）。
+#: 自定义 Key 的正文**最小**长度。
+#:
+#: 用户 2026-09-15 拍板放宽：“内部允许任意的数字量，zace_1 都可以，后面可以附带任意的
+#: 数字和字母，这里不做限制，只需要后台没有一样的 key 就行”——因此只要求正文非空，
+#: 唯一性交给库里的唯一索引（冲突 → 409）。
+MIN_CUSTOM_KEY_CHARS = 1
+#: 自定义 Key 的正文长度上限（防超长输入；与随机 Key 同量级即可）。
 MAX_CUSTOM_KEY_CHARS = 128
-#: 自定义 Key 正文的允许字符集（URL-safe base64 子集 + ``-``/``_``：能安全放进场景里的
-#: 各种配置与命令行，不需要额外转义）。
-CUSTOM_KEY_ALPHABET = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-)
 #: LLM 配置字段的长度上限（防超长输入：URL/模型名/Key 都是小串）。
 MAX_LLM_FIELD_CHARS = 2048
+
+#: 随机 Key 的形态由 :mod:`zace_service.auth` 定义（单一事实源）：``zace_`` + 16 位字母/数字。
 
 
 class Credentials(BaseModel):
@@ -667,17 +670,14 @@ def _validate_custom_key(raw: str, *, user: User) -> None:
     if not raw.startswith(TOKEN_PREFIX):
         raise ApiError(
             code="invalid_custom_key",
-            message=f"自定义 Key 必须以 {TOKEN_PREFIX} 开头（例：{TOKEN_PREFIX}myproject2026）",
+            message=f"自定义 Key 必须以 {TOKEN_PREFIX} 开头（例：{TOKEN_PREFIX}mykey123）",
             status=400,
         )
     body = raw[len(TOKEN_PREFIX) :]
     if len(body) < MIN_CUSTOM_KEY_CHARS:
         raise ApiError(
             code="invalid_custom_key",
-            message=(
-                f"自定义 Key 的随机部分至少 {MIN_CUSTOM_KEY_CHARS} 个字符"
-                f"（自选 Key 的熵远低于服务端随机串，太短容易被猜中）"
-            ),
+            message=f"自定义 Key 的 {TOKEN_PREFIX} 后面不能为空",
             status=400,
         )
     if len(raw) > MAX_CUSTOM_KEY_CHARS:
@@ -686,16 +686,8 @@ def _validate_custom_key(raw: str, *, user: User) -> None:
             message=f"自定义 Key 过长（上限 {MAX_CUSTOM_KEY_CHARS} 字符）",
             status=400,
         )
-    illegal = sorted({char for char in body if char not in CUSTOM_KEY_ALPHABET})
-    if illegal:
-        raise ApiError(
-            code="invalid_custom_key",
-            message=(
-                "自定义 Key 只能用字母、数字、``-`` 与 ``_``"
-                f"（不允许：{' '.join(illegal)}）"
-            ),
-            status=400,
-        )
+    # 字符集**不限制**（用户 2026-09-15 拍板："后面可以附带任意的数字和字母，这里不做限制"）。
+    # 唯一要求是库里没有一样的 Key，由 ``api_tokens.token_hash`` 的唯一索引兜底（→ 409）。
 
 
 def _require_meta_db(request: Request) -> MetaDB:

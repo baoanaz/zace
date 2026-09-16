@@ -50,7 +50,10 @@ $ curl -s -X POST http://127.0.0.1:8787/api/auth/tokens \
 {"id":"...","token":"zace_my-laptop-key-2026","prefix":"zace_my-pro","isCustom":true}
 ```
 
-规则：必须以 `zace_` 开头；其后 **≥16 个字符**，字符集 `[A-Za-z0-9_-]`；与既有 Key 冲突 → 409。
+规则：必须以 `zace_` 开头，其后**不能为空**；字符集与长度**不做限制**（`zace_1` 也合法），
+唯一要求是库里没有一样的 Key（冲突 → 409）。
+
+随机生成（不传 `key`）时是 `zace_` + **16 位字母数字**（不含符号）。
 无特权身份传 `key` → **403 `custom_key_forbidden`**（不是静默忽略——静默会让人以为自定义成功、
 拿到的却是随机 Key）。不传 `key` 时行为与以前**逐字一致**（服务端随机生成）。
 
@@ -126,8 +129,8 @@ $ curl -s -X POST http://127.0.0.1:8787/api/auth/bootstrap \
 $ curl -s -X POST http://127.0.0.1:8787/api/auth/tokens \
     -H 'Content-Type: application/json' -b cookies.txt \
     -d '{"name":"client-key"}'
-{"id":"46e8089b...","token":"zace_nayRNpV55hiNpb-L9MBw1PjOtQeJG6e-_7TpIrqnwrs",
- "prefix":"zace_nayRNp","name":"client-key"}
+{"id":"46e8089b...","token":"zace_9fK2mQ7xR4tLpZ1a","prefix":"zace_9fK2mQ",
+ "name":"client-key","isCustom":false}
 ```
 
 ⚠️ **`token` 明文只在这里返回一次**。服务端只存 sha256 哈希（`hash_api_token`），
@@ -136,7 +139,7 @@ $ curl -s -X POST http://127.0.0.1:8787/api/auth/tokens \
 ### 3.3 用 Key 访问数据面
 
 ```console
-$ curl -s http://127.0.0.1:8787/api/projects -H "Authorization: Bearer zace_nayRNp..."
+$ curl -s http://127.0.0.1:8787/api/projects -H "Authorization: Bearer zace_9fK2mQ..."
 []
 
 $ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8787/api/projects     # 不带 key
@@ -204,7 +207,7 @@ tools/call search_context → isError=True
 | 401 `unauthorized` | 没带 key / key 错 / key 已撤销 / **账户已被封禁** | 检查 `--token`；在控制台重建 key；若被封禁请联系管理员 |
 | 400 `invalid_invite` | 注册没填邀请码、码形状不对、或码无效/已失效/已用尽 | 向管理员索要新码（**码不存在与已用尽的文案相同**，这是刻意的反枚举设计） |
 | 403 `custom_key_forbidden` | 以公测身份传了自定义 Key | 自定义 Key 是拓荒者特权：不传 `key` 让服务端随机生成，或联系管理员提升身份 |
-| 400 `invalid_custom_key` | 自定义 Key 不以 `zace_` 开头 / 短于 16 字符 / 含非法字符 | 见 §0.1 的格式规则 |
+| 400 `invalid_custom_key` | 自定义 Key 不以 `zace_` 开头，或 `zace_` 后面为空 | 见 §0.1 的格式规则 |
 | 409 `key_taken` | 该 Key 明文已被使用过 | 换一个；随机生成的 Key 不会撞（256 位随机） |
 | 413 `quota_exceeded` | 索引空间超过当前身份的额度 | 在控制台删除不再需要的项目，或联系管理员调整配额 |
 | 403 `admin_required` | 非管理员访问 `/api/admin/*` | 后台仅管理员可用 |

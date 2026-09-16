@@ -330,29 +330,49 @@ def revoke_invite(code: str, request: Request) -> Response:  # noqa: A002 - 路�
 
 
 @router.get("/api/admin/projects")
-def list_projects(request: Request) -> dict[str, Any]:
-    """全部项目 + 索引健康（排查异常索引：失败原因、跳过文件、重建入口）。
+def list_projects(
+    request: Request,
+    userId: str | None = None,  # noqa: N803 - 与前端查询参数名一致
+    limit: int = 0,
+) -> dict[str, Any]:
+    """全部项目 + 索引健康（排查异常索引：失败原因、跳过文件、归属人之名）。
+
+    用户 2026-09-15 要求：
+
+    - ``userId`` 不传 = **全部人员的项目**，传了 = 只看那一个人的；
+    - **按占用从大到小排序**（两个视图都是）：先看谁在占空间才有排查价值；
+    - 归属人显示**名称**（一串 hex id 对运营来说看不出意思）。
 
     **跨用户**（管理员视角），因此不套 ``_owned_ids``：这是本端点与
     ``GET /api/projects`` 的唯一区别，也是它必须走 ``require_admin`` 的原因。
+
+    ``limit`` > 0 时才截断（默认 0 = 不限制）：项目数本身不大，但排序前得全部算完，
+    截断只能发生在最后一步。
     """
     require_admin(request)
     db = _db(request)
     manager = get_engine_manager(request)
-    listed = manager.list_projects()
     owners = _project_owners(db)
     payload: list[dict[str, Any]] = []
-    for item in listed:
+    for item in manager.list_projects():
         project_id = str(item["projectId"])
+        owner_id = owners.get(project_id)
+        if userId is not None and owner_id != userId:
+            continue
         stats = db.index_stats(project_id, limit=5)
         recent = stats.recent
         latest = recent[0] if recent else None
+        owner = db.get_user(owner_id) if owner_id else None
         payload.append(
             {
                 "projectId": project_id,
                 "displayName": str(item.get("displayName") or ""),
                 "attachedRoot": item.get("attachedRoot"),
-                "ownerId": owners.get(project_id),
+                "ownerId": owner_id,
+                # 归属人的展示名（用户要求"显示名称，一串编号我也不知道什么意思"）。
+                # 未认领（归属为空）时如实为 None，前端显示“未认领”而不是编一个名字。
+                "ownerName": None if owner is None else owner.name,
+                "ownerNo": None if owner is None else owner.user_no,
                 "diskBytes": project_usage_bytes(manager, project_id),
                 "indexProgress": item.get("indexProgress"),
                 "history": {
@@ -370,25 +390,67 @@ def list_projects(request: Request) -> dict[str, Any]:
                 ),
             }
         )
-    return {"projects": payload}
+    # 占用从大到小；同占用按 projectId 稳定排序（否则每次刷新行会跳）。
+    payload.sort(key=lambda row: (-int(row["diskBytes"]), str(row["projectId"])))
+    if limit > 0:
+        payload = payload[:limit]
+    return {
+        "projects": payload,
+        "totalBytes": sum(int(row["diskBytes"]) for row in payload),
+        "owners": _owner_options(db),
+    }
+
+
+@router.delete("/api/admin/projects/{projectId}")
+def delete_project(projectId: str, request: Request) -> Response:  # noqa: A002,N803
+    """删除任意项目（管理员权限；用户 2026-09-15 要求）。
+
+    与 ``DELETE /api/projects/{id}`` 的区别：那个要过归属校验（只能删自己的），
+    这个不过——它是运营释放空间的最后手段（用户要求"删除后，用户存储的索引就没了"）。
+
+    删除是 D-03 的级联删除（整个项目目录 rm -rf，含 ``index.db`` / ``vectors/`` /
+    ``blobs/`` / 同步账本），**不动用户的源码**；但项目的**归属行**也要一并清掉，
+    否则 ``GET /api/projects`` 会列出项目但目录已不在（会变成幽灵项）。
+    """
+    admin = require_admin(request)
+    db = _db(request)
+    manager = get_engine_manager(request)
+    if not manager.project_exists(projectId):
+        raise ApiError(code="project_not_found", message=f"项目不存在：{projectId}", status=404)
+    manager.delete_project(projectId)
+    removed = db.delete_project_owner(projectId)
+    logger.warning("管理员删除项目：admin=%s project=%s 归属行=%s", admin.id, projectId, removed)
+    return Response(status_code=204)
 
 
 # --------------------------------------------------------------------------- 统计模块
 
 
 @router.get("/api/admin/stats")
-def stats(request: Request, days: int = 30) -> dict[str, Any]:
+def stats(
+    request: Request,
+    days: int = 30,
+    userId: str | None = None,  # noqa: N803 - 与前端查询参数名一致
+) -> dict[str, Any]:
     """Search / Ask 次数、Token、错误率（**与用户侧同源**，不重复计算）。
 
     口径复用 ``account_overview``（它内部走 ``usage_summary`` + ``all_index_stats``），
-    只是把项目范围换成**全量**。这样后台数字与用户在首页看到的数字出自同一个函数——
-    否则两个页面会给出不同的\"检索次数\"，而谁也不知道该信哪个。
+    只是把项目范围换成**全量**或**某个用户的项目**。这样后台数字与用户在首页看到的数字
+    出自同一个函数——否则两个页面会给出不同的"检索次数"，而谁也不知道该信哪个。
+
+    ``userId``（用户 2026-09-15 要求"用户查询"）：不传 = 全站；
+    传了 = 只算那个人的项目（项目列表从 ``projects`` 表反查，不采信任意 id）。
     """
     require_admin(request)
     db = _db(request)
     manager = get_engine_manager(request)
     window = max(1, min(int(days), 3650))
-    listed = manager.list_projects()
+    all_listed = manager.list_projects()
+    if userId is None:
+        listed = all_listed
+    else:
+        owned = set(db.list_projects(userId))
+        listed = [item for item in all_listed if str(item["projectId"]) in owned]
     project_ids = [str(item["projectId"]) for item in listed]
     overview = account_overview(
         user_name="(all)",
@@ -404,6 +466,7 @@ def stats(request: Request, days: int = 30) -> dict[str, Any]:
     total = detail.total
     return {
         "days": window,
+        "userId": userId,
         "projectCount": len(project_ids),
         "search": detail.to_json(),
         "index": overview["index"],
@@ -411,6 +474,7 @@ def stats(request: Request, days: int = 30) -> dict[str, Any]:
         "errorRate": None if total == 0 else round(detail.failed / total, 4),
         "totalQueries": total,
         "tokens": db.used_tokens_sum(project_ids, days=window),
+        "owners": _owner_options(db),
     }
 
 
@@ -419,15 +483,21 @@ def stats(request: Request, days: int = 30) -> dict[str, Any]:
 
 @router.get("/api/admin/system")
 def system(request: Request) -> dict[str, Any]:
-    """系统状态：服务形态 + Embedding / LLM 是否可用（与 ``/healthz?deep=1`` 同源）。
+    """系统状态：服务形态 + Embedding / LLM 是否可用 + **VPS 内存占用**。
 
     为什么直接复用 ``healthz`` 的实现而不是各写一份：两处若分开算，后台说"embedding 正常"
     而探活说"不可用"时，运维只能猜哪个是真的。
+
+    TASK-110 追加 ``host``（用户 2026-09-15 要求"加一个 vps 当前内存占用情况"）：
+    与 ``healthz`` **同源**的信息在前，主机内存作为额外一节附在后面。
     """
     require_admin(request)
     from zace_service.routers.ops import healthz
+    from zace_service.stats import host_memory
 
-    return healthz(request, deep=1)
+    payload = healthz(request, deep=1)
+    payload["host"] = host_memory()
+    return payload
 
 
 # --------------------------------------------------------------------------- 辅助
@@ -470,6 +540,21 @@ def _project_owners(db: MetaDB) -> dict[str, str]:
         for project_id in db.list_projects(user.id):
             owners.setdefault(project_id, user.id)
     return owners
+
+
+def _owner_options(db: MetaDB) -> list[dict[str, Any]]:
+    """归属人下拉选项（后台“选择全部人员 / 筛选某个用户”用；用户 2026-09-15 要求）。
+
+    只回 ``{userId, name, userNo}`` 三个字段：下拉框只需要“看得懂的名字”，
+    把整份用户行（含项目数、占用）灌进去会让响应体随用户数线性膨胀。
+    按 ``user_no`` 升序（= 注册顺序），运营找人时与用户列表的顺序一致。
+    """
+    users = db.list_users(limit=MAX_LIMIT)
+    users.sort(key=lambda item: (item.user_no is None, item.user_no or 0))
+    return [
+        {"userId": user.id, "name": user.name, "userNo": user.user_no, "role": user.role}
+        for user in users
+    ]
 
 
 def _user_detail(user: User) -> dict[str, Any]:

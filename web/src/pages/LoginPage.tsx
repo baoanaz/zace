@@ -193,6 +193,25 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
             </label>
 
             {mode === "register" && (
+              <label className="block text-sm">
+                <span className="mb-1 block text-xs text-ink-muted">确认密码</span>
+                <input
+                  name="confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(event) => setConfirm(event.target.value)}
+                  className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary"
+                  required
+                />
+              </label>
+            )}
+
+            {/*
+              TASK-110（2026-09-15 用户要求）：邀请码排在**最后**（账户 → 密码 → 确认密码 → 邀请码）。
+              之前它夹在密码与确认密码之间，读起来像“密码的一部分”。
+            */}
+            {mode === "register" && (
               <div className="block text-sm">
                 <label className="block">
                   <span className="mb-1 block text-xs text-ink-muted">邀请码</span>
@@ -213,21 +232,6 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
                   目前是邀请制：没有邀请码请联系管理员获取。
                 </span>
               </div>
-            )}
-
-            {mode === "register" && (
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs text-ink-muted">确认密码</span>
-                <input
-                  name="confirm"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirm}
-                  onChange={(event) => setConfirm(event.target.value)}
-                  className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary"
-                  required
-                />
-              </label>
             )}
 
             {error !== null && <ErrorBlock error={error} />}

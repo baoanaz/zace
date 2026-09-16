@@ -263,6 +263,71 @@ export function ConfirmDialog({
 }
 
 /**
+ * 通用弹窗（TASK-110）：标题 + 任意内容，点遮罩/按 Esc/点叉都能关。
+ *
+ * 为什么不用原生 ``<dialog>``（``ConfirmDialog`` 用了）：那个的 API 适合“确认/取消”这类
+ * 固定动作，而本组件承载的是**任意表单**（如创建 Key），需要自由控制底部按钮与
+ * “提交中不许关”的行为。两个组件共存是有意的：简单确认继续用 ``ConfirmDialog``。
+ *
+ * ``onClose`` 传 ``undefined`` 时**禁止关闭**（提交中）——此时遮罩点击与 Esc 都不生效，
+ * 但**保留叉号并置灰**（而不是让它消失：突然少一个东西比一个禁用的按钮更令人不安）。
+ */
+export function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: ReactNode;
+  onClose?: () => void;
+  children: ReactNode;
+}) {
+  // Esc 关闭：提交中（onClose 未定义）时不响应。
+  useEffect(() => {
+    if (!onClose) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose?.();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      // 遮罩：点它关闭。用 button 而不是 div，键盘也能关（与 Layout 的抽屉遮罩同一手法）。
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink-primary/40 p-4 pt-16"
+    >
+      <button
+        type="button"
+        aria-label="关闭弹窗"
+        onClick={() => onClose?.()}
+        disabled={!onClose}
+        className="absolute inset-0 cursor-default"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === "string" ? title : undefined}
+        className="relative z-10 w-full max-w-md rounded-lg border border-ink-line bg-paper-card p-5 shadow-xl"
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <h2 className="text-sm font-semibold text-ink-primary">{title}</h2>
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={() => onClose?.()}
+            disabled={!onClose}
+            className="rounded px-1.5 text-ink-muted hover:bg-paper-base hover:text-ink-primary disabled:opacity-40"
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
  * 空态块（TASK-083）：**只用于"请求成功但没有数据"**。
  *
  * 为什么要有这个组件："0 条"与"后端坏了"在旧版看起来一样——用户分不清

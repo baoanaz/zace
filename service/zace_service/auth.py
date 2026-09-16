@@ -31,6 +31,8 @@ from zace_service.metadb import META_DB_FILENAME, MetaDB, User
 
 __all__ = [
     "LOCAL_USER_NAME",
+    "RANDOM_KEY_ALPHABET",
+    "RANDOM_KEY_CHARS",
     "SESSION_COOKIE",
     "TOKEN_PREFIX",
     "authenticate",
@@ -54,6 +56,10 @@ logger = get_logger("zace_service.auth")
 SESSION_COOKIE = "zace_session"
 #: API Key 前缀（``zace_`` + 随机串；库里只存哈希）。
 TOKEN_PREFIX = "zace_"
+#: 随机生成的 Key 正文长度（用户要求 16 位字母/数字；见 ``routers.auth.create_token``）。
+RANDOM_KEY_CHARS = 16
+#: 随机 Key 的字符集（大小写字母 + 数字；用户明确要求不含符号）。
+RANDOM_KEY_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 #: 本地模式的隐式账户名（不落 users 表：本地模式无账户概念，R34）。
 LOCAL_USER_NAME = "local"
 #: 会话有效期（30 天，卡内默认）。
@@ -101,8 +107,13 @@ def hash_api_token(raw: str) -> str:
 
 
 def create_api_token() -> tuple[str, str, str]:
-    """生成 ``(明文, 哈希, 前缀)``；明文只在创建响应里出现一次。"""
-    raw = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    """生成 ``(明文, 哈希, 前缀)``；明文只在创建响应里出现一次。
+
+    形态（用户 2026-09-15 要求）：``zace_`` + **16 位**字母/数字（不含 ``-``/``_``）。
+    熵：62¹⁶ ≈ 4.8e28，不可枚举。
+    """
+    body = "".join(secrets.choice(RANDOM_KEY_ALPHABET) for _ in range(RANDOM_KEY_CHARS))
+    raw = f"{TOKEN_PREFIX}{body}"
     return raw, hash_api_token(raw), raw[: len(TOKEN_PREFIX) + 6]
 
 

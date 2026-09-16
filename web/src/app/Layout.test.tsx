@@ -44,6 +44,7 @@ const PUBLIC_ACCOUNT: Account = {
   role: "public" as const,
   title: "旅人",
   earlyMemberNo: null,
+  userNo: 12,
   capabilities: { canCustomKey: false, quotaBytes: 500 * 1024 * 1024, earlyMemberNo: null, isAdmin: false },
 };
 
@@ -104,7 +105,6 @@ const NAV_LABELS = [
   "接入指南",
   "API Key",
   "历史记录",
-  "账户",
   "设置",
 ];
 const NAV_HREFS = [
@@ -113,7 +113,6 @@ const NAV_HREFS = [
   "/connect",
   "/keys",
   "/history",
-  "/account",
   "/settings",
 ];
 
@@ -125,7 +124,7 @@ function navLinkClass(label: string): string {
 }
 
 describe("主导航（TASK-086 §1 / TASK-088 §F / TASK-100 §需求4）", () => {
-  it("顺序为 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 账户 → 设置", () => {
+  it("顺序为 控制台 → 项目 → 接入指南 → API Key → 历史记录 → 设置", () => {
     renderLayout("/", PUBLIC_ACCOUNT);
 
     expect([...navLinks()].map((link) => link.textContent)).toEqual(NAV_LABELS);

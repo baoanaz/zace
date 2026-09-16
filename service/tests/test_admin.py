@@ -522,11 +522,90 @@ def test_project_module_reports_index_health(admin_env: SimpleNamespace) -> None
     body = ns.client.get("/api/admin/projects", headers=_auth(ns.admin_key)).json()
     item = next(row for row in body["projects"] if row["projectId"] == project)
     assert item["ownerId"] == ns.beta["userId"]
+    # 归属人显示**名字**（用户要求：一串 id 看不出什么意思）。
+    assert item["ownerName"] == "early"
+    assert item["ownerNo"] == ns.beta["userNo"]
     assert item["history"]["failed"] == 1
     assert item["history"]["lastState"] == "failed"
     assert item["lastError"] == "boom"
     assert item["lastErrors"] == 3
     assert item["lastSkipped"] == 6
+
+
+def test_project_module_sorts_by_usage_desc_and_filters_by_owner(
+    admin_env: SimpleNamespace,
+) -> None:
+    """项目列表：**按占用降序**，且可按用户筛选（用户 2026-09-15 要求）。"""
+    ns = admin_env
+    small = ns.manager.resolve_project("identity:small", "small").project_id
+    big = ns.manager.resolve_project("identity:big", "big").project_id
+    ns.meta_db.claim_project(ns.beta["userId"], small, "small")
+    ns.meta_db.claim_project(ns.public["userId"], big, "big")
+    # 用真实目录占用造出差异：往 big 的项目目录里塞一个大文件。
+    _seed_project_bytes(ns, big, 4096)
+    _seed_project_bytes(ns, small, 16)
+
+    all_rows = ns.client.get("/api/admin/projects", headers=_auth(ns.admin_key)).json()
+    sizes = [row["diskBytes"] for row in all_rows["projects"]]
+    assert sizes == sorted(sizes, reverse=True), f"必须按占用降序：{sizes}"
+    assert all_rows["totalBytes"] == sum(sizes)
+    # 下拉选项包含全部用户，按注册顺序。
+    names = [item["name"] for item in all_rows["owners"]]
+    assert names == ["boss", "early", "plain"]
+
+    only_beta = ns.client.get(
+        f"/api/admin/projects?userId={ns.beta['userId']}", headers=_auth(ns.admin_key)
+    ).json()
+    assert [row["projectId"] for row in only_beta["projects"]] == [small]
+
+    only_public = ns.client.get(
+        f"/api/admin/projects?userId={ns.public['userId']}", headers=_auth(ns.admin_key)
+    ).json()
+    assert [row["projectId"] for row in only_public["projects"]] == [big]
+
+
+def test_admin_can_delete_any_project(admin_env: SimpleNamespace) -> None:
+    """管理员删除任意项目：目录没了 + **归属行也清掉**（否则列表会出现幽灵项）。"""
+    ns = admin_env
+    project = ns.manager.resolve_project("identity:doomed", "doomed").project_id
+    ns.meta_db.claim_project(ns.beta["userId"], project, "doomed")
+    assert ns.manager.project_exists(project)
+    assert ns.meta_db.list_projects(ns.beta["userId"]) == [project]
+
+    response = ns.client.delete(
+        f"/api/admin/projects/{project}", headers=_auth(ns.admin_key)
+    )
+    assert response.status_code == 204, response.text
+    assert not ns.manager.project_exists(project)
+    assert ns.meta_db.list_projects(ns.beta["userId"]) == []
+    # 项目页（用户侧）也不再列出它。
+    listed = ns.client.get("/api/projects", headers=_auth(ns.beta_key)).json()
+    assert all(item["projectId"] != project for item in listed)
+
+
+def test_admin_delete_unknown_project_is_404(admin_env: SimpleNamespace) -> None:
+    response = admin_env.client.delete(
+        "/api/admin/projects/does-not-exist", headers=_auth(admin_env.admin_key)
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "project_not_found"
+
+
+def test_admin_delete_requires_admin(admin_env: SimpleNamespace) -> None:
+    """非管理员删项目 → 403（不能偷偷删别人的东西）。"""
+    ns = admin_env
+    project = ns.manager.resolve_project("identity:keep", "keep").project_id
+    ns.meta_db.claim_project(ns.public["userId"], project, "keep")
+    response = ns.client.delete(f"/api/admin/projects/{project}", headers=_auth(ns.public_key))
+    assert response.status_code == 403
+    assert ns.manager.project_exists(project), "被拒的删除不得真的删掉东西"
+
+
+def _seed_project_bytes(ns: SimpleNamespace, project_id: str, size: int) -> None:
+    """往项目的索引目录里塞一个指定大小的文件（造出可比较的占用）。"""
+    directory = ns.manager.project_dir(project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "seed.bin").write_bytes(b"\0" * size)
 
 
 # --------------------------------------------------------------------------- 统计 / 系统模块
@@ -559,11 +638,78 @@ def test_stats_match_usage_summary(admin_env: SimpleNamespace) -> None:
 
 
 def test_stats_error_rate_is_none_without_queries(admin_env: SimpleNamespace) -> None:
-    """没有调用时错误率是 ``None``——"没有调用"不是"错误率 0%"（诚实性口径）。"""
+    """没有调用时错误率是 ``None``——“没有调用”不是“错误率 0%”（诚实性口径）。"""
     body = admin_env.client.get("/api/admin/stats", headers=_auth(admin_env.admin_key)).json()
     assert body["totalQueries"] == 0
     assert body["errorRate"] is None
     assert body["tokens"] == 0
+
+
+def test_stats_can_be_scoped_to_one_user(admin_env: SimpleNamespace) -> None:
+    """统计可按用户查询（用户 2026-09-15 要求“下拉查询某个用户的数据”）。"""
+    ns = admin_env
+    beta_project = ns.manager.resolve_project("identity:s-beta", "s-beta").project_id
+    public_project = ns.manager.resolve_project("identity:s-public", "s-public").project_id
+    ns.meta_db.claim_project(ns.beta["userId"], beta_project, "s-beta")
+    ns.meta_db.claim_project(ns.public["userId"], public_project, "s-public")
+    for _ in range(2):
+        ns.meta_db.record_query(
+            project_id=beta_project,
+            mode="search",
+            query="beta-q",
+            latency_ms=10,
+            answerable=True,
+            used_tokens=50,
+            user_id=ns.beta["userId"],
+        )
+    ns.meta_db.record_query(
+        project_id=public_project,
+        mode="search",
+        query="public-q",
+        latency_ms=10,
+        answerable=True,
+        used_tokens=7,
+        user_id=ns.public["userId"],
+    )
+
+    everything = ns.client.get("/api/admin/stats", headers=_auth(ns.admin_key)).json()
+    assert everything["totalQueries"] == 3
+    assert everything["tokens"] == 107
+    assert everything["userId"] is None
+
+    only_beta = ns.client.get(
+        f"/api/admin/stats?userId={ns.beta['userId']}", headers=_auth(ns.admin_key)
+    ).json()
+    assert only_beta["userId"] == ns.beta["userId"]
+    assert only_beta["projectCount"] == 1
+    assert only_beta["totalQueries"] == 2
+    assert only_beta["tokens"] == 100
+
+
+def test_system_reports_host_memory(admin_env: SimpleNamespace) -> None:
+    """系统状态带 VPS 内存（用户 2026-09-15 要求）。
+
+    不断言具体数字（跑在不同机器上都不一样），只断言**字段契约 + 内部自洽**：
+    ``total = used + available`` 且比例落在 [0,1]。
+    """
+    body = admin_env.client.get("/api/admin/system", headers=_auth(admin_env.admin_key)).json()
+    host = body["host"]
+    assert set(host) == {
+        "totalBytes",
+        "availableBytes",
+        "usedBytes",
+        "usedRatio",
+        "availableBasis",
+        "reason",
+    }
+    if host["reason"] is not None:
+        # 非 Linux 环境：字段全 None，如实说明原因（不编 0）。
+        assert host["totalBytes"] is None
+        return
+    assert host["totalBytes"] > 0
+    assert host["usedBytes"] + host["availableBytes"] == host["totalBytes"]
+    assert 0.0 <= host["usedRatio"] <= 1.0
+    assert host["availableBasis"] in ("MemAvailable", "MemFree")
 
 
 def test_system_module_matches_healthz(admin_env: SimpleNamespace) -> None:

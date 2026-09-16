@@ -1,19 +1,21 @@
 /**
- * API Key 管理（TASK-071；TASK-110 §1.7 追加拓荒者特权展示与自定义表单）。
+ * API Key 管理（TASK-071；TASK-110 §1.7；2026-09-15 按用户要求改为弹窗式）。
+ *
+ * 版式（用户原话："这个页面只有现有的 Key 卡片，然后点击卡片右上角的创建 Key，出现一个弹窗"）：
+ *
+ * | 区域 | 内容 |
+ * |---|---|
+ * | 页面 | **只有** Key 列表卡片，右上角一个「创建 Key」 |
+ * | 弹窗第一行 | 名称 |
+ * | 弹窗第二行 | 自定义 Key（**仅拓荒者/管理员可见**） |
  *
  * 三条安全口径（Module/06 §2.2）：
- * 1. **明文只显示一次**：创建成功后短暂展示并提供复制，离开页面即无法再取；
- * 2. 列表接口**永不含明文与哈希**——页面也不缓存明文到 localStorage/sessionStorage；
- * 3. 自定义 Key 的输入框也不缓存（提交后立刻清空）。
- *
- * TASK-110 §1.7 的 UI 要求（用户原话："**刻意展示拓荒者特权**"）：
- *
- * - 有特权（拓荒者/管理员）→ 顶部显式横幅 ``🧭 拓荒者特权 · 可自定义 API Key`` + 自定义表单；
- * - 无特权（公测）→ **显式说明**"自定义 Key 是拓荒者专属"，而不是静默隐藏。
- *   静默隐藏会让人以为产品没有这个能力；显式说明才能形成对比与期待。
- *
- * 判断依据是后端返回的 ``capabilities.canCustomKey``（**不在这里写 role === "beta"**）：
- * 两处各写一份角色判断必然漂移，而漂移的表现是"页面上说能自定义、点了却 403"。
+ * 1. **明文只显示一次**（用户 2026-09-15 确认保留此纪律）：创建成功后在弹窗里展示并
+ *    提供复制，关掉即再取不到。列表接口**永不含明文与哈希**，页面也不缓存到 storage；
+ * 2. **无特权的用户看不到自定义行**（用户要求"普通用户看不见这个 key 行"）——
+ *    与旧版的"显示一行说明"不同，这次是**真的不渲染**：他点创建就得到一个随机 Key；
+ * 3. 判断依据为后端 ``capabilities.canCustomKey``，**不在这里写 ``role === "beta"``**：
+ *    两处各写一份角色判断必然漂移，而漂移的表现是"页面说能自定义、点了却 403"。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -27,22 +29,24 @@ import {
   listApiKeys,
   revokeApiKey,
 } from "../api/client";
-import { CopyButton, EmptyState, ErrorBlock, LoadingBlock, Page } from "../components/ui";
+import {
+  CopyButton,
+  EmptyState,
+  ErrorBlock,
+  LoadingBlock,
+  Modal,
+  Page,
+} from "../components/ui";
 import { formatTime } from "./DashboardPage";
 
-/** 自定义 Key 的最短长度（与后端 ``MIN_CUSTOM_KEY_CHARS`` 一致；仅做输入体验）。 */
-const MIN_CUSTOM_KEY_CHARS = 16;
-/** 自定义 Key 的固定前缀（用户要求"保证 zace_ 固定开头"）。 */
+/** 自定义 Key 的固定前缀（用户要求"必须以 zace_ 开头"）。 */
 const KEY_PREFIX = "zace_";
 
 export function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKeySummary[] | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [name, setName] = useState("");
-  const [customKey, setCustomKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<ApiKeyCreated | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -60,22 +64,6 @@ export function ApiKeysPage() {
     void load();
   }, [load]);
 
-  async function onCreate(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      setCreated(await createApiKey(name.trim(), customKey.trim()));
-      setName("");
-      setCustomKey("");
-      await load();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function onRevoke(key: ApiKeySummary) {
     const confirmed = window.confirm(
       `确认撤销 API Key「${key.name || key.prefix}」？\n\n撤销后使用该 Key 的客户端会立即失效（软删）。`,
@@ -89,8 +77,6 @@ export function ApiKeysPage() {
     }
   }
 
-  const canCustomKey = account?.capabilities.canCustomKey === true;
-
   return (
     <Page>
       <div>
@@ -100,95 +86,26 @@ export function ApiKeysPage() {
         </p>
       </div>
 
-      <PrivilegeBanner account={account} />
-
       {error !== null && <ErrorBlock error={error} />}
 
-      {created && (
-        <section className="rounded-lg border border-emerald-300 bg-emerald-50 p-4">
-          <h2 className="text-sm font-semibold text-emerald-900">
-            已创建：{created.name || created.prefix}
-          </h2>
-          <p className="mt-1 text-xs text-emerald-800">
-            这是<strong>唯一一次</strong>能看到完整 Key 的机会，请立即复制到客户端配置里。
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="flex-1 break-all rounded border border-ink-line bg-paper-card px-2 py-1 font-mono text-xs text-ink-primary">
-              {created.token}
-            </code>
-            <CopyButton text={created.token} label="复制 Key" />
-            <button
-              type="button"
-              onClick={() => setCreated(null)}
-              className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-900 hover:bg-emerald-100"
-            >
-              我已保存，隐藏
-            </button>
-          </div>
-        </section>
-      )}
-
-      <form
-        onSubmit={onCreate}
-        className="flex flex-wrap items-end gap-2 rounded-lg border border-ink-line bg-paper-card p-4 shadow-sm"
-      >
-        <label className="flex-1 text-sm">
-          <span className="mb-1 block text-xs text-ink-muted">名称（便于分辨用途）</span>
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="例如：家里的 Cursor"
-            className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 text-sm text-ink-primary"
-          />
-        </label>
-        {canCustomKey ? (
-          <label className="flex-1 text-sm">
-            <span className="mb-1 block text-xs text-ink-muted">
-              自定义 Key（留空 = 服务端随机生成）
-            </span>
-            <input
-              value={customKey}
-              onChange={(event) => setCustomKey(event.target.value)}
-              placeholder={`${KEY_PREFIX}my-laptop-key-2026`}
-              autoComplete="off"
-              className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 font-mono text-xs text-ink-primary"
-            />
-            <span className="mt-1 block text-[11px] text-ink-muted">
-              必须以 {KEY_PREFIX} 开头，其后至少 {MIN_CUSTOM_KEY_CHARS} 个字符
-              （字母、数字、- 与 _）。
-            </span>
-          </label>
-        ) : (
-          <p className="flex-1 rounded border border-dashed border-ink-line px-3 py-2 text-xs text-ink-muted">
-            🔒 自定义 API Key 是【拓荒者】专属特权：当前身份只能由服务端随机生成。
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded bg-accent-seal px-4 py-1.5 text-sm text-white disabled:opacity-40"
-        >
-          {busy ? "创建中…" : "创建 Key"}
-        </button>
-      </form>
-
       <section className="rounded-lg border border-ink-line bg-paper-card shadow-sm">
-        <header className="border-b border-ink-line/70 px-4 py-3">
+        <header className="flex items-center justify-between gap-3 border-b border-ink-line/70 px-4 py-3">
           <h2 className="text-sm font-semibold text-ink-primary">现有的 Key</h2>
+          <CreateKeyTrigger account={account} onClick={() => setCreating(true)} />
         </header>
         {keys === null ? (
           <LoadingBlock />
         ) : keys.length === 0 ? (
           <EmptyState
             title="还没有 API Key"
-            hint="用上方表单创建一把，再把完整 Key 配置到编辑器 / CLI 客户端里；只有创建那一刻能看到完整值。"
+            hint="点右上角「创建 Key」，再把完整 Key 配置到编辑器 / CLI 客户端里；只有创建那一刻能看到完整值。"
           />
         ) : (
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-ink-muted">
                 <th className="px-4 py-2 font-normal">名称</th>
-                <th className="px-4 py-2 font-normal">前缀</th>
+                <th className="px-4 py-2 font-normal">Key</th>
                 <th className="px-4 py-2 font-normal">来源</th>
                 <th className="px-4 py-2 font-normal">创建时间</th>
                 <th className="px-4 py-2 font-normal">最近使用</th>
@@ -226,40 +143,165 @@ export function ApiKeysPage() {
           </table>
         )}
       </section>
+
+      {creating && (
+        <CreateKeyDialog
+          account={account}
+          onClose={() => setCreating(false)}
+          onCreated={() => void load()}
+        />
+      )}
     </Page>
   );
 }
 
 /**
- * 特权横幅（TASK-110 §1.7）。
+ * 「创建 Key」按钮（列表卡片右上角）。
  *
- * 两种身份**都有话说**：有特权时宣称它（用户要求"刻意展示"），没有时说明它属于谁。
- * 只在 ``account`` 已加载时渲染——首帧还不知道身份就宣称什么都是错的。
+ * 为什么把它放在 header 的 ``actions`` 位而不是列表下方：用户明确要「点卡片右上角的创建 Key」，
+ * 而列表为空时它也是**唯一的入口**——放在下方会让空列表页面出现一大片空白。
  */
-function PrivilegeBanner({ account }: { account: Account | null }) {
-  if (account === null || account.isLocal) return null;
-  if (account.capabilities.canCustomKey) {
+function CreateKeyTrigger({
+  account,
+  onClick,
+}: {
+  account: Account | null;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      // 身份还没加载完就允许点：弹窗自己会按 account 决定显示哪几行，
+      // 而"等一下再点"是个没必要的限制。
+      className="rounded bg-accent-seal px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+      title={account?.capabilities.canCustomKey ? "创建随机 Key 或自定义 Key" : "创建一个 Key"}
+    >
+      创建 Key
+    </button>
+  );
+}
+
+/**
+ * 创建 Key 弹窗（用户 2026-09-15 指定的版式）。
+ *
+ * 两行：名称（必填可选，空则未命名）+ 自定义 Key（**仅特权身份渲染**）。
+ * 创建成功后**同一个弹窗**变成结果视图（展示明文 + 复制），而不是关掉再在页面上提示——
+ * 用户刚点的那一下与"拿到 Key"在同一个视觉上下文里，不容易漏掉那一次展示。
+ */
+function CreateKeyDialog({
+  account,
+  onClose,
+  onCreated,
+}: {
+  account: Account | null;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [customKey, setCustomKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [created, setCreated] = useState<ApiKeyCreated | null>(null);
+
+  const canCustomKey = account?.capabilities.canCustomKey === true;
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await createApiKey(name.trim(), customKey.trim());
+      setCreated(result);
+      onCreated();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (created !== null) {
     return (
-      <section
-        data-testid="privilege-banner"
-        className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
-      >
-        🧭 {account.title}特权 · 可自定义 API Key
-        {account.earlyMemberNo !== null && (
-          <span className="ml-2 font-mono text-xs text-amber-800">
-            编号 #{String(account.earlyMemberNo).padStart(3, "0")}
-          </span>
-        )}
-      </section>
+      <Modal title="Key 已创建" onClose={onClose}>
+        <p className="text-sm text-ink-muted">
+          这是<strong className="text-ink-primary">唯一一次</strong>能看到完整 Key 的机会，
+          请立即复制到客户端配置里。
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <code className="flex-1 break-all rounded border border-ink-line bg-paper-base px-2 py-1.5 font-mono text-xs text-ink-primary">
+            {created.token}
+          </code>
+          <CopyButton text={created.token} label="复制 Key" />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded bg-accent-seal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+          >
+            我已保存，关闭
+          </button>
+        </div>
+      </Modal>
     );
   }
+
   return (
-    <section
-      data-testid="privilege-banner"
-      className="rounded-lg border border-ink-line bg-paper-base px-4 py-3 text-xs text-ink-muted"
-    >
-      自定义 API Key（指定以 {KEY_PREFIX} 开头的 Key）是【拓荒者】专属特权；
-      当前身份（{account.title}）使用服务端随机生成的 Key。
-    </section>
+    <Modal title="创建 API Key" onClose={busy ? undefined : onClose}>
+      <form onSubmit={onSubmit} className="space-y-3">
+        <label className="block text-sm">
+          <span className="mb-1 block text-xs text-ink-muted">名称（便于分辨用途）</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="例如：家里的 Cursor"
+            autoFocus
+            className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 text-sm text-ink-primary"
+          />
+        </label>
+
+        {canCustomKey && (
+          <label className="block text-sm">
+            <span className="mb-1 flex flex-wrap items-center gap-x-2 text-xs">
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-900">
+                🧭 {account?.title}特权
+              </span>
+              <span className="text-ink-muted">可自定义 Key，必须以 {KEY_PREFIX} 开头</span>
+            </span>
+            <input
+              value={customKey}
+              onChange={(event) => setCustomKey(event.target.value)}
+              placeholder={`${KEY_PREFIX}my-laptop-key-2026`}
+              autoComplete="off"
+              className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 font-mono text-xs text-ink-primary"
+            />
+            <span className="mt-1 block text-[11px] text-ink-muted">
+              留空 = 服务端随机生成（{KEY_PREFIX} + 16 位字母数字）。
+            </span>
+          </label>
+        )}
+
+        {error !== null && <ErrorBlock error={error} />}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded border border-ink-line px-3 py-1.5 text-sm text-ink-primary hover:bg-paper-base disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="rounded bg-accent-seal px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? "创建中…" : "创建"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

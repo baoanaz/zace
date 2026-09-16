@@ -19,7 +19,6 @@ import { createBrowserRouter, Navigate, RouterProvider, useLocation } from "reac
 
 import { ApiError, type Account, getMe, getMeta } from "../api/client";
 import { LoadingBlock } from "../components/ui";
-import { AccountPage } from "../pages/AccountPage";
 import { AdminPage } from "../pages/AdminPage";
 import { ApiKeysPage } from "../pages/ApiKeysPage";
 import { ConnectPage } from "../pages/ConnectPage";
@@ -132,8 +131,9 @@ function buildRouter(options: {
         { path: "keys", element: <Guard><ApiKeysPage /></Guard> },
         { path: "history", element: <Guard><HistoryPage /></Guard> },
         { path: "connect", element: <Guard><ConnectPage /></Guard> },
-        // TASK-110：账户页（头衔 / 编号 / 特权与额度）与管理员后台。
-        { path: "account", element: <Guard><AccountPage /></Guard> },
+        // TASK-110：账户信息已**合并进控制台**（用户 2026-09-15 要求），因此 /account
+        // 保留为跳转（外部链接与文档里出现过，不能让它 404）。
+        { path: "account", element: <Navigate to="/" replace /> },
         {
           path: "admin",
           // **双重门禁**：前端只是"不给入口"，真正的门禁是后端的 require_admin（每个
