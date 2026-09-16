@@ -137,6 +137,11 @@ paths:
       tags: [auth]
       summary: 删除本用户的 LLM 配置（幂等：本来就没配也返回 204）
       responses: { '204': { description: No Content } }
+  /api/auth/llm-config/test:
+    post:
+      tags: [auth]
+      summary: LLM 连接自检（TASK-113；L1 探测 /v1/models，deep=true 叠加一次真实最小请求）
+      responses: { '200': { description: ConnectionTestResult（ok/message/协议与模型信息，不含 key） }, '400': { description: invalid_llm_config } }
   /api/auth/tokens:
     post:
       tags: [auth]

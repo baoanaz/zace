@@ -24,12 +24,46 @@ import { useEffect, useState } from "react";
 
 import {
   type DeploymentMeta,
+  type LlmProtocol,
+  type LlmTestResult,
   deleteUserLlmConfig,
   errorHint,
   getMeta,
   saveUserLlmConfig,
+  testUserLlmConfig,
 } from "../api/client";
 import { Card, ErrorBlock, LoadingBlock, Page } from "../components/ui";
+
+/**
+ * 协议下拉框的选项（TASK-113 / D-47）。
+ *
+ * **为什么在前端写一份而不是全从 `/api/meta` 取**：`label` 是 UI 文案（中文说明 + 端点），
+ * 服务端只给机器名（`openai`/`responses`/`anthropic`）与“支持哪些”列表。这样新增协议时
+ * 服务端与前端各改一处，而不是让服务端返回界面文案。
+ *
+ * `hint` 里写清每种协议打哪个端点：用户选协议时真正要对照的就是“我的网关支持哪个端点”。
+ */
+const PROTOCOL_OPTIONS: ReadonlyArray<{
+  value: LlmProtocol;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "openai",
+    label: "OpenAI Chat Completions",
+    hint: "/v1/chat/completions（最常见；默认）",
+  },
+  {
+    value: "responses",
+    label: "OpenAI Responses",
+    hint: "/v1/responses（较新的 OpenAI 协议；DeepSeek 新模型常用）",
+  },
+  {
+    value: "anthropic",
+    label: "Anthropic Messages",
+    hint: "/v1/messages（Claude 家族与部分中转网关）",
+  },
+];
 
 export function SettingsPage() {
   const [meta, setMeta] = useState<DeploymentMeta | null>(null);
@@ -43,6 +77,11 @@ export function SettingsPage() {
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  //: 协议（TASK-113）：默认 openai（与升级前行为一致）。
+  const [protocol, setProtocol] = useState<LlmProtocol>("openai");
+  //: 自检结果（null = 还没测过）；保存/清除/改动表单后失效，避免绿灯留在旧输入上。
+  const [testResult, setTestResult] = useState<LlmTestResult | null>(null);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -52,6 +91,7 @@ export function SettingsPage() {
         // 用当前生效值预填"非敏感"字段（Key 永不预填——服务端不返回它）。
         setModel(resolved.config.llm.model ?? "");
         setBaseUrl(resolved.config.llm.baseUrl ?? "");
+        setProtocol(resolved.config.llm.protocol ?? "openai");
       } catch (err) {
         setError(err);
       }
@@ -64,6 +104,40 @@ export function SettingsPage() {
     setMeta(resolved);
     setModel(resolved.config.llm.model ?? "");
     setBaseUrl(resolved.config.llm.baseUrl ?? "");
+    setProtocol(resolved.config.llm.protocol ?? "openai");
+  }
+
+  async function onTest() {
+    setTesting(true);
+    setNotice(null);
+    setSaveError(null);
+    setTestResult(null);
+    try {
+      // L1：零成本探测（验证 key、模型名、协议声明）。
+      setTestResult(
+        await testUserLlmConfig({ model, baseUrl, apiKey, protocol, deep: false }),
+      );
+    } catch (err) {
+      setSaveError(err);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function onTestDeep() {
+    setTesting(true);
+    setNotice(null);
+    setSaveError(null);
+    try {
+      // L2：真发一次最小请求（能测出“模型列表正常但推理失败”）。
+      setTestResult(
+        await testUserLlmConfig({ model, baseUrl, apiKey, protocol, deep: true }),
+      );
+    } catch (err) {
+      setSaveError(err);
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function onSave() {
@@ -71,9 +145,10 @@ export function SettingsPage() {
     setNotice(null);
     setSaveError(null);
     try {
-      await saveUserLlmConfig({ model, baseUrl, apiKey });
+      await saveUserLlmConfig({ model, baseUrl, apiKey, protocol });
       // 提交后立即从组件状态清除 key（卡内安全口径：它不该在内存里多留一秒）。
       setApiKey("");
+      setTestResult(null);
       await refresh();
       setNotice("已保存：之后 ask_project 会用你的配置");
     } catch (err) {
@@ -90,6 +165,7 @@ export function SettingsPage() {
     try {
       await deleteUserLlmConfig();
       setApiKey("");
+      setTestResult(null);
       await refresh();
       setNotice("已清除：之后 ask_project 回落服务端默认");
     } catch (err) {
@@ -171,17 +247,51 @@ export function SettingsPage() {
             <input
               name="llmModel"
               value={model}
-              onChange={(event) => setModel(event.target.value)}
+              onChange={(event) => {
+                setModel(event.target.value);
+                setTestResult(null);
+              }}
               placeholder="deepseek-flash"
               className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
             />
           </Field>
 
-          <Field label="接口地址" hint="OpenAI 兼容的 /chat/completions 端点">
+          {/**
+           * 协议选择（TASK-113）：选错协议会表现为“保存成功但 ask 持续 503”，
+           * 因此把它变成显式选项 + 可测试（下方的“测试连接”会回报该模型声明支持哪些协议）。
+           */}
+          <Field
+            label="协议"
+            hint={PROTOCOL_OPTIONS.find((item) => item.value === protocol)?.hint ?? ""}
+          >
+            <select
+              name="llmProtocol"
+              value={protocol}
+              onChange={(event) => {
+                setProtocol(event.target.value as LlmProtocol);
+                setTestResult(null);
+              }}
+              className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 text-sm text-ink-primary disabled:opacity-60"
+            >
+              {PROTOCOL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field
+            label="接口地址"
+            hint="base URL（例 https://host/v1）；不要填到 /chat/completions"
+          >
             <input
               name="llmBaseUrl"
               value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
+              onChange={(event) => {
+                setBaseUrl(event.target.value);
+                setTestResult(null);
+              }}
               placeholder="https://api.example.com/v1"
               className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
             />
@@ -192,14 +302,17 @@ export function SettingsPage() {
               name="llmApiKey"
               type="password"
               value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setTestResult(null);
+              }}
               autoComplete="off"
               placeholder={llm.apiKeyConfigured ? "已配置（留空则不改）" : "sk-..."}
               className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm text-ink-primary disabled:opacity-60"
             />
           </Field>
 
-          <div className="flex gap-2 pt-1">
+          <div className="flex flex-wrap gap-2 pt-1">
             <button
               type="submit"
               disabled={busy}
@@ -209,7 +322,27 @@ export function SettingsPage() {
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || testing}
+              onClick={() => {
+                void onTest();
+              }}
+              className="rounded border border-ink-line px-4 py-1.5 text-sm text-ink-primary hover:bg-paper-base disabled:opacity-40"
+            >
+              {testing ? "测试中…" : "测试连接"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || testing}
+              onClick={() => {
+                void onTestDeep();
+              }}
+              className="rounded border border-ink-line px-4 py-1.5 text-sm text-ink-primary hover:bg-paper-base disabled:opacity-40"
+            >
+              测试连接（发真实请求）
+            </button>
+            <button
+              type="button"
+              disabled={busy || testing}
               onClick={() => {
                 void onClear();
               }}
@@ -220,14 +353,79 @@ export function SettingsPage() {
           </div>
         </form>
 
+        {testResult !== null && <TestResultPanel result={testResult} />}
+
         {!llm.configured && !usingUser && llm.missingEnv.length > 0 && (
           <p className="mt-3 text-xs text-amber-700">
             尚未配置总结模型。请在上方填写模型名、接口地址和 API Key；保存后
             ask_project 才会生成总结，未配置时只返回检索结果。
           </p>
         )}
+
+        <p className="mt-3 text-xs text-ink-muted">
+          提示：先点「测试连接」验证地址/Key/模型名/协议（零成本），确认通过后再保存。
+          如果上游声明该模型不支持你选的协议，「测试连接」会直接给出建议协议。
+        </p>
       </Card>
     </Page>
+  );
+}
+
+function TestResultPanel({ result }: { result: LlmTestResult }) {
+  /**
+   * 自检结果面板（TASK-113）。
+   *
+   * 为什么要展示这么多字段而不是一个绿灯：用户真正需要知道的是**下一步该改什么**。
+   * 模型未找到时列出可用模型名、协议不匹配时给出建议值，都是从“为什么失败”到“怎么修”
+   * 的最短路径；而这两个场景正是实测中真实发生过的配置错误。
+   */
+  const tone = result.ok
+    ? "border-emerald-700 text-emerald-800"
+    : "border-amber-700 text-amber-800";
+  return (
+    <div
+      data-testid="llm-test-result"
+      className={`mt-3 rounded border px-3 py-2 text-xs ${tone}`}
+    >
+      <p className="font-medium" data-testid="llm-test-status">
+        {result.ok ? "✓ " : "✕ "}
+        {result.message}
+      </p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-ink-muted">
+        <dt>协议</dt>
+        <dd data-testid="llm-test-protocol">
+          {result.protocolLabel ?? result.protocol}
+        </dd>
+        <dt>端点</dt>
+        <dd className="break-all font-mono">{result.endpoint}</dd>
+        {result.modelFound !== null && result.modelFound !== undefined && (
+          <>
+            <dt>模型</dt>
+            <dd>{result.modelFound ? "已找到" : "未在上游列表中"}</dd>
+          </>
+        )}
+        {result.supportedProtocols !== undefined && result.supportedProtocols.length > 0 && (
+          <>
+            <dt>上游声明</dt>
+            <dd>{result.supportedProtocols.join(" / ")}</dd>
+          </>
+        )}
+        {result.suggestedProtocol && result.protocolMismatch && (
+          <>
+            <dt>建议</dt>
+            <dd data-testid="llm-test-suggestion">
+              把协议改为 {result.suggestedProtocol}
+            </dd>
+          </>
+        )}
+        {result.detail && (
+          <>
+            <dt>上游报错</dt>
+            <dd className="break-all font-mono">{result.detail}</dd>
+          </>
+        )}
+      </dl>
+    </div>
   );
 }
 

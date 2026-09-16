@@ -214,6 +214,17 @@ def _copy_schema_template(target: Path) -> bool:
         _SCHEMA_TEMPLATE = None
         return False
 
+#: ``user_llm_config`` 的**增量列**（TASK-113）：与其它表共用 :func:`_add_columns` 路径。
+#:
+#: 旧行（升级前配过 LLM 的用户）该列为 ``NULL`` → ``llmconfig._user_protocol`` 回落服务端
+#: 默认。为什么不回填 ``'openai'``：升级前那行配置本来就跑在 OpenAI 协议上，回填与回落
+#: 的结果一样；但**不回填**能让“用户从未选过协议”与“用户明确选了 openai”在库里可区分，
+#: 将来若服务端默认改成别的协议，前者会跟着走（符合“没表态就听默认”的语义）。
+_USER_LLM_CONFIG_COLUMNS: tuple[tuple[str, str], ...] = (
+    #: 上游协议：'openai' | 'responses' | 'anthropic'（取值域见 ``zace_service.llmprotocol``）。
+    ("protocol", "TEXT"),
+)
+
 #: ``users`` 的**增量列**（TASK-110 §3.1）：与 :data:`_AUDIT_COLUMNS` 同一套 ALTER 路径。
 #:
 #: 旧库里没有这些列——TASK-110 之前的账户全是"谁都能注册"的平权用户，迁移后它们
@@ -516,12 +527,16 @@ class LlmConfigRecord:
     created_at: int
     updated_at: int
 
+    #: 上游协议（TASK-113 / D-47）；``None`` = 旧行（迁移前写入）→ 回落服务端默认。
+    protocol: str | None = None
+
     def to_json(self) -> dict[str, Any]:
         """对外形态：**只有 "key 已配置" 这个布尔**，不含 key 本身或其任何可测量属性。"""
         return {
             "model": self.model,
             "baseUrl": self.base_url,
             "apiKeyConfigured": bool(self.api_key),
+            "protocol": self.protocol,
             "updatedAt": self.updated_at,
         }
 
@@ -1352,7 +1367,7 @@ class MetaDB:
         **内部专用**：返回值含明文 key，严禁直接序列化进 HTTP 响应。
         """
         row = self._connect().execute(
-            "SELECT user_id, model, base_url, api_key, created_at, updated_at"
+            "SELECT user_id, model, base_url, api_key, protocol, created_at, updated_at"
             " FROM user_llm_config WHERE user_id = ?",
             (user_id,),
         ).fetchone()
@@ -1365,6 +1380,7 @@ class MetaDB:
         model: str,
         base_url: str,
         api_key: str | None = None,
+        protocol: str | None = None,
         now: int | None = None,
     ) -> LlmConfigRecord:
         """写入（或覆盖）该用户的 LLM 配置。
@@ -1372,22 +1388,30 @@ class MetaDB:
         ``api_key=None`` 表示**保持不变**（"只改模型名不想重输 key"——卡内 §C-3 的
         "``apiKey`` 传空串表示保持不变"）。首次写入时 key 不能为空（没有旧值可继承）→
         :class:`ValueError`，由路由层转 400（这里是唯一能判断"是不是首次"的地方）。
+
+        ``protocol``（TASK-113）：``None`` 表示**保持不变**（与 ``api_key`` 同一语义——
+        用户只改模型名时不该把他选的协议抹掉）。首次写入为 ``None`` 则存 ``NULL``，
+        读取时回落服务端默认。
         """
         current = int(now if now is not None else time.time())
         existing = self.get_llm_config(user_id)
         resolved_key = api_key if api_key is not None else (existing.api_key if existing else None)
         if not resolved_key:
             raise ValueError("首次保存必须提供 apiKey（之后可留空表示保持不变）")
+        resolved_protocol = (
+            existing.protocol if protocol is None and existing is not None else protocol
+        )
         created = existing.created_at if existing is not None else current
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO user_llm_config"
-                " (user_id, model, base_url, api_key, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)"
+                " (user_id, model, base_url, api_key, protocol, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(user_id) DO UPDATE SET"
                 " model = excluded.model, base_url = excluded.base_url,"
-                " api_key = excluded.api_key, updated_at = excluded.updated_at",
-                (user_id, model, base_url, resolved_key, created, current),
+                " api_key = excluded.api_key, protocol = excluded.protocol,"
+                " updated_at = excluded.updated_at",
+                (user_id, model, base_url, resolved_key, resolved_protocol, created, current),
             )
         return LlmConfigRecord(
             user_id=user_id,
@@ -1396,6 +1420,7 @@ class MetaDB:
             api_key=resolved_key,
             created_at=created,
             updated_at=current,
+            protocol=resolved_protocol,
         )
 
     def delete_llm_config(self, user_id: str) -> bool:
@@ -1644,6 +1669,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "index_runs", _INDEX_RUN_COLUMNS)
     _add_columns(conn, "users", _USER_COLUMNS)
     _add_columns(conn, "api_tokens", _TOKEN_COLUMNS)
+    _add_columns(conn, "user_llm_config", _USER_LLM_CONFIG_COLUMNS)
     _backfill_user_no(conn)
     # 索引在列存在之后建（见 _AUDIT_INDEXES 的注释：放 _SCHEMA 里会让旧库打开直接失败）。
     for statement in _AUDIT_INDEXES:
@@ -1672,6 +1698,10 @@ def _backfill_user_no(conn: sqlite3.Connection) -> None:
 
 
 def _llm_config_record(row: sqlite3.Row) -> LlmConfigRecord:
+    # ``protocol`` 是 TASK-113 的增量列：旧库迁移后的行该列为 ``NULL``（→ 回落服务端默认），
+    # 用 ``row.keys()`` 判存在性可容"测试手搭最小表"与"迁移前后列集合不同"两种情况
+    # （与 ``_user`` 的既有口径一致：缺列取默认值，不编造）。
+    keys = set(row.keys())
     return LlmConfigRecord(
         user_id=str(row["user_id"]),
         model=str(row["model"]),
@@ -1679,6 +1709,7 @@ def _llm_config_record(row: sqlite3.Row) -> LlmConfigRecord:
         api_key=str(row["api_key"]),
         created_at=int(row["created_at"]),
         updated_at=int(row["updated_at"]),
+        protocol=str(row["protocol"]) if "protocol" in keys and row["protocol"] else None,
     )
 
 

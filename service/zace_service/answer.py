@@ -28,7 +28,7 @@ import math
 import re
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -37,9 +37,22 @@ from zace_core.contextpack import render_evidence_for_prompt
 from zace_core.types import ContextPack, EvidenceItem, Flow
 
 from zace_service.config import Settings
+from zace_service.llmprotocol import (
+    DEFAULT_PROTOCOL,
+    ProtocolShapeError,
+    normalize_protocol,
+    protocol_endpoint,
+)
+from zace_service.llmprotocol import (
+    build_request as build_protocol_request,
+)
+from zace_service.llmprotocol import (
+    extract_text as extract_protocol_text,
+)
 from zace_service.logging import get_logger, redact_text, register_secret
 
 __all__ = [
+    "DEFAULT_PROTOCOL",
     "ANSWER_SECTIONS",
     "CONNECT_TIMEOUT_S",
     "DEFAULT_BACKOFF_BASE",
@@ -56,6 +69,7 @@ __all__ = [
     "AnswerUnavailableError",
     "CitationCheck",
     "HttpAnswerProvider",
+    "HttpJsonProvider",
     "answer_question",
     "build_provider",
     "build_user_prompt",
@@ -175,15 +189,22 @@ def chat_completions_endpoint(base_url: str) -> str:
 
     与 ``core.embedding.api.embeddings_endpoint`` 同一形状：用户既可能填
     ``http://host:8080/v1``（本卡 ``.env`` 的写法）也可能填 ``http://host:8080``。
+
+    TASK-113 起改为 :func:`zace_service.llmprotocol.protocol_endpoint` 的 ``openai`` 特例
+    （同一实现，新增的能力是"误粘完整端点也能纠正"）——返回值与 TASK-088 **逐字相同**。
     """
-    base = base_url.strip().rstrip("/")
-    if not base:
-        raise AnswerNotConfiguredError("ANSWER_BASE_URL 不能为空")
-    return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+    try:
+        return protocol_endpoint(base_url, DEFAULT_PROTOCOL)
+    except ValueError as exc:
+        raise AnswerNotConfiguredError(str(exc)) from None
 
 
-class HttpAnswerProvider:
-    """OpenAI-compatible ``/chat/completions`` provider（唯一实现；无新依赖）。
+class HttpJsonProvider:
+    """HTTP JSON provider 的**共通部分**（TASK-113）：超时 / 重试 / 退避 / 脱敏只有一份。
+
+    协议差异只有两处，由子类（或 ``protocol`` 参数）给出："发什么包"
+    （``llmprotocol.build_request``）与"怎么读回复"（``llmprotocol.extract_text``）。
+    这样新增协议不必复制重试循环——而重试/退避/脱敏恰恰是最容易在复制中漂移的部分。
 
     - 超时：整体 ``timeout_s`` / 连接 ``CONNECT_TIMEOUT_S``；
     - 重试：网络异常与 :data:`RETRY_STATUS` ≤ ``max_retries`` 次，指数退避，尊重 ``Retry-After``；
@@ -196,6 +217,7 @@ class HttpAnswerProvider:
         base_url: str,
         api_key: str,
         model: str,
+        protocol: str = DEFAULT_PROTOCOL,
         timeout_s: float = 60.0,
         connect_timeout_s: float = CONNECT_TIMEOUT_S,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -209,7 +231,12 @@ class HttpAnswerProvider:
             raise AnswerNotConfiguredError("ANSWER_API_KEY 不能为空")
         if not model.strip():
             raise AnswerNotConfiguredError("ANSWER_MODEL 不能为空")
-        self._endpoint = chat_completions_endpoint(base_url)
+        # 协议非法 → 构造期即报错（配置错误要在"保存/启动"时暴露，而不是首次 ask 才失败）。
+        try:
+            self._protocol = normalize_protocol(protocol)
+            self._endpoint = protocol_endpoint(base_url, self._protocol)
+        except ValueError as exc:
+            raise AnswerNotConfiguredError(str(exc)) from None
         self._api_key = api_key
         self._model = model
         # 登记明文 key：全仓 JSON 日志的 RedactingFilter 会把它抹成 ***（第二道防线）。
@@ -227,6 +254,11 @@ class HttpAnswerProvider:
         return self._model
 
     @property
+    def protocol(self) -> str:
+        """本次实际使用的协议（D-47：写进 ``/api/meta`` 与日志，供用户核对）。"""
+        return self._protocol
+
+    @property
     def endpoint(self) -> str:
         """请求地址（**不含 key**；可用于日志与设置页自检）。"""
         return self._endpoint
@@ -237,19 +269,15 @@ class HttpAnswerProvider:
 
     def complete(self, *, system: str, user: str, max_tokens: int, temperature: float) -> str:
         """一次 grounded 调用（Module/04 §3：恰好一次调用，重试只针对传输失败）。"""
-        payload = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_tokens": int(max_tokens),
-            "temperature": float(temperature),
-        }
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        payload, headers = build_protocol_request(
+            self._protocol,
+            model=self._model,
+            api_key=self._api_key,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         last_error: AnswerError | None = None
         for attempt in range(self._max_retries + 1):
             try:
@@ -267,13 +295,21 @@ class HttpAnswerProvider:
             else:
                 if response.status_code in (401, 403):
                     # 凭据/模型名无效：重试没有意义（Module/04 §6 归入同一条降级路径）。
+                    # TASK-113：带上协议名——"密钥无效"与"协议不匹配"在用户侧都是 401/403，
+                    # 而修法完全不同（换 key vs 换协议），不写清就只能靠猜。
                     raise AnswerAuthError(
-                        f"总结模型拒绝凭据（HTTP {response.status_code}）："
-                        "请检查 ANSWER_API_KEY / ANSWER_MODEL"
+                        f"总结模型拒绝凭据（HTTP {response.status_code}，协议 {self._protocol}）："
+                        "请检查 ANSWER_API_KEY / ANSWER_MODEL / 协议是否匹配该模型"
                     )
                 if response.status_code in RETRY_STATUS:
+                    # TASK-113：把上游响应体摘要（脱敏、截断）带进降级原因——实测 503 时不带
+                    # 摘要会让"协议不匹配"这种根因完全不可见（用户只看到"暂时不可用"）。
+                    # 摘要**不回显给调用方**（routers 层只记日志），因此不破 D-26 的脱敏纪律。
+                    detail = _short(response.text)
+                    suffix = f"：{_redact(detail, self._api_key)}" if detail else ""
                     last_error = AnswerUnavailableError(
                         f"总结模型返回 HTTP {response.status_code}"
+                        f"（协议 {self._protocol}）{suffix}"
                     )
                     self._sleep_backoff(attempt, response)
                     continue
@@ -302,20 +338,63 @@ class HttpAnswerProvider:
             self._sleep(delay)
 
     def _extract_content(self, response: httpx.Response) -> str:
-        """取 ``choices[0].message.content``；形状不对/空白 → :class:`AnswerResponseError`。"""
+        """按协议抽答案文本；形状不对/空白 → :class:`AnswerResponseError`。
+
+        协议差异委托给 :func:`zace_service.llmprotocol.extract_text`（三种形状的读取规则
+        在那里被穷举测试）。此处只做"协议异常 → 降级异常"的转换与脱敏。
+
+        reasoning 模型可能只产出 reasoning、正文为空：如实报"空回答"，由上层降级
+        （绝不把空串当答案返回给用户）。
+        """
         try:
             body: Any = response.json()
         except ValueError as exc:
             detail = _redact(type(exc).__name__, self._api_key)
             raise AnswerResponseError(f"总结模型响应不是 JSON：{detail}") from None
-        choices = body.get("choices") if isinstance(body, Mapping) else None
-        message = choices[0].get("message") if isinstance(choices, Sequence) and choices else None
-        content = message.get("content") if isinstance(message, Mapping) else None
-        if not isinstance(content, str) or not content.strip():
-            # reasoning 模型可能只产出 reasoning、content 为空：如实报"空回答"，
-            # 由上层降级（绝不把空串当答案返回给用户）。
-            raise AnswerResponseError("总结模型返回了空回答（content 为空）")
-        return content.strip()
+        try:
+            return extract_protocol_text(self._protocol, body)
+        except ProtocolShapeError as exc:
+            raise AnswerResponseError(
+                f"总结模型返回了空回答（协议 {self._protocol}）：{exc}"
+            ) from None
+        except ValueError as exc:  # 不支持的协议（构造期已拦，防御性）
+            raise AnswerResponseError(str(exc)) from None
+
+
+class HttpAnswerProvider(HttpJsonProvider):
+    """OpenAI-compatible ``/chat/completions`` provider（TASK-088 的默认协议）。
+
+    TASK-113 起它只是 :class:`HttpJsonProvider` 的 ``openai`` 特例：公开行为（端点、请求体、
+    响应抽取、重试、脱敏）与升级前**逐字相同**，既有测试是回归护栏。需要其它协议时直接用
+    基类传 ``protocol``（见 ``llmconfig.build_provider_for``），不必新增子类。
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        protocol: str = DEFAULT_PROTOCOL,
+        timeout_s: float = 60.0,
+        connect_timeout_s: float = CONNECT_TIMEOUT_S,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        backoff_base: float = DEFAULT_BACKOFF_BASE,
+        client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            protocol=protocol,
+            timeout_s=timeout_s,
+            connect_timeout_s=connect_timeout_s,
+            max_retries=max_retries,
+            backoff_base=backoff_base,
+            client=client,
+            sleep=sleep,
+        )
 
 
 def _redact(text: str, secret: str) -> str:
@@ -340,7 +419,8 @@ def build_provider(
 
     三个必填项来自 ``ANSWER_BASE_URL`` / ``ANSWER_API_KEY`` / ``ANSWER_MODEL``；
     ``ANSWER_TIMEOUT_S`` / ``ANSWER_MAX_TOKENS`` / ``ANSWER_TEMPERATURE`` 有内置默认值
-    （改 env 即改行为，代码里没有第二套常量）。
+    （改 env 即改行为，代码里没有第二套常量）；``ANSWER_PROTOCOL``（TASK-113，D-47）
+    选择上游协议，未配置时等于升级前的行为（``openai``）。
     """
     if not settings.answer_configured:
         return None
@@ -348,6 +428,7 @@ def build_provider(
         base_url=str(settings.answer_base_url),
         api_key=str(settings.answer_api_key),
         model=str(settings.answer_model),
+        protocol=normalize_protocol(settings.answer_protocol),
         timeout_s=settings.answer_timeout_s,
         client=client,
     )

@@ -48,10 +48,14 @@ function stubMeta(meta: Partial<DeploymentMeta> & { config: DeploymentMeta["conf
  *
  * 返回的 `calls` 让断言能看清
  * “发了什么请求、请求体里有什么”——尤其是**key 只出现在 PUT 体里、不进任何其它字段**。
+ *
+ * TASK-113：`testResponse` 可指定 `/api/auth/llm-config/test` 的响应体（默认 ok=true），
+ * 与 PUT/DELETE 分开处理——自检是独立端点。
  */
 function stubMetaAndWrites(
   meta: Partial<DeploymentMeta> & { config: DeploymentMeta["config"] },
   refresh?: Partial<DeploymentMeta> & { config: DeploymentMeta["config"] },
+  testResponse?: Record<string, unknown>,
 ) {
   const body: DeploymentMeta = {
     version: "0.0.1",
@@ -80,6 +84,25 @@ function stubMetaAndWrites(
         return new Response(JSON.stringify(payload), { status: 200 });
       }
       if (method === "DELETE") return new Response(null, { status: 204 });
+      // TASK-113：自检端点有独立的响应形状。
+      if (url.includes("/llm-config/test")) {
+        return new Response(
+          JSON.stringify(
+            testResponse ?? {
+              ok: true,
+              message: "连通（/v1/models 可访问，模型存在）",
+              protocol: "responses",
+              protocolLabel: "OpenAI Responses（/v1/responses）",
+              endpoint: "https://my.llm/v1/responses",
+              modelFound: true,
+              supportedProtocols: ["openai", "responses"],
+              protocolMismatch: false,
+              checks: ["models"],
+            },
+          ),
+          { status: 200 },
+        );
+      }
       return new Response(
         JSON.stringify({ model: "m", baseUrl: "u", apiKeyConfigured: true, updatedAt: 1, source: "user" }),
         { status: 200 },
@@ -176,6 +199,8 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
       model: "my-model",
       baseUrl: "https://my.llm/v1",
       apiKey: "sk-my-secret",
+      // TASK-113：协议随保存一起提交（下拉框当前值，未改则为当前生效值）。
+      protocol: "openai",
     });
     // 保存后重新拉取生效值（否则顶部"当前"会停在旧值上）。
     await waitFor(() => expect(calls.filter((call) => call.method === "GET").length).toBeGreaterThan(1));
@@ -270,5 +295,159 @@ describe("设置页（TASK-088 §F / TASK-100 §需求9）", () => {
     expect(screen.queryByText("部署形态")).not.toBeInTheDocument();
     // 向量模型信息也移出（→ 控制台的「服务模型」卡）。
     expect(screen.queryByText(/检索向量模型/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * TASK-113（D-47）：协议选择 + 连接自检。
+ *
+ * 守三件事：
+ * 1. **协议是显式选项**，且用当前生效值回填（而不是默默用 openai）；
+ * 2. **测试连接真的发请求到自检端点**（且不写库：不带 PUT/DELETE）；
+ * 3. **失败时要给出下一步**（建议协议 / 可用模型名），而不是只给一个红叉。
+ */
+describe("设置页：LLM 多协议与连接自检（TASK-113）", () => {
+  const BASE_META = {
+    embedding: { mode: "api", configured: true, missingEnv: [] },
+    llm: {
+      configured: true,
+      apiKeyConfigured: true,
+      missingEnv: [],
+      model: "deepseek-v4-flash",
+      baseUrl: "https://ai.cviauto.cn/ai/transit",
+      protocol: "responses" as const,
+      supportedProtocols: ["openai", "responses", "anthropic"],
+    },
+  };
+
+  it("协议下拉框用当前生效值回填（用户能看出实际在用什么）", async () => {
+    stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+
+    const select = (await screen.findByLabelText(/协议/)) as HTMLSelectElement;
+    expect(select.value).toBe("responses");
+    // 三种协议都在选项里（用户可切换）。
+    const values = Array.from(select.options).map((option) => option.value);
+    expect(values).toEqual(["openai", "responses", "anthropic"]);
+  });
+
+  it("测试连接只调自检端点，且不触发保存（不写库）", async () => {
+    const calls = stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("/llm-config/test"))).toBe(true),
+    );
+    const test = calls.find((call) => call.url.includes("/llm-config/test"))!;
+    expect(test.method).toBe("POST");
+    expect(test.body).toMatchObject({ model: "deepseek-v4-flash", protocol: "responses", deep: false });
+    // 自检不得写库：本次没有任何 PUT/DELETE。
+    expect(calls.some((call) => call.method === "PUT" || call.method === "DELETE")).toBe(false);
+  });
+
+  it("“发真实请求”按钮传 deep=true（区分两级的成本）", async () => {
+    const calls = stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "测试连接（发真实请求）" }),
+    );
+
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("/llm-config/test"))).toBe(true),
+    );
+    const test = calls.find((call) => call.url.includes("/llm-config/test"))!;
+    expect(test.body).toMatchObject({ deep: true });
+  });
+
+  it("成功时展示协议与端点（用户能核对到底打了哪个 URL）", async () => {
+    stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+
+    const panel = await screen.findByTestId("llm-test-result");
+    expect(panel.textContent).toContain("连通");
+    expect(screen.getByTestId("llm-test-protocol").textContent).toContain("responses");
+    expect(panel.textContent).toContain("/v1/responses");
+  });
+
+  it("协议不匹配时给出建议协议（实测根因：deepseek-v4-flash 不支持 openai）", async () => {
+    stubMetaAndWrites(
+      { config: BASE_META },
+      undefined,
+      {
+        ok: false,
+        message: "模型 deepseek-v4-flash 在上游只声明支持 responses，与你选的 openai 不匹配",
+        protocol: "openai",
+        endpoint: "https://ai.cviauto.cn/ai/transit/v1/chat/completions",
+        modelFound: true,
+        supportedProtocols: ["anthropic", "responses"],
+        suggestedProtocol: "responses",
+        protocolMismatch: true,
+        checks: ["models"],
+      },
+    );
+
+    render(<SettingsPage />);
+    await userEvent.selectOptions(await screen.findByLabelText(/协议/), "openai");
+    await userEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    const panel = await screen.findByTestId("llm-test-result");
+    expect(panel.textContent).toContain("不匹配");
+    expect(screen.getByTestId("llm-test-suggestion").textContent).toContain("responses");
+    // 上游声明的协议也要展示（用户据此选对的）。
+    expect(panel.textContent).toContain("responses");
+  });
+
+  it("模型名拼错时展示上游可用模型（帮用户改正）", async () => {
+    stubMetaAndWrites(
+      { config: BASE_META },
+      undefined,
+      {
+        ok: false,
+        message: "上游模型列表里没有 'deepseek-v4-falsh'（请核对模型名拼写）；该网关当前可用：deepseek-v4-flash",
+        protocol: "responses",
+        endpoint: "https://ai.cviauto.cn/ai/transit/v1/responses",
+        modelFound: false,
+        supportedProtocols: [],
+        protocolMismatch: false,
+        checks: ["models"],
+      },
+    );
+
+    render(<SettingsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+
+    const panel = await screen.findByTestId("llm-test-result");
+    expect(panel.textContent).toContain("deepseek-v4-flash");
+    expect(panel.textContent).toContain("未在上游列表中");
+  });
+
+  it("改动表单后自检结果失效（不留旧绿灯）", async () => {
+    stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+    expect(await screen.findByTestId("llm-test-result")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/模型名/), "x");
+
+    expect(screen.queryByTestId("llm-test-result")).not.toBeInTheDocument();
+  });
+
+  it("保存时携带当前选中的协议", async () => {
+    const calls = stubMetaAndWrites({ config: BASE_META });
+
+    render(<SettingsPage />);
+    await userEvent.selectOptions(await screen.findByLabelText(/协议/), "anthropic");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    const put = calls.find((call) => call.method === "PUT")!;
+    expect(put.body).toMatchObject({ protocol: "anthropic" });
   });
 });

@@ -108,6 +108,7 @@
 | D-44 | embedding 双实现（EmbeddingProvider 接口）：本地 ONNX 小模型为默认（源码不出 VPS），OpenAI-compatible API 为可选配置；具体默认模型与维度由 Phase 1 bake-off（TASK-015）校准后钉死 | 用户确认；Module/01 §2.4、Module/06 §6 | 定稿 |
 | D-45 | CJK 分词器 = jieba（Python 实现），模块化隔离（zace_core.text）；索引与查询双侧同库预分词，消费 D-20 | 用户确认；Module/02 §4.2-b、§7-2 | 定稿 |
 | D-46 | 主链路命名 **Recall → Expand → Rank → Pack → Repair**（四级检索漏斗 + 单次 Evidence Repair Loop）；Repair 是受限反馈回路而非第五级，受 R31 三条不变量约束 | Module/02 §3、§4.7.1 | 定稿（2026-09-15） |
+| D-47 | LLM 上游协议可配且多实现：`AnswerProvider` 接口不变，支持 **openai**（`/v1/chat/completions`，默认）/ **responses**（`/v1/responses`）/ **anthropic**（`/v1/messages`）；服务端默认走 `ANSWER_PROTOCOL`，用户级覆盖走 `user_llm_config.protocol`；并提供连接自检（`POST /api/auth/llm-config/test`，L1 探测 `/v1/models` / L2 真实最小请求）。理由：同一网关的不同模型可能只开放不同协议（实测 2026-09-16：`deepseek-v4-flash` 仅 `ANTHROPIC`/`RESPONSES`），单一 OpenAI 实现会让“配置保存成功但 ask 持续 503”成为静默失灵。否决项：① 只做协议探测不实现新协议（用户仍无可用模型）；② 失败后自动换协议重发（两次计费且答案不可归因）。触发重评：D-11 的模型选型变化、或新增第四种协议 | Module/04 §2；用户确认 2026-09-16 | 定稿（2026-09-16） |
 
 ## 4. 写作纪律（新文档必须遵守）
 

@@ -13,6 +13,7 @@
 
 | 卡 | 标题 | 阶段 | 硬依赖 | 状态 |
 |---|---|---|---|---|
+| [TASK-113](TASK-113-LLM多协议适配与连接自检.md) | **LLM 多协议适配（openai/responses/anthropic）+ 连接自检**（D-47） | Phase 4+（可用性） | TASK-088 ✅ / TASK-099 ✅ | **review** |
 | [TASK-110](TASK-110-邀请码与身份分级.md) | **邀请码注册 + 身份分级（管理员/内测/公测）+ 头衔编号 + 管理员后台** | Phase 4+（增长运营） | TASK-060/061/094 ✅ | **review** |
 | [TASK-109](TASK-109-EvidenceGap二轮补检.md) | **Evidence-Gap 二轮补检**（D-19 落地：候选已索引但没召回） | Phase 5+（质量） | TASK-108 ✅ | pending |
 | [TASK-093](TASK-093-真实数据闭环.md) | 真实使用数据采集闭环 | Phase 2（M2b） | TASK-084 ✅ / TASK-091 ✅ | pending |
@@ -21,6 +22,8 @@
 ### 推荐顺序
 
 ```text
+TASK-113（LLM 多协议 + 连接自检，修“配置保存成功但 ask 持续 503”的静默失灵）
+   ↓
 TASK-109（检索质量，用户点名“下一轮重点”）
    ↓
 TASK-110（邀请码与身份分级，四期：P1 邀请码注册 → P2 自定义 Key → P3 后台 → P4 前端）

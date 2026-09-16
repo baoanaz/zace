@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zace_service import __version__
+from zace_service.llmprotocol import normalize_protocol
 
 __all__ = [
     "ADMIN_NAME_ENV",
@@ -35,6 +36,7 @@ __all__ = [
     "ANSWER_TEMPERATURE_ENV",
     "ANSWER_TIMEOUT_S_ENV",
     "ANSWER_MAX_CONTEXT_TOKENS_ENV",
+    "ANSWER_PROTOCOL_ENV",
     "ANSWER_PROVIDER_ENV",
     "EMBED_TPM_ENV",
     "EMBED_RPM_ENV",
@@ -150,6 +152,13 @@ ANSWER_TEMPERATURE_ENV = "ANSWER_TEMPERATURE"
 ANSWER_MAX_CONTEXT_TOKENS_ENV = "ANSWER_MAX_CONTEXT_TOKENS"
 #: 该 LLM 厂商名（仅展示用；不填则按模型名推测）。
 ANSWER_PROVIDER_ENV = "ANSWER_PROVIDER"
+#: 上游协议（TASK-113 / D-47）：``openai`` / ``responses`` / ``anthropic``。
+#:
+#: 为什么需要它：同一网关的不同模型可能只开放不同协议（实测 2026-09-16：
+#: ``deepseek-v4-flash`` 只声明 ``ANTHROPIC``/``RESPONSES``，``deepseek-v4-pro`` **仅**
+#: ``ANTHROPIC``）。升级前只实现了 OpenAI Chat Completions，用户选了其它协议的模型会得到
+#: “保存成功但 ask 持续 503”的静默失灵。未配置 → ``openai``（与升级前逐字相同）。
+ANSWER_PROTOCOL_ENV = "ANSWER_PROTOCOL"
 #: Embedding 的速率配额（仅展示用；TPM = token/分钟，RPM = 请求/分钟）。
 #: 同样不写死在代码里：配额随账号档位变化，属“账号属性”而非“模型属性”。
 EMBED_TPM_ENV = "EMBED_TPM"
@@ -205,6 +214,12 @@ class Settings:
     #: 未配置时设置页如实显示 `—`，不猜。
     answer_max_context_tokens: int | None = None
     answer_provider: str | None = None
+    #: 上游协议（TASK-113 / D-47）；``None`` = 未配置 → 用 :data:`llmprotocol.DEFAULT_PROTOCOL`。
+    #:
+    #: 存字符串而不是枚举对象：``Settings`` 是 dataclass，测试大量用 ``dataclasses.replace``
+    #: 派生变体，字符串最省事；合法性在构造 provider 时由 ``llmprotocol.normalize_protocol``
+    #: 检查（非法值显式报错，不静默回落）。
+    answer_protocol: str | None = None
     #: Embedding 速率配额（展示用）：TPM / RPM。未配置 → 页面显示 `—`。
     embed_tpm: int | None = None
     embed_rpm: int | None = None
@@ -324,6 +339,8 @@ class Settings:
                 source.get(ANSWER_MAX_CONTEXT_TOKENS_ENV), ANSWER_MAX_CONTEXT_TOKENS_ENV
             ),
             answer_provider=(source.get(ANSWER_PROVIDER_ENV) or "").strip() or None,
+            # TASK-113：协议名归一（容别名、大小写）；非法值**显式报错**而不是静默取默认。
+            answer_protocol=_as_protocol(source.get(ANSWER_PROTOCOL_ENV)),
             embed_tpm=_as_optional_int(source.get(EMBED_TPM_ENV), EMBED_TPM_ENV),
             embed_rpm=_as_optional_int(source.get(EMBED_RPM_ENV), EMBED_RPM_ENV),
             admin_name=(source.get(ADMIN_NAME_ENV) or "").strip() or DEFAULT_ADMIN_NAME,
@@ -383,6 +400,18 @@ def _as_optional_int(raw: str | None, name: str) -> int | None:
         return int(raw.strip())
     except ValueError:
         raise ValueError(f"环境变量 {name} 必须是整数，收到 {raw!r}") from None
+
+
+def _as_protocol(raw: str | None) -> str | None:
+    """解析 ``ANSWER_PROTOCOL``（TASK-113）：别名归一，非法值显式报错。
+
+    为什么在这里就归一而不是留到构造 provider：启动时就该知道配置写错了。
+    为什么非法值不静默回落 ``openai``：用户把 ``responses`` 拼错时，静默回落会让他看到
+    “服务起来了、保存成功了、ask 仍然 503”——正是 TASK-113 要消灭的静默失灵。
+    """
+    if raw is None or not raw.strip():
+        return None
+    return normalize_protocol(raw)
 
 
 def _as_ratio(raw: str | None, name: str, *, default: float) -> float:

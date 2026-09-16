@@ -582,12 +582,13 @@ def build_answer_provider(settings: Settings, *, user_id: str | None = None) -> 
     resolved = resolve_llm_config(settings, user_id=user_id, db=None)
     if not resolved.configured:
         return None
-    from zace_service.answer import HttpAnswerProvider
+    from zace_service.answer import HttpJsonProvider
 
-    return HttpAnswerProvider(
+    return HttpJsonProvider(
         base_url=str(resolved.base_url),
         api_key=str(resolved.api_key),
         model=str(resolved.model),
+        protocol=resolved.protocol,
         timeout_s=settings.answer_timeout_s,
     )
 

@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 from zace_service.answer import AnswerProvider
 from zace_service.config import Settings
+from zace_service.llmprotocol import DEFAULT_PROTOCOL
 from zace_service.logging import get_logger
 
 if TYPE_CHECKING:  # 仅类型：避免无谓的模块级导入
@@ -72,6 +73,8 @@ class ResolvedLlmConfig:
     temperature: float
     #: ``"user"`` = 用户配置生效；``"server"`` = 回落服务端默认（环境变量）。
     source: str
+    #: 上游协议（TASK-113 / D-47）；``"openai"`` 为默认（与升级前的行为逐字相同）。
+    protocol: str = DEFAULT_PROTOCOL
 
     @property
     def configured(self) -> bool:
@@ -100,6 +103,7 @@ class ResolvedLlmConfig:
             "apiKeyConfigured": bool(self.api_key),
             "missingKeys": list(self.missing_keys),
             "source": self.source,
+            "protocol": self.protocol,
         }
 
 
@@ -136,6 +140,7 @@ def resolve_llm_config(
                     max_tokens=settings.answer_max_tokens,
                     temperature=settings.answer_temperature,
                     source=SOURCE_USER,
+                    protocol=_user_protocol(settings, record.protocol),
                 )
     return ResolvedLlmConfig(
         base_url=settings.answer_base_url,
@@ -145,7 +150,29 @@ def resolve_llm_config(
         max_tokens=settings.answer_max_tokens,
         temperature=settings.answer_temperature,
         source=SOURCE_SERVER,
+        protocol=_server_protocol(settings),
     )
+
+
+def _server_protocol(settings: Settings) -> str:
+    """服务端默认协议（未配置 → ``openai``）。非法值在 ``Settings.from_env`` 已拦。
+
+    直接回落 ``DEFAULT_PROTOCOL`` 而不再次 ``normalize_protocol``：``Settings`` 可能被
+    测试直接构造（绕过 ``from_env``）并传入任意字符串，构造 provider 时仍有最后一道校验。
+    """
+    return str(settings.answer_protocol or DEFAULT_PROTOCOL)
+
+
+def _user_protocol(settings: Settings, raw: str | None) -> str:
+    """用户配置的协议；旧行（迁移前写入）为 ``NULL`` → 回落服务端默认。
+
+    为什么不是无条件回落 ``openai``：用户在设置页设了协议、服务端也设了协议时，
+    “用户只改了模型名、没动协议”应当继续用他之前选的那份（服务端默认），
+    而不是被一个空值重置成 openai。
+    """
+    if raw is None or not str(raw).strip():
+        return _server_protocol(settings)
+    return str(raw)
 
 
 def build_provider_for(
@@ -166,15 +193,16 @@ def build_provider_for(
     key 的脱敏交给 :class:`HttpAnswerProvider`（构造时 ``register_secret``，全仓日志脱敏的
     第二道防线），本模块不重复实现。
     """
-    from zace_service.answer import HttpAnswerProvider
+    from zace_service.answer import HttpJsonProvider
 
     resolved = resolve_llm_config(settings, user_id=user_id, db=db)
     if not resolved.configured:
         return None
-    return HttpAnswerProvider(
+    return HttpJsonProvider(
         base_url=str(resolved.base_url),
         api_key=str(resolved.api_key),
         model=str(resolved.model),
+        protocol=resolved.protocol,
         timeout_s=settings.answer_timeout_s,
     )
 

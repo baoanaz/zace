@@ -53,6 +53,13 @@ from zace_service.llmconfig import (
     ResolvedLlmConfig,
     resolve_llm_config,
 )
+from zace_service.llmprobe import run_connection_test
+from zace_service.llmprotocol import (
+    DEFAULT_PROTOCOL,
+    SUPPORTED_PROTOCOLS,
+    normalize_protocol,
+    protocol_label,
+)
 from zace_service.logging import get_logger
 from zace_service.metadb import MetaDB, User
 from zace_service.quota import effective_user_limit_bytes
@@ -124,6 +131,27 @@ class LlmConfigRequest(BaseModel):
     model: str = ""
     baseUrl: str = ""
     apiKey: str = ""
+    #: 上游协议（TASK-113 / D-47）：空串 = 保持不变（与服务端默认/A、key 同一语义）。
+    protocol: str = ""
+
+
+class LlmTestRequest(BaseModel):
+    """``POST /api/auth/llm-config/test`` 的请求体（TASK-113）。
+
+    字段与保存端点**同形**（多一个 ``deep``）：用户在设置页点"测试连接"时，
+    应当测的是**屏幕上正填的那份**，而不是已保存的那份——否则"先改 URL → 测试 → 再保存"
+    这个最自然的顺序就测的是旧配置。
+
+    ``apiKey`` 空串 = 沿用**已保存的** key（它从不回显，因此用户无法重填）；
+    首次配置（库里还没有）且未给 key → 400 ``invalid_llm_config``。
+    """
+
+    model: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
+    protocol: str = ""
+    #: ``True`` = 叠加 L2（真实最小请求）；默认只做零成本的 L1 探测。
+    deep: bool = False
 
 
 @router.get("/api/meta")
@@ -222,6 +250,10 @@ def _llm_config(
             "timeoutS": resolved.timeout_s,
             "maxTokens": resolved.max_tokens,
             "temperature": resolved.temperature,
+            # TASK-113：当前生效的协议（用户自己选的）；设置页据此回填下拉框。
+            "protocol": resolved.protocol,
+            "protocolLabel": protocol_label(resolved.protocol),
+            "supportedProtocols": list(SUPPORTED_PROTOCOLS),
             **_llm_model_metadata(settings, resolved.model),
         }
     payload: dict[str, Any] = {
@@ -240,6 +272,10 @@ def _llm_config(
             "timeoutS": settings.answer_timeout_s,
             "maxTokens": settings.answer_max_tokens,
             "temperature": settings.answer_temperature,
+            # TASK-113：服务端默认协议（未配置 → ``openai``）。
+            "protocol": str(settings.answer_protocol or DEFAULT_PROTOCOL),
+            "protocolLabel": protocol_label(str(settings.answer_protocol or DEFAULT_PROTOCOL)),
+            "supportedProtocols": list(SUPPORTED_PROTOCOLS),
             **_llm_model_metadata(settings, settings.answer_model),
         }
     )
@@ -587,6 +623,8 @@ def put_llm_config(payload: LlmConfigRequest, request: Request) -> dict[str, Any
     model = payload.model.strip()
     base_url = payload.baseUrl.strip()
     api_key = payload.apiKey.strip()
+    # TASK-113：协议先归一（非法值 → 400），空串 = 保持不变。
+    protocol = _normalize_llm_protocol(payload.protocol)
     _validate_llm_config(model, base_url, api_key)
     db = _require_meta_db(request)
     try:
@@ -596,12 +634,67 @@ def put_llm_config(payload: LlmConfigRequest, request: Request) -> dict[str, Any
             base_url=base_url,
             # 空串 → None = 保持不变（见 :meth:`MetaDB.save_llm_config`）。
             api_key=api_key or None,
+            # 空串 → None = 保持不变（同一语义；用户只改模型名时不抹掉他选的协议）。
+            protocol=protocol,
         )
     except ValueError as exc:
         # 唯一触发点：首次保存没给 key（没有旧值可继承）。
         raise ApiError(code="invalid_llm_config", message=str(exc), status=400) from None
     logger.info("用户 LLM 配置已更新：user=%s model=%s", user.id, saved.model)
     return {**saved.to_json(), "source": SOURCE_USER}
+
+
+@router.post("/api/auth/llm-config/test")
+def test_llm_config(payload: LlmTestRequest, request: Request) -> dict[str, Any]:
+    """连接自检（TASK-113；L1 探测 /v1/models，``deep=true`` 叠加 L2 真实请求）。
+
+    四条纪律（与保存端点同一套口径）：
+
+    1. **key 不出网**：响应任何字段都不含 key（含长度/前缀）；
+    2. **失败是结果不是错误**：上游拒绝/模型缺失/协议不匹配一律 200 + ``ok=false``，
+       只有“请求体本身不成立”（缺 key 且库里没有旧 key）才 400；
+    3. **不写库**：测试不改变任何配置（“先测试再保存”应当是最自然的用法）；
+    4. **无副作用**：除了发一次探测请求，不影响任何服务状态。
+
+    为什么测试的是**屏幕上填的那份**而不是已保存的那份：否则“改 URL → 测试 → 保存”
+    这个最常见的顺序会测到旧配置，绿灯变成假的安全感。
+
+    鉴权与归属走与保存端点相同的 :func:`_llm_owner`（本地模式隐式账户也能测）。
+    """
+    user = _llm_owner(request)
+    model = payload.model.strip()
+    base_url = payload.baseUrl.strip()
+    submitted_key = payload.apiKey.strip()
+    _validate_llm_config(model, base_url, submitted_key)
+    protocol = _normalize_llm_protocol(payload.protocol) or _default_protocol(request, user.id)
+
+    db = _require_meta_db(request)
+    existing = db.get_llm_config(user.id)
+    api_key = submitted_key or (existing.api_key if existing is not None else "")
+    if not api_key:
+        # 库里没有旧 key、用户也没填：无法探测（拿空 key 去探只会得到一个误导的 401）。
+        raise ApiError(
+            code="invalid_llm_config",
+            message="首次测试连接需要提供 API Key（已保存过的配置可留空沿用）",
+            status=400,
+        )
+
+    result = run_connection_test(
+        protocol=protocol,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        deep=payload.deep,
+        timeout_s=get_settings(request).answer_timeout_s,
+    )
+    logger.info(
+        "LLM 连接自检：user=%s protocol=%s deep=%s ok=%s",
+        user.id,
+        protocol,
+        payload.deep,
+        result.ok,
+    )
+    return result.to_json()
 
 
 @router.delete("/api/auth/llm-config")
@@ -617,6 +710,32 @@ def delete_llm_config(request: Request) -> Response:
     removed = _require_meta_db(request).delete_llm_config(user.id)
     logger.info("用户 LLM 配置已删除（回落服务端默认）：user=%s removed=%s", user.id, removed)
     return Response(status_code=204)
+
+
+def _normalize_llm_protocol(raw: str) -> str | None:
+    """归一用户提交的协议名；空串 → ``None``（= 保持不变或回落默认）；非法 → 400。
+
+    400 而不是静默回落：用户在设置页选错时应当**立刻**看到"不支持这个协议"，
+    而不是保存成功后 ask 持续 503（TASK-113 的真实故障场景）。
+    """
+    try:
+        return normalize_protocol(raw) if raw.strip() else None
+    except ValueError as exc:
+        raise ApiError(code="invalid_llm_protocol", message=str(exc), status=400) from None
+
+
+def _default_protocol(request: Request, user_id: str) -> str:
+    """本次该用的协议：**用户已保存的优先，否则服务端默认**（与 ask 同一口径）。
+
+    测试连接必须用"用户什么都没填时会真正生效的那份"，否则测过的协议与 ask 用的不一致，
+    绿灯就是假的了。
+    """
+    settings = get_settings(request)
+    db = _optional_meta_db(request)
+    existing = db.get_llm_config(user_id) if db is not None else None
+    if existing is not None and existing.protocol:
+        return existing.protocol
+    return str(settings.answer_protocol or DEFAULT_PROTOCOL)
 
 
 def _llm_owner(request: Request) -> Any:

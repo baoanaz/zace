@@ -271,7 +271,27 @@ export interface LlmConfigView {
   /** 厂商与上下文窗口（TASK-100 §需求9）。 */
   provider?: string | null;
   maxContextTokens?: number | null;
+  /**
+   * 当前生效的上游协议（TASK-113 / D-47）。
+   *
+   * `openai` = `/v1/chat/completions`（默认）；`responses` = `/v1/responses`；
+   * `anthropic` = `/v1/messages`。设置页据此回填“协议”下拉框。
+   */
+  protocol?: LlmProtocol;
+  /** 协议的中文展示名（服务端给，前端不自己拼——两处各写一份必然漂移）。 */
+  protocolLabel?: string;
+  /** 服务端支持的协议全集（下拉框选项的单一事实源）。 */
+  supportedProtocols?: string[];
 }
+
+/**
+ * 上游协议（TASK-113 / D-47）。
+ *
+ * 为什么需要它：同一网关的不同模型可能只开放不同协议（实测 2026-09-16：
+ * `deepseek-v4-flash` 只声明 `ANTHROPIC`/`RESPONSES`），选错协议会表现为
+ * “保存成功但 ask 持续 503”——本卡把它变成可见、可测、可改的显式选项。
+ */
+export type LlmProtocol = "openai" | "responses" | "anthropic";
 
 /** `PUT /api/auth/llm-config` 的响应（TASK-099 §C-3；**不含 key 的任何部分**）。 */
 export interface LlmConfigSaved {
@@ -280,6 +300,34 @@ export interface LlmConfigSaved {
   apiKeyConfigured: boolean;
   updatedAt: number;
   source: "user";
+  /** 已保存的协议（TASK-113）：空串保存时服务端保留旧值，此处回填真实生效值。 */
+  protocol?: LlmProtocol | null;
+}
+
+/** `POST /api/auth/llm-config/test` 的响应（TASK-113；**不含 key 的任何部分**）。 */
+export interface LlmTestResult {
+  /** 总判定：L1（或叠加的 L2）是否通过。 */
+  ok: boolean;
+  /** 面向用户的结果说明（失败时是可操作建议）。 */
+  message: string;
+  protocol: string;
+  protocolLabel?: string;
+  /** 本次请求的端点（不含凭据），便于用户核对 URL 是否写错。 */
+  endpoint: string;
+  /** 模型是否在上游列表里被精确找到；`null` = 未做 L1。 */
+  modelFound?: boolean | null;
+  /** 上游为该模型声明的协议（已归一）。 */
+  supportedProtocols?: string[];
+  /** 按上游声明推断的建议协议；`null` = 无法推断。 */
+  suggestedProtocol?: LlmProtocol | null;
+  /** 用户选的协议与上游声明不一致（前端据此提示“该模型不支持你选的协议”）。 */
+  protocolMismatch?: boolean;
+  /** L2 是否跑过、是否通过；`null` = 没跑。 */
+  completionOk?: boolean | null;
+  /** 上游报错摘要（已脱敏）。 */
+  detail?: string | null;
+  /** 本次实际检查了哪几级（`models` / `completion`）。 */
+  checks?: string[];
 }
 
 /** 当前身份（`GET /api/auth/me`）。 */
@@ -404,10 +452,45 @@ export function saveUserLlmConfig(input: {
   model: string;
   baseUrl: string;
   apiKey?: string;
+  /** 上游协议（TASK-113）；空串 = 保持不变（与 apiKey 同一语义）。 */
+  protocol?: string;
 }): Promise<LlmConfigSaved> {
   return request<LlmConfigSaved>("/api/auth/llm-config", {
     method: "PUT",
-    body: { model: input.model, baseUrl: input.baseUrl, apiKey: input.apiKey ?? "" },
+    body: {
+      model: input.model,
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey ?? "",
+      protocol: input.protocol ?? "",
+    },
+  });
+}
+
+/**
+ * 连接自检（TASK-113）：L1 探测 `/v1/models`；`deep=true` 时叠加一次真实最小请求。
+ *
+ * 测的是**屏幕上正填的那份**（`apiKey` 留空则沿用已保存的 key）：这样“改 URL → 测试 →
+ * 保存”这个最自然的顺序不会测到旧配置。**不写库、无副作用**。
+ *
+ * 失败是**正常结果**（`ok=false` + 可操作 `message`），不是异常；只有请求体不成立
+ * （首次配置未给 key）才抛 `ApiError`（400）。
+ */
+export function testUserLlmConfig(input: {
+  model: string;
+  baseUrl: string;
+  apiKey?: string;
+  protocol?: string;
+  deep?: boolean;
+}): Promise<LlmTestResult> {
+  return request<LlmTestResult>("/api/auth/llm-config/test", {
+    method: "POST",
+    body: {
+      model: input.model,
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey ?? "",
+      protocol: input.protocol ?? "",
+      deep: input.deep ?? false,
+    },
   });
 }
 

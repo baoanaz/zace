@@ -275,6 +275,8 @@ async def ask(payload: AskRequest, request: Request) -> dict[str, Any]:
         # （模型名是那个函数写的；本次实施先写反了顺序，``llmModel`` 一直是 None）。
         # 模型名不是 secret（key 仍只有 ``apiKeyConfigured``）。
         meta["llmModel"] = ctx.get("answerModel")
+        # TASK-113：协议名也不是 secret（用户在设置页自己选的/环境变量里写着的）。
+        meta["llmProtocol"] = ctx.get("answerProtocol")
         # TASK-099 §A：成功分支才落正文。落的是 ``outcome.answer``——即**已回验引用后的**
         # 最终答案（与返回体 ``answer`` 同一份，未叠存储告警节）：用户回看的应当就是当时
         # 模型给出的东西，而不是 audit 层另做一遍加工。
@@ -385,6 +387,9 @@ def _write_llm_observations(ctx: _AuditContext, provider: Any, outcome: Any) -> 
     ctx["llmLatencyMs"] = outcome.latency_ms
     ctx["answerTokens"] = outcome.answer_tokens
     ctx["answerModel"] = getattr(provider, "model", None)
+    # TASK-113：把实际生效的协议一并交给调用方（写进 ``meta.llmProtocol``）。
+    # 与模型名同理：用户配了协议后要能确认"真的生效了"，而不是靠"配过就相信"。
+    ctx["answerProtocol"] = getattr(provider, "protocol", None)
 
 
 # --------------------------------------------------------------------------- 查询审计（TASK-084）
