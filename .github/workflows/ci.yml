@@ -20,8 +20,24 @@ jobs:
         run: uv run ruff check .
       - name: Dependency direction check (D-33/D-34/D-35)
         run: uv run python scripts/check_dependency_direction.py
+      - name: Environment (diagnostics)
+        run: |
+          uv run python -VV
+          uv run python -c "import locale,sys; print('locale:', locale.getlocale(), '| fs:', sys.getfilesystemencoding())"
+          uv run python -c "import jieba, lancedb, pyarrow; print('jieba', jieba.__version__)" 2>/dev/null || true
+          nproc
       - name: Tests
-        run: uv run pytest
+        shell: bash
+        run: |
+          set -o pipefail        # tee 会吞掉 pytest 的退出码，必须显式打开
+          uv run pytest -ra 2>&1 | tee /tmp/pytest.log
+      - name: Upload pytest output (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: /tmp/pytest.log
+          if-no-files-found: ignore
 
   web:
     name: web (zace-web)
