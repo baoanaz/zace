@@ -1,6 +1,6 @@
 # TASK-111：分支级项目身份、内容寻址复用与按分支管理
 
-> 状态：in_progress ｜ 阶段：Phase 4+（上线前加固）｜ 硬依赖：TASK-101（engine 扩展）、TASK-110（配额与后台）
+> 状态：review ｜ 阶段：Phase 4+（上线前加固）｜ 硬依赖：TASK-101（engine 扩展）、TASK-110（配额与后台）
 > soft 依赖：无
 > 建议分支：`feature/task-111-branch-identity_xwz0916`
 > 交付物所有权：
@@ -142,3 +142,55 @@ for chunk in candidates:
 ## 6. 执行记录
 
 （实施中回填。）
+
+---
+
+### 2026-09-16 · lane-b · `feature/task-111-branch-identity_xwz0916`（三层全部完成）
+
+#### 验收命令与结果
+
+```console
+$ uv run ruff check .                                  # All checks passed!
+$ uv run python scripts/check_dependency_direction.py   # 依赖方向检查通过
+$ uv run pytest -o addopts="" -q                        # 1134 passed, 9 skipped
+$ cd client && cargo build                              # Finished（Rust 侧改用 identity.rs 分支逻辑）
+$ cd web && npx tsc --noEmit && npx eslint src --max-warnings 0   # 均无输出
+$ cd web && npx vitest run                              # 100 passed（1 预存失败：History.trace，与本卡无关）
+```
+
+#### 真实 embedding 实测（`voyage-4-lite`，zace 仓库 3 个 worktree）
+
+| 分支 | chunks | 复用 | 耗时 |
+|---|---|---|---|
+| main（主工作区） | 5913 | 0 | 180.0s |
+| lane-c | 5842 | **5824（99.7%）** | **29.5s** |
+| lane-f | 5682 | **5595（98.5%）** | **28.1s** |
+
+缓存体积 24 MB（全仓 3 个分支），落在 `{data_root}/cache/embeddings/api_voyage-4-lite-1024/`。
+
+#### Python / Rust 身份一致性
+
+`core.engine.repo_identity` 与 `client.identity::repo_identity` 对同一路径**逐字节相同**
+（实测三个真实仓库的 `identity_key` 一致：`646bdece…` / `71454795…` / `4f82047d…`）。
+口径：`sha256(remote + repo相对路径 + "\x00" + branch)`；无 remote / detached 取不到分支时
+**不引入分支维度**（与旧口径一致，行为不回归）。
+
+#### 与设计的偏差（需编排者确认）
+
+| # | 卡内/设计原文 | 实际实现 | 理由 |
+|---|---|---|---|
+| 1 | D-29 `identityKey = sha256(remoteUrl + repo 相对路径)` | 追加 `+ "\x00" + branch` | 卡内 §2.1；这是修 D-29「同一机器不同 checkout 应隔离」**未落地**的缺陷，不是改设计意图 |
+| 2 | D-03 per-project `vectors/` 目录 | 保持不变；**新增**可丢弃的 `{data_root}/cache/embeddings/` | 权威存储仍 per-project，缓存只影响"要不要重新嵌入"，清掉不损正确性 |
+| 3 | 卡内 §2.3 写"配额维持 TASK-110 不变" | 已实现 | 未为了逼用户删除而调低配额（理由见卡内 §7） |
+
+#### 未决问题 / 交接事项
+
+1. **设计文档未改**：D-29 的身份公式、D-03 的目录树都需编排者决定是否把本卡口径写进
+   `docs/design/**`（本卡按纪律不动设计文档）。
+2. **缓存清理策略缺失**：`{data_root}/cache/embeddings/` 会随模型数增长；换模型后旧分片
+   需人工删除。建议后续开卡做"保留最近 N 个模型分片"或后台清理入口。
+3. **`project.json` 未加 `branch` 字段**：分支从 `display_name` 的 `@` 后缀解析
+   （避免旧项目迁移）；若将来仓库名含 `@` 会有歧义，届时再加结构化字段。
+4. **旧污染数据需人工重建**：本卡只改身份计算，**不会**自动清理既有的混合索引
+   （`8e69da62f37e5783`）。按用户 2026-09-16 决策用"删除重建"处理。
+5. `History.trace.test.tsx` 预存失败仍在（干净 main 同样失败）。
