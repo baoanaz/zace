@@ -16,7 +16,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
+# TASK-112：pytest-xdist 用于并行跑测试（本仓 1100+ 用例、串行约 3 分钟）。
+dev = ["pytest>=8", "pytest-xdist>=3.6", "ruff>=0.6", "httpx>=0.27"]
 
 [project.scripts]
 # TASK-030：服务入口（argparse + uvicorn.run）。仅新增 scripts 段，依赖清单不变（不新增第三方依赖）。

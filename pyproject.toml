@@ -14,4 +14,4 @@ select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "service/tests"]
-addopts = "-q"
+addopts = "-q -n auto"
