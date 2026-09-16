@@ -55,18 +55,41 @@ impl ToolError {
     }
 }
 
+/// CF-06 冻结合同（**description 的单一来源**）。
+///
+/// `include_str!` 在**编译时**嵌入：运行时读文件在用户机器上不可靠（`npx zace-client`
+/// 只装了二进制，没有仓库的 `docs/`），所以把文本固化进二进制。
+/// 与 service 侧读的是**同一个文件**，两端描述不会再漂移。
+const CF06_CONTRACT: &str = include_str!("../../docs/contracts/mcp-tools.json");
+
+/// 从 CF-06 契约取指定工具的 `description`。
+///
+/// 契约损坏时不应静默回退成空描述（那会让 Agent 完全不会用工具）——
+/// 这里用 `expect` 在启动阶段大声失败，而不是把空串发给编辑器。
+fn cf06_description(tool: &str) -> String {
+    let payload: Value = serde_json::from_str(CF06_CONTRACT)
+        .expect("CF-06 契约不是合法 JSON（docs/contracts/mcp-tools.json）");
+    payload["tools"]
+        .as_array()
+        .expect("CF-06 契约缺少 tools 数组")
+        .iter()
+        .find(|item| item["name"] == tool)
+        .and_then(|item| item["description"].as_str())
+        .unwrap_or_else(|| panic!("CF-06 契约里没有工具 {tool} 的 description"))
+        .to_string()
+}
+
 /// 两个工具的 JSON Schema（CF-06；`additionalProperties: false`）。
 ///
-/// TASK-MCP-BUDGET：不声明 `max_tokens`——包大小是服务端按证据密度决定的内部量，
-/// 让 AI 去猜它只会猜小（实测把长函数截断成“签名 + 前 15 行”）。运行时仍接受该字段。
+/// `description` 取自 CF-06 契约（与 service 同一份）；`inputSchema` 在这里**手工写**，
+/// 因为运行时字段比契约多一层约束（`minLength`）且 `max_tokens` 已不再声明
+/// （TASK-MCP-BUDGET：包大小是服务端按证据密度决定的内部量，让 AI 猜只会猜小——
+/// 实测把长函数截断成“签名 + 前 15 行”）。
 pub fn definitions() -> Value {
     json!([
         {
             "name": "search_context",
-            "description": "在当前项目工作区检索与问题最相关的上下文（代码/调用链/文档证据包）。\
-                适合'XX 在哪里实现'这类需要跨文件定位的问题；已知精确标识符的全量引用请用 grep，\
-                已知文件请直接 read。调用链（Flow 节）只给一跳且遇分叉即停，想穷举调用方请用 grep。\
-                返回 ContextPack 的 Markdown 渲染（含证据 id、行号与 Missing Evidence）。",
+            "description": cf06_description("search_context"),
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -79,11 +102,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "ask_project",
-            "description": "就当前项目提出调查性问题，返回基于证据包（含代码与设计文档）的带引用回答，并在证据不足时\
-                给出缺口说明与改问建议。需要直接结论（'为什么/如何设计/实现与设计是否一致'）时用它；\
-                只想要原始上下文时用 search_context。**长函数/内部流程类问题请改用 search_context**：\
-                超长符号的证据块会降级为'签名 + 前 15 行'，容易恰好丢掉你要问的正文——\
-                先用 search_context 拿到完整正文自己读。",
+            "description": cf06_description("ask_project"),
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -388,6 +407,33 @@ mod tests {
                 props.keys().collect::<Vec<_>>()
             );
             assert_eq!(props.len(), 2);
+        }
+    }
+
+    /// description 必须**逐字**等于 CF-06 契约里那份（TASK-MCP-BUDGET）。
+    ///
+    /// 为什么要守：此前 client 与 service 各写一份，长度差 4 倍（298 vs 1309 字符），
+    /// 而 AI 在 stdio 面看到的是 client 那份——模块文档要求的“查询写法/分工边界/导航”
+    /// 实际上到不了 AI 眼前。现在两端同源，本测试防回退。
+    #[test]
+    fn descriptions_come_from_the_cf06_contract() {
+        let payload: Value = serde_json::from_str(CF06_CONTRACT).expect("契约应是合法 JSON");
+        let tools = definitions();
+        for tool in tools.as_array().expect("array") {
+            let name = tool["name"].as_str().expect("name");
+            let expected = payload["tools"]
+                .as_array()
+                .expect("contract tools")
+                .iter()
+                .find(|item| item["name"] == name)
+                .and_then(|item| item["description"].as_str())
+                .expect("契约里应有该工具");
+            assert_eq!(
+                tool["description"].as_str().expect("description"),
+                expected,
+                "{name} 的 description 与 CF-06 契约不一致（两端同源不能漂移）"
+            );
+            assert!(!expected.is_empty(), "description 是行为控制，不能为空");
         }
     }
 

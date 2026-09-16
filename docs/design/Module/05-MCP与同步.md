@@ -58,6 +58,18 @@ ask_project:
 
 工具 description 写法（notace/四项目共识——description 即行为控制）：包含 good/bad query 示例、与 grep/read 的分工边界（"精确标识符全量引用请用 grep；已知文件请直接 read"）、两工具间的导航（"需要直接结论用 ask_project"）。
 
+> **TASK-MCP-BUDGET（2026-09-16）：description 以 `docs/contracts/mcp-tools.json` 为单一来源。**
+> 此前 client 与 service **各写一份**，实测长度差 4 倍（client 298 字符 / service 1309 字符），
+> 而 **AI 在 stdio 面看到的是 client 那份**（`protocol.rs` 的 `tools/list` → `tools::definitions()`）
+> ——于是本节要求的"查询写法/分工边界/导航"实际到不了 AI 眼前。现在两端同源：
+> client 用 `include_str!` 编译时嵌入契约、service 运行时读同一个文件，
+> 两端各有逐字一致性测试守住（client `descriptions_come_from_the_cf06_contract`、
+> service `test_tools_list_matches_cf06_field_by_field`）。
+>
+> 篇幅纪律：contract 版本控制在 ~400 字符/工具——描述过长会降低 LLM 的遵守概率，
+> 只保留"分工边界 + 查询写法 + 调用链局限"三类高价值信息，返回格式与降级细节删去
+>（AI 看到结果自然能懂）。
+
 ### 2.2 错误三分类映射【已验证：notace 模式，Background/01 §4】
 
 | 类别 | 例 | MCP 表现 |
