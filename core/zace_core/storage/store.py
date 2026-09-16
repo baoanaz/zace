@@ -864,6 +864,34 @@ class Store:
         sql += " ORDER BY kind, source, target, IFNULL(line, -1)"
         return [_edge_from_row(r) for r in self._conn.execute(sql, params).fetchall()]
 
+    def chunks_with_marker(
+        self, chunk_ids: Sequence[str], *, marker: str
+    ) -> frozenset[str]:
+        """给定 chunk 中，正文含 ``marker`` 的那些 chunk_id（批量、单次查询）。
+
+        用途（TASK-MCP-BUDGET）：rerank 的“已弃用符号”信号。判据是**符号级**的正文字面量
+        （如 ``@deprecated(``），而不是文件名或路径——装饰器只标注它直接修饰的那个符号，
+        所以同一符号在跃包与兼容层各有一份时只有后者被命中。
+
+        为什么不用“文件导入了 deprecation 工具”：实测会误伤跃包本身
+        （``langchain_core`` 是 deprecation 工具的提供者，其导入使真实实现被误降）。
+
+        ``marker`` 大小写不敏感子串匹配。空输入或空 marker → 空集（不查库）。
+        """
+        wanted = [cid for cid in chunk_ids if cid]
+        if not wanted or not marker:
+            return frozenset()
+        found: set[str] = set()
+        for batch in _batches(sorted(set(wanted))):
+            placeholders = ", ".join("?" for _ in batch)
+            rows = self._conn.execute(
+                "SELECT id FROM chunks"
+                f" WHERE id IN ({placeholders}) AND content LIKE ?",
+                [*batch, f"%{marker.lower()}%"],
+            ).fetchall()
+            found.update(str(r["id"]) for r in rows)
+        return frozenset(found)
+
     def spec_refs_for_symbols(self, symbol_ids: Sequence[str]) -> list[SpecRef]:
         """按符号批量取 spec 引用（代码命中 → 设计意图，TASK-011）。"""
         refs: list[SpecRef] = []

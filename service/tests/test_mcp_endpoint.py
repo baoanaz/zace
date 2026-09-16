@@ -269,6 +269,12 @@ def test_tools_list_matches_cf06_field_by_field(
         expected = contract[tool["name"]]
         assert _schema_diff(tool["inputSchema"], expected["inputSchema"]) == []
         assert tool["description"], "description 是行为控制，不能为空"
+        # TASK-MCP-BUDGET：description 以 CF-06 契约为**单一来源**（client 与 service 同源）。
+        # 此前两份各写一份、长度差 4 倍，而 AI 在 stdio 面看到的是 client 那份——
+        # 模块文档要求的“查询写法/分工边界/导航”实际到不了 AI 眼前。
+        assert tool["description"] == expected["description"], (
+            f"{tool['name']} 的 description 与 CF-06 契约不一致（两端同源不能漂移）"
+        )
     # 关键字段单独再确认一次（防上面的比对被整体改坏而静默通过）
     search = next(tool for tool in tools if tool["name"] == SEARCH_TOOL)
     assert search["inputSchema"]["required"] == ["query", "project_root"]

@@ -6,6 +6,7 @@ import pytest
 from zace_core.retrieval.expand import GRAPH_REASON_PREFIX, SYNTHESIZED_REASON
 from zace_core.retrieval.rerank import (
     FEATURE_CONSENSUS3,
+    FEATURE_DEPRECATED_PATH,
     FEATURE_DOCTYPE,
     FEATURE_ENTRY_POINT,
     FEATURE_EXPLICIT,
@@ -206,9 +207,11 @@ def test_feature_synthesized_edge_negative_only() -> None:
 
 
 def test_feature_names_cover_fifteen() -> None:
-    """特征表规模（TASK-101 新增 2 条 literal；TASK-105 新增 2 条 vector rank）。"""
-    assert len(FEATURE_NAMES) == 16
-    assert len(set(FEATURE_NAMES)) == 16
+    """特征表规模（TASK-101 新增 2 条 literal；TASK-105 新增 2 条 vector rank；
+    TASK-MCP-BUDGET 新增 1 条 deprecated path）。
+    """
+    assert len(FEATURE_NAMES) == 17
+    assert len(set(FEATURE_NAMES)) == 17
 
 
 # --------------------------------------------------------------------------- 打分与排序
@@ -262,7 +265,7 @@ def test_weights_override_does_not_change_feature_structure() -> None:
     lightweight = with_weights(RerankWeights(), explicit_hit=0.0)
     assert lightweight.explicit_hit == 0.0
     assert lightweight.symbol_match == 1.0
-    assert len(RerankWeights().__dataclass_fields__) == 16
+    assert len(RerankWeights().__dataclass_fields__) == 17
     with pytest.raises(TypeError):
         with_weights(RerankWeights(), not_a_feature=1.0)
 
@@ -417,3 +420,122 @@ def test_collect_signals_overrides(store) -> None:
     assert signals.test_intent is True
     assert signals.generated_paths == {"src/a.py"}
     assert signals.doctype_by_chunk["src/a.py:f:1"] == "adr"
+
+
+# --------------------------------------------------- 已弃用符号降权（TASK-MCP-BUDGET）
+
+
+def test_deprecated_symbol_is_penalised_and_active_twin_wins(
+    store, seed_file, sym
+) -> None:
+    """同符号在兼容层与活跃包各一份时，被 ``@deprecated`` 标注的那份降权。
+
+    实测来源（langchain，2026-09-16）：``init_chat_model`` 在 ``langchain_classic``（兼容层，
+    带 ``@deprecated(...)``）与 ``langchain_v1``（活跃）各一份，两者分数只差 0.006，
+    兼容层因 ``inferred`` 通道排名靠前而稳定胜出 → Agent 拿已弃用实现做结论。
+    """
+    # 兼容层：带 @deprecated 装饰器
+    seed_file(
+        store,
+        path="libs/langchain_classic/chat_models/base.py",
+        symbols=[sym("init_chat_model", "init_chat_model", start=72, end=72)],
+        bodies={"init_chat_model": "@deprecated(since='1.0.5')\ndef init_chat_model(...):\n"},
+    )
+    # 活跃包：同名同 fqn，但没有装饰器
+    seed_file(
+        store,
+        path="libs/langchain_v1/langchain/chat_models/base.py",
+        symbols=[sym("init_chat_model", "init_chat_model", start=194, end=194)],
+        bodies={"init_chat_model": "def init_chat_model(...):\n"},
+    )
+    old = _candidate(
+        "libs/langchain_classic/chat_models/base.py:init_chat_model:72",
+        rrf_score=0.0323,
+        path="libs/langchain_classic/chat_models/base.py",
+        symbol_fqn="init_chat_model",
+    )
+    new = _candidate(
+        "libs/langchain_v1/langchain/chat_models/base.py:init_chat_model:194",
+        rrf_score=0.0315,
+        path="libs/langchain_v1/langchain/chat_models/base.py",
+        symbol_fqn="init_chat_model",
+    )
+    signals = collect_signals(store, "init_chat_model 的 provider 推断", [old, new])
+    assert signals.deprecated_chunk_ids, "必须识别出带 @deprecated 的符号"
+    ranked = rerank([old, new], signals)
+    assert ranked[0].path.startswith("libs/langchain_v1/"), (
+        f"活跃实现应胜出，实际：{[c.path for c in ranked]}"
+    )
+    reasons = {c.chunk_id: c.reasons for c in ranked}
+    assert any(FEATURE_DEPRECATED_PATH in r for r in reasons[old.chunk_id])
+    assert not any(FEATURE_DEPRECATED_PATH in r for r in reasons[new.chunk_id])
+
+
+def test_deprecated_penalty_covers_sibling_overload_chunks(store, seed_file, sym) -> None:
+    """``@deprecated`` 只标注在最后一个 overload 上时，同文件同符号的其它切片一并降权。
+
+    实测踩到：Python 的 ``@overload`` 把一个函数拆成多个 chunk（``init_chat_model`` 在
+    classic 有 L36/47/58/72），装饰器只在 L72 那个切片首行。若只降权命中切片，
+    排第 1 的 L36 原封不动 → 整个修复失效。
+    """
+    seed_file(
+        store,
+        path="pkg/compat/base.py",
+        symbols=[sym("init_chat_model", "init_chat_model", start=36, end=36)],
+        bodies={"init_chat_model": "@overload\ndef init_chat_model(...):\n"},
+    )
+    seed_file(
+        store,
+        path="pkg/compat/base.py",
+        symbols=[sym("init_chat_model_dep", "init_chat_model", start=72, end=72)],
+        bodies={"init_chat_model": "@deprecated(since='1.0')\ndef init_chat_model(...):\n"},
+    )
+    plain = _candidate("pkg/compat/base.py:init_chat_model:36", path="pkg/compat/base.py",
+                       symbol_fqn="init_chat_model")
+    marked = _candidate("pkg/compat/base.py:init_chat_model:72", path="pkg/compat/base.py",
+                        symbol_fqn="init_chat_model")
+    signals = collect_signals(store, "init_chat_model", [plain, marked])
+    # 两个切片同文件同符号 → 都被降权（含未被直接标注的 overload 切片）
+    assert plain.chunk_id in signals.deprecated_chunk_ids
+    assert marked.chunk_id in signals.deprecated_chunk_ids
+
+
+def test_deprecated_penalty_does_not_leak_across_files(store, seed_file, sym) -> None:
+    """降权不得跨文件扩散：模块级函数 ``symbol_fqn`` 是裸名，同名的活跃实现不能被误降。
+
+    实测踩到：只按 ``symbol_fqn`` 扩展会把 v1 的 ``init_chat_model`` 一起降权，
+    两边同降 = 排名不变，修复失效。
+    """
+    seed_file(
+        store,
+        path="pkg/compat/base.py",
+        symbols=[sym("init_chat_model", "init_chat_model", start=72, end=72)],
+        bodies={"init_chat_model": "@deprecated(since='1.0')\ndef init_chat_model(...):\n"},
+    )
+    seed_file(
+        store,
+        path="pkg/active/base.py",
+        symbols=[sym("init_chat_model", "init_chat_model", start=194, end=194)],
+        bodies={"init_chat_model": "def init_chat_model(...):\n"},
+    )
+    old = _candidate("pkg/compat/base.py:init_chat_model:72", path="pkg/compat/base.py",
+                     symbol_fqn="init_chat_model")
+    new = _candidate("pkg/active/base.py:init_chat_model:194", path="pkg/active/base.py",
+                     symbol_fqn="init_chat_model")
+    signals = collect_signals(store, "init_chat_model", [old, new])
+    assert old.chunk_id in signals.deprecated_chunk_ids
+    assert new.chunk_id not in signals.deprecated_chunk_ids, "活跃实现不得被跨文件误降"
+
+
+def test_deprecation_penalty_is_off_when_nothing_marked(store, seed_file, sym) -> None:
+    """没有带装饰器的符号时该特征完全静默（不影响任何既有排序）。"""
+    seed_file(
+        store,
+        path="src/a.py",
+        symbols=[sym("f", "f", start=1, end=1)],
+        bodies={"f": "def f():\n"},
+    )
+    candidate = _candidate("src/a.py:f:1", path="src/a.py", symbol_fqn="f")
+    signals = collect_signals(store, "f", [candidate])
+    assert signals.deprecated_chunk_ids == frozenset()
+    assert not any(FEATURE_DEPRECATED_PATH in r for r in candidate.reasons)

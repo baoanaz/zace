@@ -26,9 +26,11 @@ vs ``isError``）。
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar, Token
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Any, Protocol
@@ -120,61 +122,33 @@ TOOL_NAMES: frozenset[str] = frozenset({SEARCH_TOOL, ASK_TOOL})
 #: ② 修正与实现不符的字段名——MCP 返回的是 `[zace] answerable=...` 状态行，**没有** `status`
 #:   字段（那是 HTTP router 的 D-24 短路包才有）；
 #: ③ 补救路径从"再问一次"改为可执行动作（换指纹 / 改问法 / 换工具），并写清引用编号契约。
-_SEARCH_DESCRIPTION = (
-    "【定位器｜不调 LLM｜毫秒级】在当前项目仓库中检索与问题最相关的证据包"
-    "（代码片段 + 行号 + 设计文档），返回 Markdown，由你自己阅读后作答。"
-    "\n\n**先用我（而不是 grep/read）当**：你不知道该看哪个文件/符号，需要在陌生仓库里"
-    "找到「答案的位置」——某功能在哪实现、某配置项有哪些取值、某机制的边界与依赖、"
-    "某契约/设计文档怎么说。一次调用即可跨文件批量取证，比逐文件 grep 快得多。"
-    "\n\n**适合看“在哪里/谁调用了什么”，不适合查“谁在调用它”**：调用链（`### Flow`）只给"
-    "**一跳**且遇分叉即停（标 `（已截断）`），反向调用方（callers）不作为一趟展示；"
-    "要穷举调用方或反向依赖，用 grep 按符号名搜。"
-    "\n\n**不要用我**：已经知道确切文件 → 直接 read；需要完整/精确引用（每个调用点、"
-    "每次赋值）→ 直接 grep，我只返回相关度最高的若干块，不是穷举；需要深度推理与"
-    "跨文件综合判断并要一份带引用的结论 → 用 `ask_project`。"
-    "\n\n**查询写法（直接决定命中率）**：① 已知标识符用反引号包住（`Runtime`、"
-    "`DBImpl::Get`、`cvi-agent-aibox`）；② 带上文件名/目录（`db/db_impl.cc`、`docs/contracts/`）；"
-    "③ 带上配置键/常量全名（`AGENT_GRAPH_BACKEND`）；④ **一次只问一个主题**——把多个问题"
-    "拼成一句会让检索失焦。查不到时把查询改得更具体（加符号名/路径），而不是原样重问。"
-    "\n\n**返回格式**：首行是状态行（`[zace] answerable=... confidence=... evidence=N`"
-    "与 `docs=N`、`channels=...`），"
-    "随后 `### Code`（分 Core/Related/Tests 组，每条带 `[E*]` 编号、`文件:行号`、"
-    "`reason:` 召回依据与带行号的原文）、`### Docs`（设计文档）、`### Missing Evidence`、"
-    "`### Suggested Next Queries`。**引用证据时请直接沿用 `[E*]` 编号**，它可回验。"
-    "\n\n**读到结果后的纪律**：① `answerable=false` 或 `### Missing Evidence` 非空，表示"
-    "**证据不足**——请换更具体的符号/路径/配置键重查，或用 grep 核实后再下结论；"
-    "**不要**凭常识断言「仓库里没有 X」。② `confidence=low` 时先补证据再作答。"
-    "③ 正文里出现 `query_partially_matched`，说明你查询中的某些关键词没被覆盖，"
-    "那是换词的信号。\n"
-    "④ 若目标是**语义相近但措辞不同**的概念（如用中文描述一个英文命名的机制），"
-    "先用你猜的英文标识符试一次，再退化到自然语言描述。"
-)
-_ASK_DESCRIPTION = (
-    "【判断器｜调用 LLM｜秒级、有成本】就当前项目提出**需要综合判断的调查性问题**，"
-    "返回基于证据包的带引用回答（证据不足时如实说明缺口并给出改问建议）。"
-    "\n\n**先用我当**：问题需要**结论而非清单**——为什么这样设计、实现与设计是否一致、"
-    "两条链路如何对接、某处取舍的理由、某机制的整体流程。我已内建检索 + 总结 + 引用回验，"
-    "一次调用就能拿到可直接写入答复的段落。"
-    "\n\n**不要用我**：① 单点定位（「X 在哪个文件」）→ `search_context` 更快且免费；"
-    "② 你要读原始代码自己判断 → `search_context` 或直接 read；"
-    "③ 同一问题**不要连续问两次**——第二次不会带来新证据，只会重复消耗模型调用。"
-    "\n\n**长函数/内部流程类问题，请改用 `search_context`**（实测口径）：如果问题要的是"
-    "「某方法内部具体怎么做/依次发生了什么」（尤其是几十上百行的长方法、异步生成器、"
-    "调度入口），我的证据块对超长符号会做**签名 + 前 15 行**的降级，"
-    "最容易恰好丢掉你要问的那段正文。"
-    "这时应当：先 `search_context` 拿到包含该方法**完整正文**的证据块并自己读，"
-    "再决定是否需要我用结论。"
-    "\n\n**提问写法**：用完整问句描述你的调查意图（中文即可），可在句中带上关键符号名/文件名帮助定位。"
-    "问题越具体（指明范围、版本、与其他机制的对比），回答越可靠。"
-    "\n\n**返回格式**：正文是带 `[E*]` 引用的回答，末行附状态行"
-    "（`[zace] answerable=... confidence=... degraded=...`）。"
-    "此外还可能看到两类**降级提示**（此时回答正文不可采信，请看完提示后改用 `search_context`）："
-    "① 提示**证据不足**（对应 `answerable=false`）——按纪律不调 LLM，返回的是尽力而为的上下文包；"
-    "② 提示**总结模型不可用**（`degraded=true`）——返回的仍是可用的检索包。"
-    "无论哪种情况，**都不要把降级包当作结论**；引用证据时请沿用返回的 `[E*]` 编号。"
-    "\n\n**成本纪律**：我是本服务唯一会调用 LLM 的工具。先用 `search_context` 摸清大概位置、"
-    "确认目标存在后，再用我做最后的综合判断；不要用我来试错式探索仓库。"
-)
+#: CF-06 契约文件（**description 的单一来源**，TASK-MCP-BUDGET）。
+#:
+#: 为什么改成读契约：此前 client 与 service **各写一份** description，实测两者长度差 4 倍
+#: （client 298 字符 / service 1309 字符），而 AI 在 stdio 面看到的是 **client** 那份——
+#: 即模块文档要求的"查询写法/分工边界/导航"实际上到不了 AI 眼前。改成读同一份契约后
+#: 两端不可能再漂移（且有测试逐字守住）。
+_CONTRACT_PATH = Path(__file__).resolve().parents[2] / "docs" / "contracts" / "mcp-tools.json"
+
+
+@lru_cache(maxsize=1)
+def _cf06_descriptions() -> dict[str, str]:
+    """``{工具名: description}``，取自 CF-06 契约（缓存：进程内只读一次）。
+
+    契约缺失/损坏时**不静默**：抛 ``RuntimeError`` 并在消息里给出路径与补救办法——
+    description 是行为控制，缺失会让 Agent 完全不会用工具，比启动失败更糟。
+    """
+    try:
+        payload = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:  # pragma: no cover - 部署缺少契约文件时才会触发
+        raise RuntimeError(
+            f"缺少 CF-06 契约文件 {_CONTRACT_PATH}；它是工具 description 的单一来源。"
+            "请确认部署时带上了仓库的 docs/contracts/ 目录。"
+        ) from exc
+    except json.JSONDecodeError as exc:  # pragma: no cover
+        raise RuntimeError(f"CF-06 契约文件不是合法 JSON：{_CONTRACT_PATH}（{exc}）") from exc
+    return {tool["name"]: tool["description"] for tool in payload["tools"]}
+
 
 #: 懒构造 EngineManager 的互斥（MCP 工具没有 ``Request``，不能直接用 ``deps.get_engine_manager``）。
 _manager_lock = Lock()
@@ -342,11 +316,14 @@ def build_mcp(
             _provider_resolver(app, current),
         )
 
+    descriptions = _cf06_descriptions()
     return MCPServer(
         name=MCP_SERVER_NAME,
         tools=[
-            _cf06_tool(search_context, name=SEARCH_TOOL, description=_SEARCH_DESCRIPTION),
-            _cf06_tool(ask_project, name=ASK_TOOL, description=_ASK_DESCRIPTION),
+            _cf06_tool(
+                search_context, name=SEARCH_TOOL, description=descriptions[SEARCH_TOOL]
+            ),
+            _cf06_tool(ask_project, name=ASK_TOOL, description=descriptions[ASK_TOOL]),
         ],
     )
 
