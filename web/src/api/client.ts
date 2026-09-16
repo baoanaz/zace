@@ -102,6 +102,37 @@ export function errorHint(error: unknown): string | null {
       return "本地单用户模式没有账户与 API Key（R34）：把 ZACE_LOCAL_MODE 设为 false 才启用。";
     case "token_not_found":
       return "该 API Key 不存在或已被撤销。";
+    // ---- TASK-110 邀请码与身份分级 ----
+    case "invalid_invite":
+      return "邀请码无效、已失效或已用尽：请确认后重试，或联系管理员获取新的邀请码。";
+    case "custom_key_forbidden":
+      return "自定义 API Key 是【拓荒者】特权（内测玩家与管理员可用）：可留空让服务端随机生成。";
+    case "invalid_custom_key":
+      return "自定义 Key 必须以 zace_ 开头，且其后至少 16 个字符（只能用字母、数字、- 与 _）。";
+    case "key_taken":
+      return "这个 Key 已被使用：换一个（Key 明文在库里唯一）。";
+    case "quota_exceeded":
+      return "索引空间已超限：请在项目页删除不再需要的项目后重试，或联系管理员调整配额。";
+    case "admin_required":
+      return "该功能仅管理员可用。";
+    case "invalid_role":
+      return "未知身份：合法值是 admin / beta / public。";
+    case "invalid_quota":
+      return "配额不能为负数。";
+    case "invalid_admin_action":
+      return "该管理员操作不被允许（例如不能封禁自己）。";
+    case "invite_not_found":
+      return "邀请码不存在或已失效。";
+    case "invite_code_taken":
+      return "邀请码已存在：换一个码面，或留空让服务端生成。";
+    case "invalid_invite_kind":
+      return "未知邀请码类型：A=管理员 / B=内测 / C=公测。";
+    case "invalid_invite_uses":
+      return "可用次数必须在 1~10000 之间。";
+    case "invalid_invite_expiry":
+      return "有效期必须在 1~3650 天之间（不填 = 永久）。";
+    case "invalid_invite_code":
+      return "邀请码必须是 6 位大写字母/数字，且首字母与类型一致。";
     // ---- TASK-062/064 统计 ----
     case "meta_db_unavailable":
       return "元数据库（zace-meta.db）未就绪：历史与用量暂时读不到。";
@@ -258,6 +289,43 @@ export interface Account {
   createdAt: number;
   isLocal: boolean;
   via: string;
+  /**
+   * 身份分级（TASK-110 §3.3）：`admin` / `beta` / `public`。
+   *
+   * **不要用它写特权判断**——一律读 `capabilities`（后端是唯一事实源；
+   * 前端各写一份 `role === "beta"` 一定会与后端漂移）。它只用于“要不要显示后台入口”这类
+   * 粗粒度分支。
+   */
+  role: "admin" | "beta" | "public";
+  /** 头衔（执炬者 / 拓荒者 / 旅人）。 */
+  title: string;
+  /** 内测编号（仅前 100 名内测玩家非 null；展示为 `拓荒者 #0027`）。 */
+  earlyMemberNo: number | null;
+  /**
+   * 全站注册顺序号（所有人都有；控制台展示为 `ID #001`）。
+   *
+   * 与 `earlyMemberNo` 并存：那个是**内测收藏品编号**（只发前 100 名），
+   * 这个是**注册顺序**（永不变）。两者回答不同的问题。
+   */
+  userNo: number | null;
+  capabilities: Capabilities;
+}
+
+/**
+ * 能力位（TASK-110 §3.3）：后端算好，前端只渲染。
+ *
+ * 用户 2026-09-15 拍板**不设项目数上限**，因此这里没有 `projectLimit` 字段
+ * （不是 null / 0——那会被误读成“限制 0 个项目”）。
+ */
+export interface Capabilities {
+  /** 自定义 API Key（拓荒者 / 管理员特权）。 */
+  canCustomKey: boolean;
+  /** **该用户实际生效**的索引空间上限（字节；含后台对单人的覆盖）；`0` = 不限。 */
+  quotaBytes: number;
+  /** 内测编号（非内测恒为 null）。 */
+  earlyMemberNo: number | null;
+  /** 是否管理员（后台入口的依据）。 */
+  isAdmin: boolean;
 }
 
 /** API Key 列表项（**不含明文与哈希**）。 */
@@ -267,6 +335,8 @@ export interface ApiKeySummary {
   prefix: string;
   createdAt: number;
   lastUsedAt: number | null;
+  /** TASK-110 §3.4：自定义 Key（用户自选明文；拓荒者特权）。 */
+  isCustom?: boolean;
 }
 
 /** 创建 API Key 的响应（`token` 明文**仅此一次**）。 */
@@ -286,8 +356,16 @@ export function login(name: string, password: string): Promise<Account> {
   return request<Account>("/api/auth/login", { method: "POST", body: { name, password } });
 }
 
-export function register(name: string, password: string): Promise<Account> {
-  return request<Account>("/api/auth/register", { method: "POST", body: { name, password } });
+/** 注册（TASK-110：**必须**给邀请码，否则服务端 400 `invalid_invite`）。 */
+export function register(
+  name: string,
+  password: string,
+  inviteCode: string,
+): Promise<Account> {
+  return request<Account>("/api/auth/register", {
+    method: "POST",
+    body: { name, password, inviteCode },
+  });
 }
 
 /** 首个用户初始化（`users` 表为空时可用；用后自动关闭）。 */
@@ -303,8 +381,8 @@ export function listApiKeys(): Promise<ApiKeySummary[]> {
   return request<ApiKeySummary[]>("/api/auth/tokens");
 }
 
-export function createApiKey(name: string): Promise<ApiKeyCreated> {
-  return request<ApiKeyCreated>("/api/auth/tokens", { method: "POST", body: { name } });
+export function createApiKey(name: string, key = ""): Promise<ApiKeyCreated> {
+  return request<ApiKeyCreated>("/api/auth/tokens", { method: "POST", body: { name, key } });
 }
 
 export function revokeApiKey(id: string): Promise<void> {
@@ -492,6 +570,10 @@ export interface AccountOverview {
     createdAt: number;
     isLocal: boolean;
     projectCount: number;
+    /** TASK-110：头衔与编号（账户页展示）。 */
+    role?: "admin" | "beta" | "public" | null;
+    title?: string | null;
+    earlyMemberNo?: number | null;
   };
   index: IndexStats;
   usage: UsageSummary;
@@ -535,4 +617,196 @@ export function getProjectUsage(id: string, days = 30): Promise<UsageSummary> {
  */
 export function deleteProject(id: string): Promise<void> {
   return request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// --------------------------------------------------------------------------- 管理员后台（TASK-110）
+
+/**
+ * 后台用户（`GET /api/admin/users` 的列表项）。
+ *
+ * 全部字段都是**服务端已算好的聚合值**（不在这里把 `usedBytes` 换算成 MB 再显示：
+ * 换算单位同时给 `usedText`，两处各算一次必然在舍入上漂移）。
+ */
+export interface AdminUser {
+  userId: string;
+  name: string;
+  createdAt: number;
+  isLocal: boolean;
+  role: "admin" | "beta" | "public";
+  title: string;
+  earlyMemberNo: number | null;
+  /** 全站注册顺序号（所有人都有）。 */
+  userNo?: number | null;
+  /** 后台对该用户的**单人覆盖**（null = 按角色默认）。 */
+  quotaBytes: number | null;
+  /** 实际生效的上限（含角色默认与单人覆盖）。 */
+  effectiveQuotaBytes: number;
+  bannedAt: number | null;
+  lastSeenAt: number | null;
+  projectCount: number;
+  usedBytes: number;
+  usedText: string;
+  queryCount: number;
+}
+
+/** 邀请码使用记录（谁在什么时候用了它）。 */
+export interface InviteUse {
+  userId: string;
+  userName: string | null;
+  usedAt: number;
+}
+
+/** 邀请码（`GET /api/admin/invites`）。 */
+export interface Invite {
+  code: string;
+  kind: string;
+  createdBy: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  maxUses: number;
+  usedCount: number;
+  revokedAt: number | null;
+  uses?: InviteUse[];
+}
+
+/** `indexProgress` 六字段（TASK-034；口径见 M2a 手册 §2）。 */
+export interface IndexProgressView {
+  state: string;
+  startedAt: number | null;
+  finishedAt: number | null;
+  processedFiles: number;
+  totalFiles: number;
+  error: string | null;
+}
+
+/** 后台项目行（含索引健康；`/api/admin/projects`）。 */
+export interface AdminProject {
+  projectId: string;
+  displayName: string;
+  attachedRoot: string | null;
+  ownerId: string | null;
+  /** 归属人展示名（用户要求“显示名称”）；未认领为 null。 */
+  ownerName: string | null;
+  ownerNo: number | null;
+  diskBytes: number;
+  indexProgress: IndexProgressView | null;
+  history: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    lastState: string | null;
+    lastRunAt: number | null;
+  };
+  lastError: string | null;
+  lastErrors: number;
+  lastSkipped: number | null;
+}
+
+/** 后台统计（`GET /api/admin/stats`）。 */
+export interface AdminStats {
+  days: number;
+  /** 查询范围：`null` = 全站；否则是某个用户。 */
+  userId: string | null;
+  projectCount: number;
+  search: UsageSummary;
+  index: IndexStats;
+  /** 无调用时为 `null`（“没有调用”不是“错误率 0%”）。 */
+  errorRate: number | null;
+  totalQueries: number;
+  tokens: number;
+  /** 用户下拉选项（全站查询用）。 */
+  owners: AdminOwnerOption[];
+}
+
+/** 后台“按用户筛选”的下拉选项。 */
+export interface AdminOwnerOption {
+  userId: string;
+  name: string;
+  userNo: number | null;
+  role: "admin" | "beta" | "public";
+}
+
+/** VPS 主机内存（`/api/admin/system` 的 `host`）。 */
+export interface HostMemory {
+  totalBytes: number | null;
+  availableBytes: number | null;
+  usedBytes: number | null;
+  usedRatio: number | null;
+  /** `MemAvailable`（含可回收缓存）或 `MemFree`（退让口径）。 */
+  availableBasis: "MemAvailable" | "MemFree" | null;
+  /** 读不到时的原因（非 Linux 等）；成功时为 null。 */
+  reason: string | null;
+}
+
+export function listAdminUsers(): Promise<{ users: AdminUser[]; limit: number }> {
+  return request<{ users: AdminUser[]; limit: number }>("/api/admin/users");
+}
+
+/** 后台改用户（**只改给到的字段**；`quotaBytes: null` = 恢复按角色默认）。 */
+export function patchAdminUser(
+  userId: string,
+  patch: { role?: string; quotaBytes?: number | null; banned?: boolean },
+): Promise<AdminUser> {
+  return request<AdminUser>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: patch,
+  });
+}
+
+export function listAdminInvites(): Promise<{
+  invites: Invite[];
+  kinds: Record<string, string>;
+  quotaByRole: Record<string, number>;
+}> {
+  return request<{
+    invites: Invite[];
+    kinds: Record<string, string>;
+    quotaByRole: Record<string, number>;
+  }>("/api/admin/invites");
+}
+
+export function createAdminInvite(input: {
+  kind: string;
+  maxUses: number;
+  expiresInDays?: number | null;
+  code?: string;
+}): Promise<Invite> {
+  return request<Invite>("/api/admin/invites", {
+    method: "POST",
+    body: {
+      kind: input.kind,
+      maxUses: input.maxUses,
+      expiresInDays: input.expiresInDays ?? null,
+      code: input.code ?? "",
+    },
+  });
+}
+
+export function revokeAdminInvite(code: string): Promise<void> {
+  return request<void>(`/api/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" });
+}
+
+export function listAdminProjects(
+  userId?: string | null,
+): Promise<{ projects: AdminProject[]; totalBytes: number; owners: AdminOwnerOption[] }> {
+  const query = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+  return request<{ projects: AdminProject[]; totalBytes: number; owners: AdminOwnerOption[] }>(
+    `/api/admin/projects${query}`,
+  );
+}
+
+/** 管理员删除任意项目（级联删除索引数据；不可恢复）。 */
+export function deleteAdminProject(projectId: string): Promise<void> {
+  return request<void>(`/api/admin/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function getAdminStats(days = 30, userId?: string | null): Promise<AdminStats> {
+  const scope = userId ? `&userId=${encodeURIComponent(userId)}` : "";
+  return request<AdminStats>(`/api/admin/stats?days=${days}${scope}`);
+}
+
+export function getAdminSystem(): Promise<Health> {
+  return request<Health>("/api/admin/system");
 }

@@ -25,6 +25,15 @@ from tests.conftest import DeterministicBigramEmbedding, make_client
 PASSWORD = "correct-horse-battery"
 
 
+def _invite(ns, kind: str = "C") -> str:
+    """造一个邀请码（TASK-110：注册必须有码）。"""
+    from zace_service.invites import generate_code
+
+    code = generate_code(kind)
+    ns.app.state.meta_db.create_invite(code, kind)
+    return code
+
+
 def _make(tmp_path: Path, *, local_mode: bool = False) -> SimpleNamespace:
     """构造一个 app（非本地模式 = 云端形态，鉴权生效）。"""
     settings = Settings(
@@ -169,40 +178,51 @@ def test_bootstrap_unavailable_in_local_mode(tmp_path: Path) -> None:
 
 
 def test_register_conflict_is_409(tmp_path: Path) -> None:
-    """每次部署都可注册；同名 → 409 name_taken。"""
+    """每次部署都可注册（凭邀请码）；同名 → 409 name_taken。
+
+    TASK-110：两次注册各用一张**独立**的码——重名失败时事务回滚，但一个用例只想验证
+    "第二次因重名被拒"，让它的码还没被消耗才能把它与邀请码问题彻底分开。
+    """
     ns = _make(tmp_path)
     with ns.client:
         for _ in range(2):
             response = ns.client.post(
-                "/api/auth/register", json={"name": "bob", "password": PASSWORD}
+                "/api/auth/register",
+                json={
+                    "name": "bob",
+                    "password": PASSWORD,
+                    "inviteCode": _invite(ns),
+                },
             )
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "name_taken"
     ns.app.state.engine_manager.close()
 
 
-def test_weak_password_rejected(cloud) -> None:
-    """密码长度下限（TASK-081：下限为 3）：低于下限 → 400 invalid_password。"""
+def test_empty_password_rejected(cloud) -> None:
+    """密码**只拒空**（TASK-110 用户 2026-09-15 拍板：“密码不做限制”）。
+
+    空密码不是“不限制”而是“没锁”：任何人输个名字就能登进去。因此下限降到 1 个字符，
+    但仍然拒绝空串。
+    """
     response = cloud.client.post(
-        "/api/auth/bootstrap", json={"name": "owner", "password": "ab"}
+        "/api/auth/bootstrap", json={"name": "owner", "password": ""}
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_password"
 
 
-def test_password_at_lower_bound_is_accepted(cloud) -> None:
-    """边界：长度正好等于下限（3）的密码必须被接受（TASK-081 的正向证明）。"""
+def test_short_password_is_accepted(cloud) -> None:
+    """一个字符的密码也允许（用户 2026-09-15 要求“任意想要的都行”），且确实生效。"""
     response = cloud.client.post(
-        "/api/auth/bootstrap", json={"name": "owner", "password": "abc"}
+        "/api/auth/bootstrap", json={"name": "owner", "password": "a"}
     )
     assert response.status_code == 201, response.text
     assert response.json()["name"] == "owner"
     assert SESSION_COOKIE in cloud.client.cookies
-    # 这个 3 位密码确实生效：能登出再登回来。
+    # 这个 1 位密码确实生效：能登出再登回来。
     assert cloud.client.post("/api/auth/logout").status_code == 204
-    login = cloud.client.post(
-        "/api/auth/login", json={"name": "owner", "password": "abc"}
-    )
+    login = cloud.client.post("/api/auth/login", json={"name": "owner", "password": "a"})
     assert login.status_code == 200, login.text
 
 
@@ -313,13 +333,14 @@ def test_public_paths_do_not_require_credentials(cloud) -> None:
         assert cloud.client.get(path).status_code == 200, path
 
     register = cloud.client.post(
-        "/api/auth/register", json={"name": "x", "password": PASSWORD}
+        "/api/auth/register",
+        json={"name": "x", "password": PASSWORD, "inviteCode": _invite(cloud)},
     )
     assert register.status_code == 201
     assert register.json()["name"] == "x"
 
     bootstrap = cloud.client.post(
-        "/api/auth/bootstrap", json={"name": "x", "password": "ab"}
+        "/api/auth/bootstrap", json={"name": "x", "password": ""}
     )
     assert bootstrap.status_code == 400
     assert bootstrap.json()["error"]["code"] == "invalid_password"

@@ -343,4 +343,179 @@ CAN_CUSTOM_KEY = {ROLE_ADMIN, ROLE_BETA}   # 自定义 Key 是内测/管理员�
 
 ## 9. 执行记录
 
-（实施 AI 在此填写：日期 + 分支 + 验收命令与结果 + 与设计的偏差 + 未决问题。）
+### 2026-09-15 · lane-c · `feature/task-110-invites-roles_xwz0915`（P1–P4 全部完成）
+
+> 本节记录第一轮实现；第二轮（用户看效果后的 6 项改动）见下方。
+
+#### 开工前与用户确认的 5 个决策（本卡 §7 待确认项）
+
+| # | 问题 | 用户拍板 |
+|---|---|---|
+| 1 | 邀请码格式 | **首字母即类型 + 5 位随机**（`A7K2M9`），不是"纯随机 + 类型存字段" |
+| 2 | 实施范围 | **P1–P4 全做** |
+| 3 | `/api/auth/me` 契约变更 | **不做向后兼容妥协**，直接按最终形态改（开发期；后期可重开服务） |
+| 4 | 配额语义 | **超限硬拒新索引**（上传 413；检索仍只告警，读路径不变） |
+| 5 | 项目数上限（卡内 §3.3 的能力位与 §1.5 的矛盾） | **不设项目数上限**（能力位里不出现 `projectLimit`） |
+
+#### 契约文件：已按最终形态改完（不再留悬空声明）
+
+用户 2026-09-15 追问后拍板：**本次直接按最终形态走，不留任何兼容债**。因此：
+
+- `docs/contracts/openapi.yaml` 已写入本卡及**历史累积的全部扩展路径**（TASK-034/060/062/064/
+  090/099/110），共 **36 个路径**，与 `app.openapi()` **双向零差**；
+- `test_skeleton.TASK_EXTENSION_PATHS` **收缩为空集**——不再有任何“合同与实现暂时不一致 ”
+  的例外，机制保留但不使用；
+- 同时给 `/api/auth/me` 等补了 `Account` / `Capabilities` schema 与 `Forbidden` 响应。
+
+#### 验收命令与结果
+
+```console
+$ uv run ruff check .
+All checks passed!
+$ uv run python scripts/check_dependency_direction.py
+依赖方向检查通过（core 纯库 / service 不上探）。
+$ uv run pytest -o addopts="" -q
+1109 passed, 2 skipped   # 基线 1033（新增 76 条：test_invites.py 44 + test_admin.py 32）
+$ cd web && npx tsc --noEmit && npx eslint src --max-warnings 0 && npm run build
+✅ tsc 无输出 ｜ ✅ eslint 无输出 ｜ ✅ vite build 成功（49 modules）
+$ cd web && npx vitest run
+96 passed, 3 skipped, 1 failed
+     ↑ 唯一失败是 ``History.trace.test.tsx`` 的「查看」弹窗用例，
+       已用 ``git stash`` 在干净 main 上复现（**预先存在**，与本卡无关）。
+       本卡新增：identity.test.tsx 9 条 + App.test.tsx 邀请码 4 条。
+```
+
+#### 真实服务上跑通的端到端验证（用户 2026-09-15 要求“跑一次看看”）
+
+用本机 live 库的副本（`/tmp/zace-t110`，33 MB）在 **:8799** 起了本卡代码 + 前端 :5199（无 sudo，无法重启:
+8787 的生产实例）。逐项实测：
+
+| # | 验收项 | 实测结果 |
+|---|---|---|
+| 1 | 旧库迁移后身份 | `xuwenzheng` → `admin` / 执炬者 / 5120 MB |
+| 2 | 旧 Key 仍可用 | `zace_123456` → `/api/projects` **200** |
+| 3 | 旧 Key 现在是管理员 | `/api/admin/users` **200** |
+| 4 | 无码注册 | **400** `invalid_invite` |
+| 5 | A 码建码 | 生成 `BIS6ID`；另一个 `B6RZXW` 现场演示用 |
+| 6 | B 码注册 | `role=beta` / `拓荒者` / `earlyMemberNo=1` / `canCustomKey=true` / 1024 MB |
+| 7 | 内测建自定义 Key | `zace_my-laptop-key-2026` → **200**，`isCustom=true` |
+| 8 | 自定义 Key 调受保护端点 | `/api/projects` **200**；`/api/auth/me` → `beta 拓荒者 #001` |
+| 9 | 自定义 Key 出现在列表 | `isCustom: true` |
+| 10 | C 码注册 | `public` / `旅人` / 无编号 / `canCustomKey=false` / 500 MB |
+| 11 | 公测传自定义 Key | **403** `custom_key_forbidden`（文案含“拓荒者”） |
+| 12 | 格式校验 | 无前缀 / 短于 16 / 含空格 → 均 **400** `invalid_custom_key` |
+| 13 | 封禁立即生效 | 封禁后该自定义 Key → **401**（无需重新登录） |
+| 14 | 解封恢复 | **200** |
+| 15 | 配额充足上传 | **200** |
+| 16 | 配额超限上传 | **413** `quota_exceeded`（数字如实：144 B / 上限 1 B / 已用 138 B） |
+| 17 | 超限时检索 | **200**（读路径不阻断） |
+| 18 | 后台五模块 | users / invites / projects / stats / system 均 **200** |
+| 19 | 统计口径 | 31 次调用 / 18 有答案 / 9 证据不足 / 4 降级 / 错误率 0.129 |
+
+**实测发现并修复的 2 个真实缺陷**（都不是测试能替代的发现）：
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| A | ``{"quotaBytes": null}`` 想“恢复按角色默认”却**静默无效** | 路由只看 ``payload.quotaBytes is not None``，把显式 null 与“没传”当成同一回事 | 改看 ``payload.model_fields_set``；补 ``test_patch_quota_null_restores_role_default`` |
+| B | 手册与前端 placeholder 里的示例 Key ``zace_my-project-2026`` **只有 15 字符**，用户照着抄必得 400 | 占位串写下时没数字符 | 统一改为 ``zace_my-laptop-key-2026``；补 ``test_documented_example_keys_are_accepted`` 把“文档示例必须端到端可用”钉住 |
+
+#### 真实库迁移实测（卡内 §5 的“迁移路径”验收项）
+
+在本机 live 库的**副本**上跑（不动原库）：
+
+```console
+# 迁移前：xuwenzheng 是 public
+$ sqlite3 /tmp/t110/live-copy.db "select role from users where name='xuwenzheng'"
+# → 读不到 role 列（迁移前表里没有它）
+# 跑 create_app（含迁移 + 启动提升）后：
+me: 200 {'name': 'xuwenzheng', 'role': 'admin', 'title': '执炬者',
+         'capabilities': {'canCustomKey': True, 'quotaBytes': 5368709120, 'isAdmin': True}}
+projects: 200 0
+admin/users: 200          ← 旧 Key zace_123456 现在能访问后台（它属于管理员）
+admin/system: 200 ok
+```
+
+✅ 旧用户默认 `role=public`、旧 Key `zace_123456` **仍可用**（迁移只加列，不改 `token_hash`）。
+⚠️ **待执行**：本机 live 库（`~/.zace/live/zace-meta.db`）**尚未跑迁移**——下次重启服务时
+由 `create_app` 自动完成（幂等）。备份已在 §7.1 记录的 `zace-meta.db.bak-20260915-232108`。
+
+#### 与设计的偏差
+
+| # | 卡内原文 | 实际实现 | 理由 |
+|---|---|---|---|
+| 1 | §7-1 建议"6 位纯随机 + 类型存字段" | 首字母即类型 | **用户 2026-09-15 拍板**（可读性优先；码空间 36⁵≈6.0e7 仍不可盲猜） |
+| 2 | §1.1 散文写"6 位大写字母" | 实际是**大写字母 + 数字**（`[A-Z0-9]`） | 以卡内**示例码面**（`A7K2M9` / `B3NQ8W` / `C05RT2`）为准；用户看着这些示例拍的板 |
+| 3 | §3.3 能力位里有 `projectLimit: 10` | **不输出该字段** | **用户拍板不设项目数上限**；给 0/null 会被误读为“限制 0 个” |
+| 4 | §7-3 建议"先保持告警" | 上传**硬拒**（413 `quota_exceeded`），检索仍只告警 | **用户拍板**；检索不会让占用变大，拒绝它无意义 |
+| 5 | §3.1 "迁移按名字匹配提升为 admin" | 提升放在 **`create_app` 启动时**（不只在迁移里） | 目标账户可能在首次启动时还不存在；每次启动幂等补一刀比“迁移跑一次、改名后再也提不上”可靠 |
+| 6 | §3.5 `GET /api/admin/projects` 数据源仅 `index_runs` | 外加 `projects` 表的归属人与 `quota.project_usage_bytes` 的占用 | "排查异常索引"需要知道是谁的项目、有多大 |
+| 7 | §7-4 `/api/auth/me` 走契约流程 | **已按最终形态写入 `docs/contracts/openapi.yaml`**（含 `Account` / `Capabilities` schema） | 用户 2026-09-15 追问后拍板：开发期不留兼容债，契约与实现**双向零差**；`TASK_EXTENSION_PATHS` 已收空 |
+
+#### 重要实现细节（后续维护者必读）
+
+1. **核销与建账户在同一事务**（`MetaDB.create_user_with_invite`）：拆成两步一定有一个时刻"码已耗尽、账户还没建"，中间失败就是用户白丢一张码。并发用例 `test_concurrent_use_of_single_use_code_admits_exactly_one` 用 6 个真线程守它。
+2. **`roles.py` 是单一事实源**：`capabilities_for()` 是唯一的特权判定；后端（自定义 Key 准入）与前端展示都读它的输出。前端**不写** `role === "beta"`。
+3. **`quota.effective_user_limit_bytes()` 是唯一额度口径**：展示（`me` / `overview` / 告警）与硬拒（`enforce_upload_limit`）都调它——两处各算一遍必然漂移。
+4. **封禁在 `auth.authenticate` 统一拦截**（session 与 token 两条路）：封禁**立即**对所有凭据生效，且不用逐把撤销 Key。
+5. **`local` 隐式账户不是管理员**：本地模式调 `/api/admin/*` 得到 403（诚实性：本地不等于拥有一切权限）。
+6. **`quota_identity()` 在本地模式返回 `(None, None, None)`**：隐式账户 `"local"` 在 `users` 表里可能根本不存在，拿它去 `list_projects` 会返回空集 → 用量恒为 0 → 告警永不出现（一个静默失灵）。
+
+#### 未决问题 / 交接事项
+1. **生产服务未重启**：本机 live 实例（`:8787`，root 跑的）仍跑在**旧代码**上（本会话无 sudo，
+   无法 kill）。因此：① live 库**尚未跑迁移**；② 浏览器上的正式站点仍是旧版注册/无后台。
+   下次由有权限的人重启 `zace-live.service` 即自动完成迁移 + 管理员提升（幂等）。
+   **验证环境**：本卡的代码已用 live 库副本在 `:8799` + 前端 `:5199` 起过并逐项验收（见上表）。
+2. **前端后台页无真实浏览器 E2E**：`identity.test.tsx` 用桩 `fetch` 断言了"三身份内容确实不同"，
+   也已在真实服务上逐项调通了 API，但**没有**用浏览器跑过一遍（`e2e.test.tsx` 需真实服务）。
+3. **`History.trace.test.tsx` 的预存失败**：与本卡无关（干净 main 同样失败），但会让 `npm test` 不绿——单独开卡修。
+4. **配额硬拒是 fail-open**：统计失败时**放行**上传（而非拒绝）。理由见 `enforce_upload_limit` 的 docstring；
+   若将来压测发现恶意用户能借此绕过，再改 fail-closed。
+5. **`EARLY_MEMBER_MAX` 之外的编号**：第 101 名起 `early_member_no` 为 `NULL`（卡内要求）。
+   后台把某人升为内测时会用 `_next_member_no` 补一个**空缺号**（前 100 全发完则不给号）。
+
+
+---
+
+### 2026-09-15 · 第二轮（用户看实际效果后提的 6 项改动）
+
+用户逐条反馈后拍板的细节：
+
+| # | 用户要求 | 实现 |
+|---|---|---|
+| 1 | Key 页改弹窗；普通用户看不到自定义行；现有 Key 加复制按钮 | 页面只剩列表卡片 + 右上角「创建 Key」；弹窗第一行名称、第二行自定义（仅特权渲染）；**复制按钮只在创建成功的弹窗里** |
+| 2 | 账户页合并进控制台，显示 `ID：#001` | 删 `AccountPage.tsx`，`/account` 重定向；新增全站顺序号 `users.user_no`（所有人都有，迁移时按创建顺序回填） |
+| 3 | 注册页排出顺序；密码不限 | 账户 → 密码 → 确认密码 → 邀请码；密码下限降到**只拒空** |
+| 4 | 后台可改身份/额度；项目按占用降序、可按用户筛、可删除；归属显示名称 | 配额改为可点弹窗；`/api/admin/projects` 加 `userId` 筛选 + 后端降序 + `ownerName`；新增 `DELETE /api/admin/projects/{id}` |
+| 5 | 合并「调用统计」与「项目」为「信息查询」 | 两者合并为一个标签，共用同一用户下拉（范围必须一致，否则数字对不上） |
+| 6 | 系统状态加 VPS 内存 | `/api/admin/system` 追加 `host`（`/proc/meminfo`；读不到时如实给原因，不编 0） |
+
+**关于第 1 条的“复制 Key”**：问过用户后确认**保持“明文只看一次”**纪律（库里只存 sha256）。
+因此复制按钮只能放在**创建成功那一刻的弹窗**里，列表里无法“再复制一次”——这是刻意的，
+不是漏做。
+
+#### 实测验证（第二轮，在 :8799 + :5199 上逐项跑过）
+
+```console
+$ uv run pytest -o addopts="" -q         # 1115 passed, 2 skipped（新增 6 条）
+$ cd web && npx vitest run               # 100 passed, 1 预存失败（History.trace，与本卡无关）
+$ npx tsc --noEmit && npx eslint src --max-warnings 0 && npm run build   # 全绿
+```
+
+| # | 验收项 | 实测结果 |
+|---|---|---|
+| 1 | 迁移后所有用户有 ID | `xuwenzheng #001` / `pioneer #002` / `traveler #003`（按 `created_at` 回填） |
+| 2 | 空密码 | **400** `invalid_password` |
+| 3 | 单字符密码 | **201**，新用户拿到 `ID #004` |
+| 4 | `zace_1` / `zace_中文也行` / `zace_with space` | 均 **200**（字符集不限制） |
+| 5 | 随机 Key | `zace_SWVR8V3p5Ms9Mv19`——前缀对、正文 16 位、全字母数字 |
+| 6 | 项目按占用降序 | `cockpit-agents-py 32.4MB` → `t110-demo 141KB` |
+| 7 | 归属显示名称 | `xuwenzheng #001` / `traveler #003`（不再是一串 hex） |
+| 8 | 按用户筛选项目 | `traveler` → 只有 `t110-demo` |
+| 9 | 按用户查统计 | 该用户 1 个项目 / 4 次调用 / 1090 token；全站 2 / 31 / 79433 |
+| 10 | 删除项目 | **204**；该用户项目列表变空，**后台也不再有幽灵项** |
+| 11 | VPS 内存 | 已用 4.04 / 15.62 GiB（25.9%），口径 `MemAvailable` |
+
+**实测发现并修复的 1 个缺陷**：`/api/auth/me` 与 `/api/admin/users` **都漏了 `userNo`**——
+我把它加在了 `User.to_json()`（只用于注册/登录/初始化），而这两个端点是**手写字段**的。
+表现是：库里 `user_no` 已回填成 1/2/3，前端却全部显示 `ID #000`。
+修完后两者都回 `userNo`，且前端对缺失值显示 `—` 而不是 `#000`（不再把“没有”伪装成“第 0 个”）。

@@ -27,6 +27,7 @@ from pathlib import Path
 from zace_service import __version__
 
 __all__ = [
+    "ADMIN_NAME_ENV",
     "ANSWER_API_KEY_ENV",
     "ANSWER_BASE_URL_ENV",
     "ANSWER_MAX_TOKENS_ENV",
@@ -42,6 +43,7 @@ __all__ = [
     "DEFAULT_ANSWER_MAX_TOKENS",
     "DEFAULT_ANSWER_TEMPERATURE",
     "DEFAULT_ANSWER_TIMEOUT_S",
+    "DEFAULT_ADMIN_NAME",
     "DEFAULT_DATA_ROOT",
     "DEFAULT_HOST",
     "DEFAULT_LOCAL_RESCAN_INTERVAL_S",
@@ -99,12 +101,22 @@ DEFAULT_LOG_RETENTION_DAYS = 14
 # 换算率 ≈ 10 KB / chunk → 单项目 500 MB ≈ 50,000 chunks，对中型项目（29 MB）有 17 倍余量。
 # 本卡实施时在真机复测：cockpit-agents 索引目录 **28.05 MiB / 3416 chunks**（≈ 8.6 KB/chunk），
 # 与上述外推一致。**不要为了"让默认值好看"而调它**——真实分布要靠上线后观察（TASK-093）。
+#
+# TASK-110 §1.5：**按角色的配额**（公测 500 MB / 内测 1 GB / 管理员 5 GB）在
+# ``zace_service.roles.QUOTA_BY_ROLE``；下面这两个退化为**无角色信息时的兜底**
+# （本地模式、未登录的隐式账户）。
 #: 单项目存储上限（字节，默认 500 MB）。
 STORAGE_LIMIT_PER_PROJECT_ENV = "ZACE_STORAGE_LIMIT_PER_PROJECT_BYTES"
 #: 单用户存储总额上限（字节，默认 2 GB）。
 STORAGE_LIMIT_PER_USER_ENV = "ZACE_STORAGE_LIMIT_PER_USER_BYTES"
 #: 告警阈值比例（相对上限；默认 0.8 = 80%）。
 STORAGE_WARN_RATIO_ENV = "ZACE_STORAGE_WARN_RATIO"
+#: 首个管理员的账户名（TASK-110 §7.1：按名字指定，而不是靠“最早创建者”）。
+#:
+#: 为什么做成配置：这是**部署级**信息（谁是负责人随环境变），写死在代码里等于把某台机器的人员
+#: 情况烧进产品。默认值 ``xuwenzheng`` 是本项目当前的实际部署者（卡内 §7.1 已拍板）。
+ADMIN_NAME_ENV = "ZACE_ADMIN_NAME"
+DEFAULT_ADMIN_NAME = "xuwenzheng"
 #: 默认单项目上限：500 MiB。
 DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES = 500 * 1024 * 1024
 #: 默认单用户上限：2 GiB（40G VPS 约容纳 20 个活跃用户）。
@@ -175,6 +187,8 @@ class Settings:
     log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
     log_retention_days: int = DEFAULT_LOG_RETENTION_DAYS
     #: 存储配额（TASK-094 §B1）：**0 表示不限**（本地开发与测试用；配额判定恒为 ``ok``）。
+    #: TASK-110 起，已登录用户的实际上限走 ``roles.QUOTA_BY_ROLE``（见 ``quota.py``），
+    #: 这两个值退化为"没有角色信息时"的兜底。
     storage_limit_per_project_bytes: int = DEFAULT_STORAGE_LIMIT_PER_PROJECT_BYTES
     storage_limit_per_user_bytes: int = DEFAULT_STORAGE_LIMIT_PER_USER_BYTES
     #: 告警阈值比例（相对上限）。比例语义下**0 不表示不限**，因此只接受 (0, 1]；
@@ -194,6 +208,8 @@ class Settings:
     #: Embedding 速率配额（展示用）：TPM / RPM。未配置 → 页面显示 `—`。
     embed_tpm: int | None = None
     embed_rpm: int | None = None
+    #: 首个管理员的名字（TASK-110 §7.1）：迁移 / 启动时把它提为 ``role='admin'``。
+    admin_name: str = DEFAULT_ADMIN_NAME
     version: str = __version__
 
     @property
@@ -310,6 +326,7 @@ class Settings:
             answer_provider=(source.get(ANSWER_PROVIDER_ENV) or "").strip() or None,
             embed_tpm=_as_optional_int(source.get(EMBED_TPM_ENV), EMBED_TPM_ENV),
             embed_rpm=_as_optional_int(source.get(EMBED_RPM_ENV), EMBED_RPM_ENV),
+            admin_name=(source.get(ADMIN_NAME_ENV) or "").strip() or DEFAULT_ADMIN_NAME,
         )
 
 

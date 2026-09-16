@@ -24,11 +24,14 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from zace_service.auth import quota_identity
 from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import ApiError
 from zace_service.logging import get_logger, redact_text
 from zace_service.metadb import MetaDB
+from zace_service.quota import effective_user_limit_bytes
 from zace_service.requestlog import MAX_RELATED_LOGS, lookup_all
+from zace_service.roles import normalize_role, title_for
 from zace_service.stats import account_overview
 
 router = APIRouter(tags=["ops"])
@@ -109,6 +112,8 @@ def overview(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
         # 未登记归属的项目（本地 attach 后尚未 claim）不计入概览，避免"看到不属于自己的项目"。
         listed = [item for item in listed if str(item["projectId"]) in owned]
     settings = get_settings(request)
+    # TASK-110：账户页要显示头衔/编号与"按角色的额度"；上限与上传硬拒同一函数算出。
+    user_id, role, override = quota_identity(request)
     return account_overview(
         user_name=getattr(user, "name", "local"),
         user_created_at=getattr(user, "created_at", 0),
@@ -118,6 +123,10 @@ def overview(request: Request, days: int = DEFAULT_DAYS) -> dict[str, Any]:
         db=db,
         days=window,
         settings=settings,
+        user_limit_bytes=effective_user_limit_bytes(settings, role=role, override=override),
+        role=normalize_role(getattr(user, "role", None)) if user_id else None,
+        title=title_for(getattr(user, "role", None)) if user_id else None,
+        early_member_no=getattr(user, "early_member_no", None),
     )
 
 

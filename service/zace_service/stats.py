@@ -25,7 +25,7 @@ from typing import Any
 from zace_service.config import Settings
 from zace_service.metadb import MetaDB
 
-__all__ = ["IndexStatsBundle", "account_overview", "dir_size_bytes"]
+__all__ = ["IndexStatsBundle", "account_overview", "dir_size_bytes", "host_memory"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +67,68 @@ def dir_size_bytes(path: Path) -> int:
     return total
 
 
+def host_memory() -> dict[str, Any]:
+    """主机内存占用（后台系统状态展示；用户 2026-09-15 要求）。
+
+    数据源 ````/proc/meminfo``（Linux，零依赖）：服务跑在 2C2G 的 VPS 上，
+    "内存还剩多少"是判断能不能再收一个用户的实际依据。
+
+    诚实性口径（与全库一致）：
+
+    - ``MemAvailable`` 优先（内核估计的**还能用**的量，含可回收缓存）；没有它时退回
+      ``MemFree``，并**如实标注**用的是哪个口径（``availableBasis``）；
+    - 读不到（非 Linux / 权限）→ 三个字段全 ``None`` + 一行 ``reason``，**不编 0**：
+      "没读到"与"用了 0"是两件事。
+    """
+    path = Path("/proc/meminfo")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {
+            "totalBytes": None,
+            "availableBytes": None,
+            "usedBytes": None,
+            "usedRatio": None,
+            "availableBasis": None,
+            "reason": f"读不到 /proc/meminfo（{type(exc).__name__}）：仅 Linux 可测",
+        }
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if not parts:
+            continue
+        try:
+            kib = int(parts[0])  # /proc/meminfo 的值以 kB 为单位
+        except ValueError:
+            continue
+        values[name.strip()] = kib * 1024
+    total = values.get("MemTotal")
+    if total is None:
+        return {
+            "totalBytes": None,
+            "availableBytes": None,
+            "usedBytes": None,
+            "usedRatio": None,
+            "availableBasis": None,
+            "reason": "/proc/meminfo 里没有 MemTotal（格式意外）",
+        }
+    available = values.get("MemAvailable")
+    basis = "MemAvailable"
+    if available is None:
+        available = values.get("MemFree", 0)
+        basis = "MemFree"
+    used = max(0, total - available)
+    return {
+        "totalBytes": total,
+        "availableBytes": available,
+        "usedBytes": used,
+        "usedRatio": round(used / total, 4) if total else None,
+        "availableBasis": basis,
+        "reason": None,
+    }
+
+
 def account_overview(
     *,
     user_name: str,
@@ -77,6 +139,10 @@ def account_overview(
     db: MetaDB,
     days: int = 30,
     settings: Settings | None = None,
+    user_limit_bytes: int | None = None,
+    role: str | None = None,
+    title: str | None = None,
+    early_member_no: int | None = None,
 ) -> dict[str, Any]:
     """首页账户面板的数据：账户资料 + 跨项目索引统计 + 查询用量 + 存储配额（TASK-094 §B4）。
 
@@ -95,6 +161,10 @@ def account_overview(
             "createdAt": user_created_at,
             "isLocal": is_local,
             "projectCount": len(project_ids),
+            # TASK-110 §1.3/§1.4：账户页的头衔与编号（``role`` 也跟出去，前端据此分页）。
+            "role": role,
+            "title": title,
+            "earlyMemberNo": early_member_no,
         },
         "index": index.to_json(),
         "usage": usage.to_json(),
@@ -102,11 +172,18 @@ def account_overview(
         "days": days,
     }
     if settings is not None:
-        payload["storage"] = _storage_overview(settings, projects, project_ids)
+        payload["storage"] = _storage_overview(
+            settings, projects, project_ids, user_limit_bytes=user_limit_bytes
+        )
     return payload
 
+
 def _storage_overview(
-    settings: Settings, projects: list[dict[str, Any]], project_ids: list[str]
+    settings: Settings,
+    projects: list[dict[str, Any]],
+    project_ids: list[str],
+    *,
+    user_limit_bytes: int | None = None,
 ) -> dict[str, Any]:
     """存储用量与判定（TASK-094 §B4；与 tool 告警**同一份判定**）。
 
@@ -115,10 +192,14 @@ def _storage_overview(
     因此这里选列表首项（**不是**"随便选一个当成用户的项目"——项目维度会因此只代表那一项，
     用户维度才是页面真正显示的"已用/上限"）。项目维度逐项状态由 ``projects[].diskBytes`` 在前端
     行内标注。
+
+    ``user_limit_bytes``（TASK-110）：该用户按角色生效的上限；不传回落 ``Settings`` 全局默认。
     """
     # 局部导入打破 stats ↔ quota 的导入环（quota 顶部 import stats.dir_size_bytes）。
     from zace_service.quota import status_from_sizes
 
     sizes = {str(item.get("projectId", "")): int(item.get("diskBytes") or 0) for item in projects}
     subject = project_ids[0] if project_ids else ""
-    return status_from_sizes(sizes, settings, project_id=subject).to_json()
+    return status_from_sizes(
+        sizes, settings, project_id=subject, user_limit=user_limit_bytes
+    ).to_json()

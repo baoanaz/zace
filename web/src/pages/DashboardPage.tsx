@@ -14,6 +14,11 @@
  *
  * 保留「账户资料」：它是本页唯一的身份信息，用户需要确认"我是谁"。
  *
+ * TASK-110（2026-09-15 用户要求）：把独立的「账户」页**合并回控制台**（两者重合），
+ * 并把身份/特权/额度都长在「账户资料」卡里，头部显示 ``ID #001``。
+ * 因此 ``/account`` 路由已重定向到 ``/``，``AccountPage.tsx`` 已删除——
+ * 同一份信息不再有两个页面各渲染一遍。
+ *
  * 面板口径（不许美化成好看的数字）：
  * - 未测量的一律显示 `—`（如 `citationCoverageAvg` 在 LLM 接入前恒为 null）；
  * - 索引耗时与检索耗时是**两个不同口径的平均值**（前者按索引 run，后者按查询），
@@ -22,7 +27,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { type AccountOverview, getAccountOverview } from "../api/client";
+import { type AccountOverview, getAccountOverview, getMe, type Account } from "../api/client";
 import { ErrorBlock, LoadingBlock, Page } from "../components/ui";
 import { ServiceModels } from "../components/ServiceModels";
 
@@ -64,6 +69,8 @@ function RangePicker({ days, onChange }: { days: number; onChange: (days: number
 
 export function DashboardPage() {
   const [data, setData] = useState<AccountOverview | null>(null);
+  //: 身份细节（头衔/编号/能力位）。与 overview 分开取：那个端点是“用量”，不含能力位。
+  const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<unknown>(null);
   //: 时间窗口（天）。用户 2026-09-14 要求"可选择范围时间，天为单位"。
   const [days, setDays] = useState(WINDOW_DAYS);
@@ -71,7 +78,13 @@ export function DashboardPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      setData(await getAccountOverview(days));
+      // 两个请求并行：``overview`` 给用量，``me`` 给身份与能力位（两件事，不互相依赖）。
+      const [overview, me] = await Promise.all([
+        getAccountOverview(days),
+        getMe().catch(() => null),
+      ]);
+      setData(overview);
+      setAccount(me);
     } catch (err) {
       setData(null);
       setError(err);
@@ -97,9 +110,32 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="账户资料">
           <Row label="账户" value={profile.name} />
+          <Row
+            label="ID"
+            value={
+              account?.userNo == null
+                ? "—"
+                : `#${String(account.userNo).padStart(3, "0")}`
+            }
+          />
+          <Row label="身份" value={<TitleBadge account={account} />} />
           <Row label="类型" value={profile.isLocal ? "本地单用户" : "云端账户"} />
           <Row label="创建时间" value={formatTime(profile.createdAt)} />
           <Row label="项目数" value={String(profile.projectCount)} />
+          <Row
+            label="空间上限"
+            value={formatQuota(account?.capabilities.quotaBytes ?? 0)}
+          />
+          <Row
+            label="自定义 Key"
+            value={
+              account?.capabilities.canCustomKey ? (
+                <span className="text-emerald-700">可用（{account.title}特权）</span>
+              ) : (
+                <span className="text-ink-muted">拓荒者专属</span>
+              )
+            }
+          />
         </Panel>
 
         <ServiceModels />
@@ -206,7 +242,50 @@ function StatRow({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+/**
+ * 身份徽章：``拓荒者 #027`` / ``执炬者`` / ``旅人``（TASK-110）。
+ *
+ * 编号展示用的是**内测收藏品编号**（``earlyMemberNo``，仅前 100 名有）；
+ * 全站顺序号（``userNo``）在「ID」行单独展示（用户 2026-09-15 要求 ``ID：#001``）。
+ */
+export function TitleBadge({ account }: { account: Account | null }) {
+  if (account === null || account.isLocal) return null;
+  const withNumber =
+    account.earlyMemberNo === null
+      ? account.title
+      : `${account.title} #${String(account.earlyMemberNo).padStart(3, "0")}`;
+  const tone =
+    account.role === "admin"
+      ? "border-rose-300 bg-rose-50 text-rose-800"
+      : account.role === "beta"
+        ? "border-amber-300 bg-amber-50 text-amber-900"
+        : "border-ink-line bg-paper-base text-ink-muted";
+  return (
+    <span
+      data-testid="title-badge"
+      className={`rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
+    >
+      {withNumber}
+    </span>
+  );
+}
+
+/**
+ * 字节 → 人读（与后端 ``quota.format_bytes`` 同一套单位与舍入）。
+ *
+ * ``0`` 展示为“不限”（TASK-094 口径：上限为 0 = 不限，而不是“限制 0 字节”）。
+ * 注：本文件另有一个更宽松的 ``formatBytes``（接受 null，显示 ``—``）；
+ * 配额场景用这个（0 是合法且有意义的“不限”），空间占用场景用那个（null 是“未提供”）。
+ */
+export function formatQuota(size: number): string {
+  if (size <= 0) return "不限";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-dashed border-ink-line/70 py-1.5">
       <span className="text-xs text-ink-muted">{label}</span>

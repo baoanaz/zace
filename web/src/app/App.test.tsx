@@ -38,6 +38,16 @@ const ACCOUNT = {
   createdAt: 1789300000,
   isLocal: false,
   via: "session",
+  // TASK-110：身份与能力位（普通公测用户；能力位与角色**同源**——它们本就是同源的）。
+  role: "public",
+  title: "旅人",
+  earlyMemberNo: null,
+  capabilities: {
+    canCustomKey: false,
+    quotaBytes: 500 * 1024 * 1024,
+    earlyMemberNo: null,
+    isAdmin: false,
+  },
 };
 
 const OVERVIEW = {
@@ -285,5 +295,135 @@ describe("登录交互", () => {
       expect(screen.getByText("账户名或密码不正确")).toBeInTheDocument();
     });
     expect(screen.getByText("unauthorized")).toBeInTheDocument();
+  });
+});
+
+describe("邀请码注册（TASK-110 §1.1）", () => {
+  const META_WITH_USERS = {
+    "/api/meta": {
+      body: {
+        version: "0.0.1",
+        localMode: false,
+        authRequired: true,
+        registerOpen: true,
+        needsBootstrap: false,
+        userCount: 1,
+        // 注册成功后会进控制台，而控制台的「服务模型」卡读 `config`（TASK-100 §需求9）——
+        // 缺它会直接抛错进 ErrorBoundary，断言只能看到“页面挂了”而不是“注册成功”。
+        config: {
+          embedding: {
+            mode: "api",
+            configured: true,
+            missingEnv: [],
+            model: "voyage-4-lite",
+            provider: "voyage",
+            dim: 1024,
+          },
+          llm: {
+            configured: true,
+            apiKeyConfigured: true,
+            missingEnv: [],
+            model: "deepseek-flash",
+          },
+        },
+      },
+    },
+    "/api/auth/me": {
+      status: 401,
+      body: { error: { code: "unauthorized", message: "缺少或无效的凭据" } },
+    },
+  };
+
+  it("注册表单有邀请码输入框，登录表单没有", async () => {
+    stubFetch(META_WITH_USERS);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "登录" });
+    expect(screen.queryByLabelText("邀请码")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "没有账户？注册" }));
+    expect(screen.getByLabelText("邀请码")).toBeInTheDocument();
+    expect(screen.getByText(/没有邀请码请联系管理员获取/)).toBeInTheDocument();
+  });
+
+  it("没填邀请码时注册按钮保持禁用（不在客户端放行一次必然 400 的请求）", async () => {
+    stubFetch(META_WITH_USERS);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "登录" });
+    await user.click(screen.getByRole("button", { name: "没有账户？注册" }));
+
+    await user.type(screen.getByLabelText("账户"), "newbie");
+    await user.type(screen.getByLabelText("密码"), "pw123");
+    await user.type(screen.getByLabelText("确认密码"), "pw123");
+
+    expect(screen.getByRole("button", { name: "注册并进入" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("邀请码"), "b7k2m9");
+    // 输入即大写化（码面只有大写；粘贴/手机输入法的习惯不该变成“码无效”）。
+    expect(screen.getByLabelText("邀请码")).toHaveValue("B7K2M9");
+    expect(screen.getByRole("button", { name: "注册并进入" })).toBeEnabled();
+  });
+
+  it("提交时把邀请码带给服务端，成功后进入控制台", async () => {
+    // 注意：**不要**在这里覆盖 ``/api/auth/me``。注册成功后 App 直接拿 ``onSignedIn`` 的
+    // 返回值进入已登录态，不会再问一次 ``me``；若把它桩成 200，首屏就不会是登录页，
+    // 本用例会退化成"已登录"路径（那样它就什么都没在验证）。
+    const calls = stubFetch({
+      ...META_WITH_USERS,
+      "/api/auth/register": { status: 201, body: ACCOUNT },
+      "/api/account/overview": { body: OVERVIEW },
+    });
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "登录" });
+    await user.click(screen.getByRole("button", { name: "没有账户？注册" }));
+
+    await user.type(screen.getByLabelText("账户"), "newbie");
+    await user.type(screen.getByLabelText("密码"), "pw123");
+    await user.type(screen.getByLabelText("确认密码"), "pw123");
+    await user.type(screen.getByLabelText("邀请码"), "B7K2M9");
+    await user.click(screen.getByRole("button", { name: "注册并进入" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "控制台" })).toBeInTheDocument();
+    });
+    const register = calls.find((call) => call.url.includes("/api/auth/register"));
+    expect(register?.init?.body).toContain("B7K2M9");
+  });
+
+  it("邀请码无效时把服务端文案原样展示（不自己编一句）", async () => {
+    stubFetch({
+      ...META_WITH_USERS,
+      "/api/auth/register": {
+        status: 400,
+        body: {
+          error: {
+            code: "invalid_invite",
+            message: "邀请码无效、已失效或已用尽：请确认后重试，或联系管理员获取新的邀请码",
+          },
+        },
+      },
+    });
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "登录" });
+    await user.click(screen.getByRole("button", { name: "没有账户？注册" }));
+
+    await user.type(screen.getByLabelText("账户"), "newbie");
+    await user.type(screen.getByLabelText("密码"), "pw123");
+    await user.type(screen.getByLabelText("确认密码"), "pw123");
+    await user.type(screen.getByLabelText("邀请码"), "CZZZZZ");
+    await user.click(screen.getByRole("button", { name: "注册并进入" }));
+
+    await waitFor(() => {
+      // 服务端文案 + 错误码两处都会展示（`ErrorBlock` 的口径），因此用 ``getAllByText``。
+      expect(screen.getAllByText(/邀请码无效、已失效或已用尽/).length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("invalid_invite")).toBeInTheDocument();
   });
 });

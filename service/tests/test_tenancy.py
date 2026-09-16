@@ -54,6 +54,7 @@ from tests.conftest import (
     SAMPLE_MODULE_PATH,
     DeterministicBigramEmbedding,
     make_client,
+    make_invite,
 )
 
 PASSWORD = "correct-horse-battery"
@@ -115,7 +116,12 @@ def two_users(tmp_path: Path) -> Iterator[SimpleNamespace]:
         ns.alice = _token(ns.client, "alice-key")
 
         registered = ns.client.post(
-            "/api/auth/register", json={"name": "bob", "password": PASSWORD}
+            "/api/auth/register",
+            json={
+                "name": "bob",
+                "password": PASSWORD,
+                "inviteCode": make_invite(ns.app),
+            },
         )
         assert registered.status_code == 201, registered.text
         ns.bob_id = registered.json()["userId"]

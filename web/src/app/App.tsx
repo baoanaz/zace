@@ -19,6 +19,7 @@ import { createBrowserRouter, Navigate, RouterProvider, useLocation } from "reac
 
 import { ApiError, type Account, getMe, getMeta } from "../api/client";
 import { LoadingBlock } from "../components/ui";
+import { AdminPage } from "../pages/AdminPage";
 import { ApiKeysPage } from "../pages/ApiKeysPage";
 import { ConnectPage } from "../pages/ConnectPage";
 import { DashboardPage } from "../pages/DashboardPage";
@@ -130,6 +131,21 @@ function buildRouter(options: {
         { path: "keys", element: <Guard><ApiKeysPage /></Guard> },
         { path: "history", element: <Guard><HistoryPage /></Guard> },
         { path: "connect", element: <Guard><ConnectPage /></Guard> },
+        // TASK-110：账户信息已**合并进控制台**（用户 2026-09-15 要求），因此 /account
+        // 保留为跳转（外部链接与文档里出现过，不能让它 404）。
+        { path: "account", element: <Navigate to="/" replace /> },
+        {
+          path: "admin",
+          // **双重门禁**：前端只是"不给入口"，真正的门禁是后端的 require_admin（每个
+          // /api/admin/* 都会 403）。这里多一层是为了不把无权限用户送到一个只会报错的页面。
+          // 用可选链：能力位是 TASK-110 新增的，旧服务端/未升级的部署可能还没有它——
+          // 那种情况下应该回控制台，而不是把整个应用崩在一句 undefined 上。
+          element: (
+            <Guard>
+              {account?.capabilities?.isAdmin ? <AdminPage /> : <Navigate to="/" replace />}
+            </Guard>
+          ),
+        },
         // 旧路径保留为跳转（外部链接与文档里出现过）。
         { path: "setup", element: <Navigate to="/login" replace /> },
         { path: "register", element: <Navigate to="/login" replace /> },

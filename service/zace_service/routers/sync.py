@@ -36,9 +36,11 @@ from zace_core.pipeline import IngestReport
 from zace_core.pipeline.source import SourcePathError
 from zace_core.types import BlobInput, ChangeSet
 
+from zace_service.auth import quota_identity
 from zace_service.blobstore import validate_repo_path
-from zace_service.deps import get_engine_manager, require_project_id
+from zace_service.deps import get_engine_manager, get_settings, require_project_id
 from zace_service.errors import ApiError
+from zace_service.quota import enforce_upload_limit
 
 router = APIRouter(tags=["sync"])
 
@@ -79,13 +81,19 @@ class DeletionsRequest(BaseModel):
 
 @router.post("/api/sync/batch-upload")
 def batch_upload(payload: BatchUploadRequest, request: Request) -> dict[str, Any]:
-    """批量上传：blob 镜像 → 账本 → 一次增量 ``ingest``（同 project 串行，见 EngineManager）。"""
+    """批量上传：blob 镜像 → 账本 → 一次增量 ``ingest``（同 project 串行，见 EngineManager）。
+
+    TASK-110 起，**进门先过配额硬拒**（``quota.enforce_upload_limit``）：超过当前身份
+    索引空间上限时 413 返回，不落任何字节——在写入之后才拒会把用户的账本与索引搞成
+    半成品（而配额本来就能在上传前算出来）。检索侧仍然只告警（TASK-094 不变）。
+    """
     manager = get_engine_manager(request)
     project_id = require_project_id(request, payload.projectId)
     if not payload.blobs:
         raise ApiError("empty_batch", "blobs 不能为空（空批不发请求）", 400)
 
     decoded = _decode_blobs(payload.blobs)
+    _enforce_quota(request, manager, project_id, decoded)
     _blobs, state = manager.project_paths(project_id)
     known = set(state.files)
 
@@ -207,6 +215,30 @@ def _decode_blobs(items: Sequence[BlobPayload]) -> list[BlobInput]:
             )
         decoded.append(BlobInput(path=item.path, content=content, blob_hash=expected))
     return decoded
+
+
+def _enforce_quota(
+    request: Request,
+    manager: Any,
+    project_id: str,
+    decoded: Sequence[BlobInput],
+) -> None:
+    """上传前配额硬拒（TASK-110；用户 2026-09-15 拍板"超限拒绝新索引"）。
+
+    ``incoming_bytes`` 用**解码后的真实字节数**而不是 ``contentB64`` 的长度：base64 会把体量
+    放大 4/3，拿它当额度会把用户的真实占用算高 33%（属于"算了但算错"）。
+    """
+    user_id, role, override = quota_identity(request)
+    enforce_upload_limit(
+        manager,
+        get_settings(request),
+        project_id=project_id,
+        db=getattr(request.app.state, "meta_db", None),
+        user_id=user_id,
+        role=role,
+        override=override,
+        incoming_bytes=sum(len(item.content) for item in decoded),
+    )
 
 
 def report_json(report: IngestReport) -> dict[str, Any]:

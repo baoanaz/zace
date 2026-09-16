@@ -553,13 +553,21 @@ def _storage_warning(manager: EngineManager, settings: Settings, project_id: str
 
     身份取自 :func:`current_user`（与 :func:`_require_owned_project` 同一通道）：配额是
     **按用户**算的，拿不到身份就不能把别人的项目算进额度。
+
+    TASK-110：上限按身份取（``roles.QUOTA_BY_ROLE``）；本地模式（无 `zace_user`）回落
+    ``Settings`` 兜底，与 REST 面 :func:`zace_service.auth.quota_identity` 同一口径。
     """
+    user = current_user()
+    role = getattr(user, "role", None) if not settings.local_mode else None
+    override = getattr(user, "quota_bytes", None) if not settings.local_mode else None
     return warning_for(
         manager,
         settings,
         project_id=project_id,
         db=manager.meta_db,
-        user_id=getattr(current_user(), "id", None),
+        user_id=getattr(user, "id", None),
+        role=role,
+        override=override,
     )
 
 

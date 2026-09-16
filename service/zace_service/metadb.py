@@ -23,9 +23,11 @@ import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
+from zace_service.roles import EARLY_MEMBER_MAX, ROLE_ADMIN, ROLE_BETA, normalize_role, title_for
 
 __all__ = [
     "CALL_TIMELINE_LIMIT",
@@ -74,7 +76,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   token_hash   TEXT NOT NULL UNIQUE,
   created_at   INTEGER NOT NULL,
   last_used_at INTEGER,
-  revoked_at   INTEGER
+  revoked_at   INTEGER,
+  is_custom    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_user ON api_tokens(user_id);
 
@@ -133,13 +136,78 @@ CREATE TABLE IF NOT EXISTS user_llm_config (
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
 );
+
+-- TASK-110 §3.1：邀请码（码面 6 位大写字母，首字母即类型 A/B/C）。
+--
+-- `used_count < max_uses` 的判定**必须在 UPDATE 的 WHERE 里**（见 consume_invite）：
+-- 先 SELECT 再 UPDATE 会在并发下超发，那是本表唯一真正要防的错误。
+CREATE TABLE IF NOT EXISTS invites (
+  code         TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  created_by   TEXT,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER,
+  revoked_at   INTEGER,
+  max_uses     INTEGER NOT NULL DEFAULT 1,
+  used_count   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_invites_kind ON invites(kind, created_at DESC);
+
+-- 谁用了哪个码（后台邀请码模块的"使用记录"）。
+-- 主键 (code, user_id) 同时是幂等保证：同一个用户重复核销同一个码不会产生第二行。
+CREATE TABLE IF NOT EXISTS invite_uses (
+  code      TEXT NOT NULL,
+  user_id   TEXT NOT NULL,
+  used_at   INTEGER NOT NULL,
+  PRIMARY KEY (code, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_invite_uses_user ON invite_uses(user_id, used_at DESC);
 """
+
+#: ``users`` 的**增量列**（TASK-110 §3.1）：与 :data:`_AUDIT_COLUMNS` 同一套 ALTER 路径。
+#:
+#: 旧库里没有这些列——TASK-110 之前的账户全是"谁都能注册"的平权用户，迁移后它们
+#: 一律是 ``role='public'``（**旧用户不受影响**：登录 + MCP 调用照常，只是多了头衔展示）。
+#:
+#: 为什么 ``role`` 带 ``NOT NULL DEFAULT 'public'`` 而在 :data:`_SCHEMA` 里不写：``ALTER TABLE
+#: ADD COLUMN`` 不允许加一个无默认值的 ``NOT NULL`` 列（既有行填什么？），带 ``DEFAULT``
+#: 才能一次成功；且 SQLite 会把默认值应用到既有行，因此**不需要额外的 UPDATE 回填**。
+_USER_COLUMNS: tuple[tuple[str, str], ...] = (
+    #: 'admin' | 'beta' | 'public'（取值域见 ``zace_service.roles``）。
+    ("role", "TEXT NOT NULL DEFAULT 'public'"),
+    #: 头衔冗余快照（展示/后台列表用）；**权威在** ``roles.TITLE_BY_ROLE``。
+    ("title", "TEXT"),
+    #: 内测编号（仅前 ``roles.EARLY_MEMBER_MAX`` 名内测玩家有值；其余为 NULL）。
+    ("early_member_no", "INTEGER"),
+    #: 单人配额覆盖（后台给某个人单独改的）；NULL = 按 ``roles.QUOTA_BY_ROLE``。
+    ("quota_bytes", "INTEGER"),
+    #: 封禁时刻（非空即封禁；校验凭据时检查它，因此封禁**立即生效**，不等重新登录）。
+    ("banned_at", "INTEGER"),
+    #: 最后活跃时间（后台用户模块展示；每次凭据校验时刷新）。
+    ("last_seen_at", "INTEGER"),
+    #: 顺序号（所有人都有，从 1 开始）。控制台展示为 ``ID #001``。
+    #:
+    #: 与 ``early_member_no`` 的区别：那个是**内测收藏品编号**（只发前 100 名，降级时会被清掉），
+    #: 这个是**全站注册顺序**（永不变、永不复用）。两者同时存在是因为它们回答不同的问题：
+    #: “我是不是最早那批内测”与“我是第几个用户”。
+    ("user_no", "INTEGER"),
+)
+
+#: ``api_tokens`` 的**增量列**（TASK-110 §3.4）：自定义 Key 标记（审计用）。
+_TOKEN_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("is_custom", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 #: 迁移后要确保存在的索引（**必须在 ALTER 之后建**：旧库里还没有该列，放在 ``_SCHEMA`` 里会在
 #: ``executescript`` 阶段以 ``no such column: request_id`` 直接失败——这正是 TASK-094 §C 实测踩到的
 #: 同一类坑）。
 _AUDIT_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_audit_request ON query_audit(request_id)",
+)
+
+#: 迁移后要确保存在的**唯一索引**（旧行回填之后再建，否则 NULL 会随之多个而冲突）。
+_UNIQUE_INDEXES: tuple[str, ...] = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_no ON users(user_no)",
 )
 
 
@@ -186,12 +254,74 @@ _AUDIT_COLUMNS: tuple[tuple[str, str], ...] = (
 
 @dataclass(frozen=True, slots=True)
 class User:
-    """账户（``is_local`` = 本地单用户模式的隐式账户，无密码可用）。"""
+    """账户（``is_local`` = 本地单用户模式的隐式账户，无密码可用）。
+
+    TASK-110 追加 ``role`` / ``title`` / ``early_member_no`` / ``quota_bytes`` / ``banned_at`` /
+    ``last_seen_at``：它们在**每一处凭据解析**（session / token）时都要用上（封禁检查、
+    角色→能力位），因此必须随 ``User`` 一起返回，而不是每个调用方自己再查一次库。
+
+    默认值给成"公测 + 无编号 + 未封禁"：``auth.local_user()`` 与单测里手搭的 ``User`` 因此
+    不需要改一行——本地模式本来就该享有最低档位（它没有账户体系，谈不上特权）。
+    """
 
     id: str
     name: str
     created_at: int
     is_local: bool = False
+    #: 'admin' | 'beta' | 'public'（``zace_service.roles``）；旧库行由迁移补成 ``public``。
+    role: str = "public"
+    #: 头衔冗余快照（权威在 ``roles.TITLE_BY_ROLE``）。
+    title: str | None = None
+    #: 内测编号（仅前 100 名内测玩家有值）。
+    early_member_no: int | None = None
+    #: 单人配额覆盖（NULL = 按角色默认）。
+    quota_bytes: int | None = None
+    #: 封禁时刻（非空即封禁）。
+    banned_at: int | None = None
+    #: 最后活跃时间。
+    last_seen_at: int | None = None
+    #: 全站注册顺序号（从 1 开始；控制台展示为 ``ID #001``）。
+    user_no: int | None = None
+
+    @property
+    def banned(self) -> bool:
+        return self.banned_at is not None
+
+    def to_json(self, *, quota_bytes: int | None = None) -> dict[str, Any]:
+        """账户的**展示面**（不含密码哈希、不含任何 secret）。
+
+        ``role`` / ``title`` / ``earlyMemberNo`` 与 ``capabilities`` 一起构成前端的身份视图
+        （TASK-110 §3.3）；后者由 ``roles.capabilities_for`` 生成，此处不重复实现——
+        "头衔与权限同源"。
+
+        ``quota_bytes`` 是**该用户实际生效**的上限，由调用方算好传入（本地模式/无账户时
+        走 ``Settings`` 兜底，只有路由层能算出那个值）；缺省时退化为角色默认值
+        （旧调用方/单测：它们没有配额这个概念，不应该因此报错）。
+        """
+        from zace_service.roles import capabilities_for, quota_bytes_for
+
+        limit = (
+            quota_bytes
+            if quota_bytes is not None
+            else quota_bytes_for(self.role, override=self.quota_bytes)
+        )
+        return {
+            "userId": self.id,
+            "name": self.name,
+            "createdAt": self.created_at,
+            "isLocal": self.is_local,
+            "role": self.role,
+            "title": title_for(self.role),
+            "earlyMemberNo": self.early_member_no,
+            #: 全站顺序号（所有人都有）。与 ``earlyMemberNo`` 并存：后者是内测收藏品编号。
+            "userNo": self.user_no,
+            "banned": self.banned,
+            "capabilities": capabilities_for(
+                self.role,
+                early_member_no=self.early_member_no,
+                quota_bytes=limit,
+            ),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,23 +577,57 @@ class MetaDB:
     # ------------------------------------------------------------------ 账户（TASK-060）
 
     def create_user(
-        self, name: str, password_hash: str, *, is_local: bool = False, now: int | None = None
+        self,
+        name: str,
+        password_hash: str,
+        *,
+        is_local: bool = False,
+        role: str | None = None,
+        early_member_no: int | None = None,
+        now: int | None = None,
     ) -> User:
-        """创建账户（``name`` 冲突抛 :class:`sqlite3.IntegrityError`，HTTP 层转 409）。"""
+        """创建账户（``name`` 冲突抛 :class:`sqlite3.IntegrityError`，HTTP 层转 409）。
+
+        ``role``（TASK-110）：不传则不写该列（走 DDL 的 ``DEFAULT 'public'``）；
+        传了则同时写 ``title`` 冗余快照（两个字段一次落库，不会出现"角色是 beta 而头衔是旅人"）。
+        ``early_member_no`` 只对 ``beta`` 有意义，调用方负责分配
+        （见 :meth:`next_early_member_no`）。
+
+        ``user_no``（全站顺序号）在**同一事务内**自增取号（``MAX(user_no)+1``），
+        因此并发注册不会发重号；由唯一索引兼底。
+        """
         created = int(now if now is not None else time.time())
         user_id = secrets.token_hex(16)
+        resolved = normalize_role(role) if role is not None else None
+        columns = "id, name, password_hash, created_at, is_local"
+        values: list[Any] = [user_id, name, password_hash, created, 1 if is_local else 0]
+        if resolved is not None:
+            columns += ", role, title"
+            values += [resolved, title_for(resolved)]
+        if early_member_no is not None:
+            columns += ", early_member_no"
+            values.append(int(early_member_no))
         with self._write() as conn:
-            conn.execute(
-                "INSERT INTO users (id, name, password_hash, created_at, is_local)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (user_id, name, password_hash, created, 1 if is_local else 0),
-            )
-        return User(id=user_id, name=name, created_at=created, is_local=is_local)
+            user_no = _next_user_no(conn)
+            columns += ", user_no"
+            values.append(user_no)
+            placeholders = ", ".join("?" for _ in values)
+            conn.execute(f"INSERT INTO users ({columns}) VALUES ({placeholders})", values)
+        return User(
+            id=user_id,
+            name=name,
+            created_at=created,
+            is_local=is_local,
+            role=resolved or "public",
+            title=title_for(resolved or "public"),
+            early_member_no=early_member_no,
+            user_no=user_no,
+        )
 
     def get_user_by_name(self, name: str) -> tuple[User, str] | None:
         """``(user, password_hash)``；不存在返回 ``None``。"""
         row = self._connect().execute(
-            "SELECT id, name, password_hash, created_at, is_local FROM users WHERE name = ?",
+            "SELECT * FROM users WHERE name = ?",
             (name,),
         ).fetchone()
         if row is None:
@@ -472,7 +636,7 @@ class MetaDB:
 
     def get_user(self, user_id: str) -> User | None:
         row = self._connect().execute(
-            "SELECT id, name, created_at, is_local FROM users WHERE id = ?", (user_id,)
+            "SELECT * FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         return _user(row) if row is not None else None
 
@@ -518,12 +682,17 @@ class MetaDB:
         return session_id
 
     def resolve_session(self, session_id: str, *, now: int | None = None) -> User | None:
-        """有效则返回用户并刷新 ``last_seen_at``；过期则删除并返回 ``None``。"""
+        """有效则返回用户并刷新 ``last_seen_at``；过期则删除并返回 ``None``。
+
+        TASK-110：返回的是**完整**的用户行（角色/封禁状态），因为调用方（``auth.authenticate``）
+        要据此判两件事——是否管理员、是否已封禁。封禁判定在调用方做（返 ``None`` 会让
+        "封禁"与"会话过期"在日志里无法区分）。
+        """
         current = int(now if now is not None else time.time())
         conn = self._connect()
         row = conn.execute(
-            "SELECT s.user_id, s.expires_at, u.name, u.created_at, u.is_local"
-            " FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?",
+            "SELECT s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id"
+            " WHERE s.id = ?",
             (session_id,),
         ).fetchone()
         if row is None:
@@ -532,16 +701,13 @@ class MetaDB:
             with self._write() as writer:
                 writer.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             return None
+        user = _user(row)
         with self._write() as writer:
             writer.execute(
                 "UPDATE sessions SET last_seen_at = ? WHERE id = ?", (current, session_id)
             )
-        return User(
-            id=str(row["user_id"]),
-            name=str(row["name"]),
-            created_at=int(row["created_at"]),
-            is_local=bool(row["is_local"]),
-        )
+            writer.execute("UPDATE users SET last_seen_at = ? WHERE id = ?", (current, user.id))
+        return replace(user, last_seen_at=current)
 
     def delete_session(self, session_id: str) -> None:
         with self._write() as conn:
@@ -556,23 +722,32 @@ class MetaDB:
         token_hash: str,
         prefix: str,
         name: str = "",
+        is_custom: bool = False,
         now: int | None = None,
     ) -> str:
-        """登记一个 API Key 的哈希（明文只在创建响应里出现一次，**不落库**）。"""
+        """登记一个 API Key 的哈希（明文只在创建响应里出现一次，**不落库**）。
+
+        TASK-110 §3.4：``is_custom`` 标记这是用户自定义的 Key（拓荒者特权）。它与随机 Key 走
+        **同一条签发路径**（同一张表、同一个唯一索引、同一套校验）——差异只是"明文谁选的"，
+        因此没有任何理由把它做成分支式的第二套逻辑。记录该标记纯粹为了审计：
+        自定义 Key 熵更低，出问题时先看它们。
+
+        ``token_hash`` 冲突抛 :class:`sqlite3.IntegrityError`（唯一索引），HTTP 层转 409。
+        """
         created = int(now if now is not None else time.time())
         token_id = secrets.token_hex(16)
         with self._write() as conn:
             conn.execute(
-                "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (token_id, user_id, name, prefix, token_hash, created),
+                "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at,"
+                " is_custom) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (token_id, user_id, name, prefix, token_hash, created, 1 if is_custom else 0),
             )
         return token_id
 
     def list_tokens(self, user_id: str) -> list[dict[str, Any]]:
         """该用户的**有效** Key（已撤销的不列；**绝不含明文或哈希**）。"""
         rows = self._connect().execute(
-            "SELECT id, name, prefix, created_at, last_used_at FROM api_tokens"
+            "SELECT id, name, prefix, created_at, last_used_at, is_custom FROM api_tokens"
             " WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
@@ -583,6 +758,9 @@ class MetaDB:
                 "prefix": str(row["prefix"]),
                 "createdAt": int(row["created_at"]),
                 "lastUsedAt": row["last_used_at"],
+                # TASK-110 §3.4：前端据此在列表里区分"随机生成"与"自定义"（自定义 Key 属特权，
+                # 用户会想知道哪一把是自己选的）。
+                "isCustom": bool(row["is_custom"]),
             }
             for row in rows
         ]
@@ -590,10 +768,15 @@ class MetaDB:
     def find_user_by_token_hash(
         self, token_hash: str, *, now: int | None = None
     ) -> User | None:
-        """按哈希反查用户（仅有效 Key；命中即刷新 ``last_used_at``）。"""
+        """按哈希反查用户（仅有效 Key；命中即刷新 ``last_used_at``）。
+
+        有意**不过滤 ``banned_at``**：封禁判定统一在 ``auth.authenticate`` 里做
+        （否则 `无此 Key` 与 `已封禁` 在调用方无法区分，而审计与排查需要这个区别）。
+        返回值是完整用户行（TASK-110：角色与封禁状态都要用）。
+        """
         current = int(now if now is not None else time.time())
         row = self._connect().execute(
-            "SELECT t.id, t.user_id, u.name, u.created_at, u.is_local FROM api_tokens t"
+            "SELECT t.id AS token_id, u.* FROM api_tokens t"
             " JOIN users u ON u.id = t.user_id"
             " WHERE t.token_hash = ? AND t.revoked_at IS NULL",
             (token_hash,),
@@ -602,14 +785,10 @@ class MetaDB:
             return None
         with self._write() as conn:
             conn.execute(
-                "UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (current, row["id"])
+                "UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (current, row["token_id"])
             )
-        return User(
-            id=str(row["user_id"]),
-            name=str(row["name"]),
-            created_at=int(row["created_at"]),
-            is_local=bool(row["is_local"]),
-        )
+            conn.execute("UPDATE users SET last_seen_at = ? WHERE id = ?", (current, row["id"]))
+        return replace(_user(row), last_seen_at=current)
 
     def revoke_token(self, user_id: str, token_id: str, *, now: int | None = None) -> bool:
         """软删（只撤销**自己的** Key；不存在/非本人 → ``False``）。"""
@@ -621,6 +800,314 @@ class MetaDB:
                 (revoked, token_id, user_id),
             )
             return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------ 邀请码（TASK-110 §3.1）
+
+    def create_user_with_invite(
+        self,
+        name: str,
+        password_hash: str,
+        *,
+        code: str,
+        now: int | None = None,
+    ) -> tuple[User, str]:
+        """**原子地**核销邀请码 + 创建账户（TASK-110 注册的唯一入口）。
+
+        为什么不拆成"先 redeem 再 create_user"：那样一定有一个时刻"码已消耗、账户还没建"，
+        只要中间一步失败（重名、磁盘满、进程被杀），用户就拿着一张废码而无处申诉。
+        两件事必须同生共死，因此它们在这个方法里共用一个 ``BEGIN IMMEDIATE``。
+
+        返回 ``(user, kind)``；码不可用抛 :class:`zace_service.invites.InviteRejected`，
+        重名抛 :class:`sqlite3.IntegrityError`（事务回滚，码不会被浪费）。
+
+        内测编号在同一事务内取号（``MAX(early_member_no) + 1``，上限
+        :data:`zace_service.roles.EARLY_MEMBER_MAX`），因此并发注册不会发重号；
+        超过上限则如实为 ``NULL``（用户要求：第 101 名起不再发编号）。
+        """
+        from zace_service.invites import (
+            REJECT_EXHAUSTED,
+            REJECT_EXPIRED,
+            REJECT_REVOKED,
+            REJECT_UNKNOWN,
+            InviteRejected,
+        )
+        from zace_service.roles import KIND_TO_ROLE
+
+        current = int(now if now is not None else time.time())
+        user_id = secrets.token_hex(16)
+        with self._write() as conn:
+            row = conn.execute(
+                "SELECT kind, revoked_at, expires_at, used_count, max_uses FROM invites"
+                " WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if row is None:
+                raise InviteRejected(code, REJECT_UNKNOWN)
+            if row["revoked_at"] is not None:
+                raise InviteRejected(code, REJECT_REVOKED)
+            if row["expires_at"] is not None and int(row["expires_at"]) <= current:
+                raise InviteRejected(code, REJECT_EXPIRED)
+            # 核销与账户创建在同一事务里，因此这里不需要"先查再用"的并发顾虑。
+            cursor = conn.execute(
+                "UPDATE invites SET used_count = used_count + 1"
+                " WHERE code = ? AND revoked_at IS NULL"
+                "   AND (expires_at IS NULL OR expires_at > ?)"
+                "   AND used_count < max_uses",
+                (code, current),
+            )
+            if cursor.rowcount != 1:
+                raise InviteRejected(code, REJECT_EXHAUSTED)
+            kind = str(row["kind"])
+            role = normalize_role(KIND_TO_ROLE.get(kind))
+            member_no: int | None = None
+            if role == ROLE_BETA:
+                top = conn.execute(
+                    "SELECT MAX(early_member_no) AS n FROM users"
+                    " WHERE early_member_no IS NOT NULL"
+                ).fetchone()
+                candidate = 1 if top is None or top["n"] is None else int(top["n"]) + 1
+                member_no = candidate if candidate <= EARLY_MEMBER_MAX else None
+            conn.execute(
+                "INSERT INTO users (id, name, password_hash, created_at, is_local, role, title,"
+                " early_member_no, last_seen_at, user_no) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    name,
+                    password_hash,
+                    current,
+                    role,
+                    title_for(role),
+                    member_no,
+                    current,
+                    _next_user_no(conn),
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO invite_uses (code, user_id, used_at) VALUES (?, ?, ?)",
+                (code, user_id, current),
+            )
+        user = self.get_user(user_id)
+        assert user is not None  # 同一事务刚写入；取不到即库损坏，宁可炸也不要返回假账户
+        return user, kind
+
+    def create_invite(
+        self,
+        code: str,
+        kind: str,
+        *,
+        created_by: str | None = None,
+        max_uses: int = 1,
+        expires_at: int | None = None,
+        now: int | None = None,
+    ) -> dict[str, Any]:
+        """登记一个邀请码（``code`` 冲突抛 :class:`sqlite3.IntegrityError`）。
+
+        ``max_uses`` / ``expires_at`` 的校验在路由层做（它们表达的是运维意图，错误文案属于
+        HTTP 面）；本层只保证写入是原子的。
+        """
+        created = int(now if now is not None else time.time())
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO invites (code, kind, created_by, created_at, expires_at, max_uses)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (code, kind, created_by, created, expires_at, int(max_uses)),
+            )
+        return {
+            "code": code,
+            "kind": kind,
+            "createdBy": created_by,
+            "createdAt": created,
+            "expiresAt": expires_at,
+            "maxUses": int(max_uses),
+            "usedCount": 0,
+            "revokedAt": None,
+        }
+
+    def consume_invite(
+        self, code: str, *, user_id: str, now: int | None = None
+    ) -> tuple[bool, str | None, str | None]:
+        """原子核销：返回 ``(ok, kind, reason)``。
+
+        **并发安全的唯一实现方式**（卡内 §3.1 冻结）：一切都压在**一条 UPDATE** 上，
+        ``WHERE`` 里同时检查 ``revoked_at IS NULL``、``expires_at`` 与 ``used_count < max_uses``，
+        以 ``rowcount`` 判成败。绝不能改写成"先 SELECT 查明可用、再 UPDATE"——那正是并发超发的
+        经典写法（两个请求都读到 ``used_count=0``，然后都自增，``max_uses=1`` 的码被用两次）。
+
+        ``reason`` 只在失败时非空，且**区分原因只为日志与后台排查**：注册是未登录端点，
+        对外一律同一文案（不提供"这个码存不存在"的探测面）。
+
+        为什么把 ``invite_uses`` 的写入放在同一个事务里："码已消耗"与"记录谁用了"必须同生共死，
+        否则会出现用尽了却查不到使用人的孤儿码（后台排查正好靠这份记录）。
+        """
+        from zace_service.invites import (
+            REJECT_EXHAUSTED,
+            REJECT_EXPIRED,
+            REJECT_REVOKED,
+            REJECT_UNKNOWN,
+        )
+
+        current = int(now if now is not None else time.time())
+        with self._write() as conn:
+            row = conn.execute(
+                "SELECT kind, revoked_at, expires_at, used_count, max_uses FROM invites"
+                " WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if row is None:
+                return False, None, REJECT_UNKNOWN
+            if row["revoked_at"] is not None:
+                return False, None, REJECT_REVOKED
+            if row["expires_at"] is not None and int(row["expires_at"]) <= current:
+                return False, None, REJECT_EXPIRED
+            cursor = conn.execute(
+                "UPDATE invites SET used_count = used_count + 1"
+                " WHERE code = ? AND revoked_at IS NULL"
+                "   AND (expires_at IS NULL OR expires_at > ?)"
+                "   AND used_count < max_uses",
+                (code, current),
+            )
+            if cursor.rowcount != 1:
+                # 并发下唯一会走到这里的分支：另一个请求刚把最后一个名额用掉。
+                return False, None, REJECT_EXHAUSTED
+            conn.execute(
+                "INSERT OR IGNORE INTO invite_uses (code, user_id, used_at) VALUES (?, ?, ?)",
+                (code, user_id, current),
+            )
+        return True, str(row["kind"]), None
+
+    def invite(self, code: str) -> dict[str, Any] | None:
+        """单个邀请码（含使用记录）；不存在 → ``None``。"""
+        row = self._connect().execute(
+            "SELECT * FROM invites WHERE code = ?", (code,)
+        ).fetchone()
+        return None if row is None else self._invite_payload(row)
+
+    def list_invites(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        """全部邀请码（新建在前；后台邀请码模块）。"""
+        rows = self._connect().execute(
+            "SELECT * FROM invites ORDER BY created_at DESC, code ASC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [self._invite_payload(row) for row in rows]
+
+    def _invite_payload(self, row: sqlite3.Row) -> dict[str, Any]:
+        """邀请码行 → 后台展示结构（含使用记录；``to_json`` 风格由路由层决定）。"""
+        uses = self._connect().execute(
+            "SELECT u.code, u.user_id, u.used_at, us.name AS user_name"
+            " FROM invite_uses u LEFT JOIN users us ON us.id = u.user_id"
+            " WHERE u.code = ? ORDER BY u.used_at ASC",
+            (str(row["code"]),),
+        ).fetchall()
+        return {
+            "code": str(row["code"]),
+            "kind": str(row["kind"]),
+            "createdBy": row["created_by"],
+            "createdAt": int(row["created_at"]),
+            "expiresAt": row["expires_at"],
+            "maxUses": int(row["max_uses"]),
+            "usedCount": int(row["used_count"]),
+            "revokedAt": row["revoked_at"],
+            "uses": [
+                {
+                    "userId": str(item["user_id"]),
+                    "userName": item["user_name"],
+                    "usedAt": int(item["used_at"]),
+                }
+                for item in uses
+            ],
+        }
+
+    def revoke_invite(self, code: str, *, now: int | None = None) -> bool:
+        """失效一个码（幂等：已失效/不存在均返 ``False``，由调用方决定是不是 404）。"""
+        revoked = int(now if now is not None else time.time())
+        with self._write() as conn:
+            cursor = conn.execute(
+                "UPDATE invites SET revoked_at = ? WHERE code = ? AND revoked_at IS NULL",
+                (revoked, code),
+            )
+            return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------ 后台（TASK-110 §3.5）
+
+    def list_users(self, *, limit: int = 500) -> list[User]:
+        """全部账户（新建在前；后台用户模块）。"""
+        rows = self._connect().execute(
+            "SELECT * FROM users ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)
+        ).fetchall()
+        return [_user(row) for row in rows]
+
+    def set_user_role(
+        self,
+        user_id: str,
+        role: str,
+        *,
+        early_member_no: int | None = None,
+        clear_early_member: bool = False,
+        now: int | None = None,
+    ) -> User | None:
+        """后台改身份（同时写 ``title`` 冗余快照）；用户不存在 → ``None``。
+
+        ``clear_early_member`` 用于"从内测降为公测"时把编号清掉：编号是内测专属收藏品，
+        留在公测用户身上会让账户页显示一个不属于该身份的号（卡内 §1.4 只对内测定义编号）。
+        """
+        resolved = normalize_role(role)
+        sets = ["role = ?", "title = ?"]
+        params: list[Any] = [resolved, title_for(resolved)]
+        if early_member_no is not None:
+            sets.append("early_member_no = ?")
+            params.append(int(early_member_no))
+        elif clear_early_member or resolved != ROLE_BETA:
+            sets.append("early_member_no = NULL")
+        params.append(user_id)
+        with self._write() as conn:
+            cursor = conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
+            if cursor.rowcount == 0:
+                return None
+        return self.get_user(user_id)
+
+    def set_user_quota(self, user_id: str, quota_bytes: int | None) -> User | None:
+        """后台改单人配额覆盖（``None`` = 恢复按角色默认）；用户不存在 → ``None``。"""
+        with self._write() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET quota_bytes = ? WHERE id = ?",
+                (None if quota_bytes is None else int(quota_bytes), user_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_user(user_id)
+
+    def set_user_banned(self, user_id: str, *, banned: bool, now: int | None = None) -> User | None:
+        """封禁 / 恢复（封禁同时**删掉该用户全部会话**：token 靠校验看 ``banned_at``，
+        会话本来就活不过下次校验，但删掉更彻底——浏览器里那份 cookie 不会在"解封后又自动可用"）。
+        """
+        stamp = int(now if now is not None else time.time()) if banned else None
+        with self._write() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET banned_at = ? WHERE id = ?", (stamp, user_id)
+            )
+            if cursor.rowcount == 0:
+                return None
+            if banned:
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        return self.get_user(user_id)
+
+    def find_user_by_name_exact(self, name: str) -> User | None:
+        """按名字取用户（管理员提升用；与 ``get_user_by_name`` 的区别：不带密码哈希）。"""
+        found = self.get_user_by_name(name)
+        return None if found is None else found[0]
+
+    def promote_first_admin(self, name: str, *, now: int | None = None) -> User | None:
+        """把指定名字的账户提为管理员（**幂等**）；不存在 → ``None``。
+
+        为什么不用"最早创建的账户"当管理员：那个语义在真实部署里会挑错人（先来试手的同事、
+        或迁移前的临时账号会比真正的负责人更早）。指定名字是**可预测**的（卡内 §7.1 已拍板）。
+        """
+        user = self.find_user_by_name_exact(name)
+        if user is None:
+            return None
+        if user.role == ROLE_ADMIN and user.banned_at is None:
+            return user
+        return self.set_user_role(user.id, ROLE_ADMIN, clear_early_member=True, now=now)
 
     # ------------------------------------------------------------------ 项目归属（TASK-061）
 
@@ -651,6 +1138,20 @@ class MetaDB:
             "SELECT 1 FROM projects WHERE project_id = ? AND user_id = ?", (project_id, user_id)
         ).fetchone()
         return row is not None
+
+    def delete_project_owner(self, project_id: str) -> int:
+        """删掉该项目的归属行（返回删除行数；供**管理员删项目**用）。
+
+        为什么必须删：项目目录由 ``EngineManager.delete_project`` 删掉后，
+        ``projects`` 表里那行就成了幽灵——``GET /api/projects`` 会列出一个目录已不存在的项目，
+        点进去就报 404。归属行与目录必须同生共死。
+
+        历史数据（``index_runs`` / ``query_audit``）**不删**：它们是运营证据（TASK-093 的真实
+        使用数据闭环就靠它），而且删了会让后台统计凭空缩水。
+        """
+        with self._write() as conn:
+            cursor = conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+            return cursor.rowcount
 
     def list_projects(self, user_id: str) -> list[str]:
         rows = self._connect().execute(
@@ -849,6 +1350,27 @@ class MetaDB:
         ).fetchall()
         return [_index_run(row) for row in rows]
 
+    def used_tokens_sum(
+        self, project_ids: Sequence[str], *, days: int = 30, now: int | None = None
+    ) -> int:
+        """窗口内全部调用的 ``used_tokens`` 之和（后台统计模块）。
+
+        为什么不在 ``usage_summary`` 里一起算：那个函数的形状已经冻结给用户侧页面了，
+        它的 ``to_json`` 不要多出一个只给后台用的字段；而 "用了多少 token" 是个聚合整数，
+        单独一条 SQL 比让每个调用方 `sum(...)` 一遍更便宜也更不容易算错。
+        """
+        if not project_ids:
+            return 0
+        current = int(now if now is not None else time.time())
+        since = current - max(1, int(days)) * 86400
+        placeholders = ",".join("?" for _ in project_ids)
+        row = self._connect().execute(
+            f"SELECT COALESCE(SUM(used_tokens), 0) AS n FROM query_audit"
+            f" WHERE project_id IN ({placeholders}) AND created_at >= ?",
+            [*project_ids, since],
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+
     def queries_by_request_id(self, request_id: str) -> list[QueryAuditRecord]:
         """该 trace id（= callId）下的全部查询审计。"""
         rows = self._connect().execute(
@@ -1043,12 +1565,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
     - **只加列**（``ADD COLUMN``），不改名/不改类型/不删列——旧版本代码仍能读写同一张表；
     - 每条语句前用 ``PRAGMA table_info`` 判存在性，因此重复打开同一库不会报错；
     - 失败向上抛（schema 不完整时要及早暴露，而不是让审计静默写不进去）。
+
+    TASK-110 §3.1 追加 ``users`` 的六个身份列。它们**只加列**，因此：
+
+    - 旧用户（迁移前就存在）拿到 ``role='public'``，登录与 MCP 调用逐字不变；
+    - 角色提升（谁是管理员）**不在迁移里做**：那是环境相关的运营决策，
+      由 ``zace_service.routers.admin`` 暴露的显式提升入口或一次性 SQL 完成——
+      把"哪个用户名是管理员"写进 schema 迁移等于把部署信息烧进代码。
     """
     _add_columns(conn, "query_audit", _AUDIT_COLUMNS)
     _add_columns(conn, "index_runs", _INDEX_RUN_COLUMNS)
+    _add_columns(conn, "users", _USER_COLUMNS)
+    _add_columns(conn, "api_tokens", _TOKEN_COLUMNS)
+    _backfill_user_no(conn)
     # 索引在列存在之后建（见 _AUDIT_INDEXES 的注释：放 _SCHEMA 里会让旧库打开直接失败）。
     for statement in _AUDIT_INDEXES:
         conn.execute(statement)
+    # 唯一索引必须在**回填之后**建：回填前全是 NULL，而唯一索引允许多个 NULL（不会冲突），
+    # 但一旦回填错了就很难发现。先回填再建，让约束在建立时就校验一遍。
+    for statement in _UNIQUE_INDEXES:
+        conn.execute(statement)
+
+
+def _backfill_user_no(conn: sqlite3.Connection) -> None:
+    """给没有顺序号的账户技号（旧库升级；按 ``created_at`` 升序，同刻按 ``rowid``）。
+
+    幂等：只碰 ``user_no IS NULL`` 的行，已发号的不动。为什么要回填而不是发新号时补：
+    用户看到的 ``ID #001`` 必须是**注册顺序**，晚补的话首位用户会拿到一个大数字，
+    而他明明是最早注册的。
+    """
+    row = conn.execute("SELECT MAX(user_no) AS n FROM users").fetchone()
+    next_no = 1 if row is None or row["n"] is None else int(row["n"]) + 1
+    pending = conn.execute(
+        "SELECT rowid FROM users WHERE user_no IS NULL ORDER BY created_at ASC, rowid ASC"
+    ).fetchall()
+    for item in pending:
+        conn.execute("UPDATE users SET user_no = ? WHERE rowid = ?", (next_no, item["rowid"]))
+        next_no += 1
 
 
 def _llm_config_record(row: sqlite3.Row) -> LlmConfigRecord:
@@ -1077,12 +1630,46 @@ def _add_columns(
 
 
 def _user(row: sqlite3.Row) -> User:
+    """``users`` 行 → :class:`User`。
+
+    为什么用 ``row.keys()`` 判列存在而不假设它恒在：**测试与工具会手搭最小表**
+    （如 ``test_local_mode`` 直接 ``db.create_user``），而历史库在迁移前后列集合也可能不同。
+    缺列就取默认值（不编造），比 ``sqlite3.Row`` 的 ``IndexError`` 好：
+    后者会让"一个老库少一列"变成全面 500。
+    """
+    keys = set(row.keys())
+    role = normalize_role(str(row["role"])) if "role" in keys else "public"
     return User(
         id=str(row["id"]),
         name=str(row["name"]),
         created_at=int(row["created_at"]),
         is_local=bool(row["is_local"]),
+        role=role,
+        title=title_for(role),
+        early_member_no=_optional_int(row, keys, "early_member_no"),
+        quota_bytes=_optional_int(row, keys, "quota_bytes"),
+        banned_at=_optional_int(row, keys, "banned_at"),
+        last_seen_at=_optional_int(row, keys, "last_seen_at"),
+        user_no=_optional_int(row, keys, "user_no"),
     )
+
+
+def _optional_int(row: sqlite3.Row, keys: set[str], column: str) -> int | None:
+    """可缺列的可空整数（缺列与 NULL 都返回 ``None``——“没这个信息”就是 ``None``）。"""
+    if column not in keys:
+        return None
+    value = row[column]
+    return None if value is None else int(value)
+
+
+def _next_user_no(conn: sqlite3.Connection) -> int:
+    """下一个全站顺序号（``MAX(user_no) + 1``，空表从 1 开始）。
+
+    用 ``MAX`` 而不是 ``COUNT(*)``：顺序号必须**永不复用**。删过一个用户（或将来的清理）
+    后 ``COUNT`` 会把他的号发给新人，而他递出去的名片上的 ``ID #N`` 就撞车了。
+    """
+    row = conn.execute("SELECT MAX(user_no) AS n FROM users").fetchone()
+    return 1 if row is None or row["n"] is None else int(row["n"]) + 1
 
 
 def _index_run(row: sqlite3.Row) -> IndexRun:

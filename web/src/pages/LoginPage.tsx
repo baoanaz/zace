@@ -14,6 +14,9 @@
  * TASK-098 只改**外观**：左侧装饰区（老纸底 + 衬线品牌字 + 细线几何图案），
  * 右侧纯白浮卡片（参考 Voyage 登录页）。三种模式、三个字段、错误展示、忙态禁用、
  * 窄屏（<768px）时装饰区收起，只留表单。
+ *
+ * TASK-110 §1.1：注册表单追加**邀请码**输入（注册**必须**有码）。它是注册模式的专属字段——
+ * 登录与初始化不需要它（那两条路径面对的是已有/首个账户）。
  */
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
@@ -30,6 +33,9 @@ import {
 } from "../api/client";
 import { ErrorBlock, LoadingBlock } from "../components/ui";
 
+/** 邀请码长度（与后端冻结的 6 位一致；前端只做输入体验，校验仍以后端为准）。 */
+const INVITE_CODE_LENGTH = 6;
+
 type Mode = "login" | "register" | "bootstrap";
 
 export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => void }) {
@@ -39,6 +45,9 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  //: 邀请码（TASK-110；仅注册模式使用）。大写化在输入时就做——码面只有大写字母/数字，
+  //: 而手机输入法默认首字母大写、从聊天软件粘贴也可能带小写，在这里统一比让用户自己改成大写好。
+  const [inviteCode, setInviteCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -61,6 +70,10 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
         setError(new ApiError("password_mismatch", "两次输入的密码不一致", 400));
         return;
       }
+      if (mode === "register" && inviteCode.trim().length === 0) {
+        setError(new ApiError("invalid_invite", "注册需要邀请码：请填入收到的邀请码", 400));
+        return;
+      }
       setBusy(true);
       setError(null);
       try {
@@ -68,7 +81,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
           mode === "login"
             ? await login(name.trim(), password)
             : mode === "register"
-              ? await register(name.trim(), password)
+              ? await register(name.trim(), password, inviteCode.trim())
               : await bootstrap(name.trim(), password);
         onSignedIn(account);
         navigate("/", { replace: true });
@@ -78,7 +91,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
         setBusy(false);
       }
     },
-    [confirm, mode, name, onSignedIn, navigate, password],
+    [confirm, inviteCode, mode, name, onSignedIn, navigate, password],
   );
 
   if (error !== null && meta === null) return <ErrorBlock error={error} />;
@@ -194,11 +207,43 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (account: Account) => vo
               </label>
             )}
 
+            {/*
+              TASK-110（2026-09-15 用户要求）：邀请码排在**最后**（账户 → 密码 → 确认密码 → 邀请码）。
+              之前它夹在密码与确认密码之间，读起来像“密码的一部分”。
+            */}
+            {mode === "register" && (
+              <div className="block text-sm">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-ink-muted">邀请码</span>
+                  <input
+                    name="inviteCode"
+                    autoComplete="off"
+                    value={inviteCode}
+                    onChange={(event) => setInviteCode(event.target.value.toUpperCase())}
+                    placeholder="6 位邀请码"
+                    maxLength={INVITE_CODE_LENGTH}
+                    className="w-full rounded border border-ink-line bg-paper-card px-3 py-2 font-mono text-sm tracking-widest text-ink-primary"
+                    required
+                  />
+                </label>
+                {/* 提示放在 label **之外**：放进 label 会把它拼进可访问名（屏幕阅读器与测试都
+                    会把“邀请码”读成一整句话），而它本来只是辅助说明。 */}
+                <span className="mt-1 block text-xs text-ink-muted">
+                  目前是邀请制：没有邀请码请联系管理员获取。
+                </span>
+              </div>
+            )}
+
             {error !== null && <ErrorBlock error={error} />}
 
             <button
               type="submit"
-              disabled={busy || name.trim().length === 0 || password.length === 0}
+              disabled={
+                busy ||
+                name.trim().length === 0 ||
+                password.length === 0 ||
+                (mode === "register" && inviteCode.trim().length === 0)
+              }
               className="w-full rounded bg-accent-seal px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
               {busy ? "处理中…" : submitLabel}

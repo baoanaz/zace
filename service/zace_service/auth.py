@@ -31,6 +31,8 @@ from zace_service.metadb import META_DB_FILENAME, MetaDB, User
 
 __all__ = [
     "LOCAL_USER_NAME",
+    "RANDOM_KEY_ALPHABET",
+    "RANDOM_KEY_CHARS",
     "SESSION_COOKIE",
     "TOKEN_PREFIX",
     "authenticate",
@@ -42,6 +44,7 @@ __all__ = [
     "llm_owner",
     "llm_owner_optional",
     "local_user",
+    "quota_identity",
     "require_user",
     "revoke_session",
     "verify_password",
@@ -53,6 +56,10 @@ logger = get_logger("zace_service.auth")
 SESSION_COOKIE = "zace_session"
 #: API Key 前缀（``zace_`` + 随机串；库里只存哈希）。
 TOKEN_PREFIX = "zace_"
+#: 随机生成的 Key 正文长度（用户要求 16 位字母/数字；见 ``routers.auth.create_token``）。
+RANDOM_KEY_CHARS = 16
+#: 随机 Key 的字符集（大小写字母 + 数字；用户明确要求不含符号）。
+RANDOM_KEY_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 #: 本地模式的隐式账户名（不落 users 表：本地模式无账户概念，R34）。
 LOCAL_USER_NAME = "local"
 #: 会话有效期（30 天，卡内默认）。
@@ -100,8 +107,13 @@ def hash_api_token(raw: str) -> str:
 
 
 def create_api_token() -> tuple[str, str, str]:
-    """生成 ``(明文, 哈希, 前缀)``；明文只在创建响应里出现一次。"""
-    raw = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    """生成 ``(明文, 哈希, 前缀)``；明文只在创建响应里出现一次。
+
+    形态（用户 2026-09-15 要求）：``zace_`` + **16 位**字母/数字（不含 ``-``/``_``）。
+    熵：62¹⁶ ≈ 4.8e28，不可枚举。
+    """
+    body = "".join(secrets.choice(RANDOM_KEY_ALPHABET) for _ in range(RANDOM_KEY_CHARS))
+    raw = f"{TOKEN_PREFIX}{body}"
     return raw, hash_api_token(raw), raw[: len(TOKEN_PREFIX) + 6]
 
 
@@ -133,6 +145,13 @@ def authenticate(request: Request) -> Principal | None:
     """解析请求凭据：``Authorization: Bearer`` 优先，其次 session cookie。
 
     返回 ``None`` = 没有有效凭据（由调用方决定是否放行——本地模式放行）。
+
+    TASK-110：**封禁在这里统一拦截**（``User.banned``），因此封禁对 session 与 token
+    两种载体**立即生效**——不需要等用户重新登录，也不需要撤销他的每一把 Key
+    （那样封禁一个有很多 Key 的账号要发 N 次请求，且新登的 Key 仍然是活的）。
+
+    返 ``None``（而不是抛 403）是刻意的：封禁与"凭据无效"在 HTTP 面用**同一个 401 文案**
+    （Module/06 §2.2 的探测面纪律），区别只进日志。
     """
     settings = get_settings(request)
     if settings.local_mode:
@@ -143,14 +162,19 @@ def authenticate(request: Request) -> Principal | None:
     if scheme.lower() == "bearer" and raw.strip():
         db = get_meta_db(request)
         user = db.find_user_by_token_hash(hash_api_token(raw.strip()))
-        if user is not None:
-            return Principal(user=user, via="token")
-        return None
+        if user is None or user.banned:
+            if user is not None:
+                logger.warning("已封禁账户的凭据被拒：user=%s via=token", user.id)
+            return None
+        return Principal(user=user, via="token")
 
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id:
         db = get_meta_db(request)
         user = db.resolve_session(session_id)
+        if user is not None and user.banned:
+            logger.warning("已封禁账户的凭据被拒：user=%s via=session", user.id)
+            return None
         if user is not None:
             return Principal(user=user, via="session")
     return None
@@ -208,6 +232,30 @@ def llm_owner_optional(request: Request) -> User | None:
     # request.state。这里做一次可选认证：有合法 cookie/key 就返回详情，没有则仍保持公开响应。
     principal = authenticate(request)
     return principal.user if principal is not None else None
+
+
+def quota_identity(request: Request) -> tuple[str | None, str | None, int | None]:
+    """配额归属人的 ``(user_id, role, quota_override)``（TASK-110：按角色取配额）。
+
+    与 :func:`llm_owner` 同一思路——**集中一份解析**，否则展示（``/api/auth/me``）、检索告警
+    与上传硬拒三处会算出不同的上限（而它们本该说同一个数）。
+
+    - **本地模式**：三个都 ``None``——本地模式是**单用户**（R34），全量项目就是"他的"项目，
+      配额回落 ``Settings.storage_limit_per_user_bytes``（TASK-094 口径逐字不变）；
+    - 云端已认证：真实 ``user_id`` / 角色 / 单人覆盖；
+    - 云端无凭据：三个都 ``None``（调用方按"无归属"处理，与旧行为一致）。
+
+    为什么本地模式不返回隐式账户的 ``"local"``：那个 id 在 ``users`` 表里**可能根本不存在**
+    （``ensure_local_user`` 只在写项目归属时才建行），拿它去 ``list_projects`` 会查出一个空集，
+    于是用量恒为 0、告警永不出现——一个"看起来在算、实际什么都没算"的静默失灵。
+    """
+    settings = get_settings(request)
+    if settings.local_mode:
+        return None, None, None
+    user = getattr(request.state, "zace_user", None)
+    if isinstance(user, User):
+        return user.id, user.role, user.quota_bytes
+    return None, None, None
 
 
 def get_meta_db(request: Request) -> MetaDB:

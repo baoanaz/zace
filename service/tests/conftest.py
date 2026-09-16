@@ -129,6 +129,33 @@ def make_app(data_root: Path) -> FastAPI:
     return create_app(test_settings(data_root))
 
 
+def make_invite(app: FastAPI, kind: str = "C", *, max_uses: int = 1) -> str:
+    """造一个邀请码并返回码面（TASK-110：注册必须有码）。
+
+    为什么直接写库而不走 ``POST /api/admin/invites``：多数用例关心的只是"有一个真实用户"，
+    走后台端点会强制调用方先造出管理员会话，把用例真正要验证的东西埋在准备工作里。
+    """
+    from zace_service.invites import generate_code
+    from zace_service.metadb import MetaDB
+
+    db: MetaDB = app.state.meta_db
+    code = generate_code(kind)
+    db.create_invite(code, kind, max_uses=max_uses)
+    return code
+
+
+def register_with_invite(
+    client: TestClient, app: FastAPI, name: str, password: str, *, kind: str = "C"
+) -> dict:
+    """经邀请码注册一个用户，返回响应体（断言用；失败时把响应文本一并抛出来）。"""
+    response = client.post(
+        "/api/auth/register",
+        json={"name": name, "password": password, "inviteCode": make_invite(app, kind)},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
 def make_client(app: FastAPI) -> TestClient:
     """包一层 TestClient（``raise_server_exceptions=False``：500 信封由应用自己保证）。"""
     return TestClient(app, raise_server_exceptions=False)
