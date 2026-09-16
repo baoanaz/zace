@@ -199,8 +199,11 @@ describe("§需求2 合并表格（TASK-100）", () => {
     expect(within(dialog).getByText("信心：")).toBeInTheDocument();
     expect(within(dialog).getByText("Token：")).toBeInTheDocument();
     expect(within(dialog).getByText("证据数量（代码/文档/测试）：")).toBeInTheDocument();
-    // 弹窗内只应有一个 Token（表格的「体量」列不在弹窗里渲染）。
-    expect(within(dialog).getAllByText(/^Token$/)).toHaveLength(0);
+    // 弹窗内「Token」只能出现一次（表格那列的小写 `token`/「体量」不在弹窗里渲染）。
+    // 写法注意：`getAllByText` 在**找不到时会抛错**而非返回空数组，故这里必须用 `queryAllByText`；
+    // 且 label 渲染为 'Token：'（带全职号）——用 `^Token：$` 而不是 `^Token$`
+    // （TASK-108 提交时曾写成 `getAllByText(/^Token$/)`，永远匹配不到且必抛错）。
+    expect(within(dialog).queryAllByText(/^Token：$/)).toHaveLength(1);
     // 诚实边界：测试夹具的 answerText 为 null，弹窗要如实说明这条是 search（不调 LLM），
     // 而不是拿证据清单冒充 LLM 输出。
     expect(within(dialog).getByText(/search_context 不调用 LLM|未调用 LLM|调用了 LLM 但失败/)).toBeInTheDocument();
