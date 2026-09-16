@@ -257,6 +257,39 @@ class VectorStore:
             )
         return {row[CHUNK_ID_COLUMN]: row[CONTENT_HASH_COLUMN] for row in rows}
 
+    def get_vectors_by_hash(
+        self, content_hashes: Sequence[str]
+    ) -> dict[str, tuple[str, list[float]]]:
+        """按 ``content_hash`` 读回已有向量（TASK-111）：``hash -> (chunk_id, vector)``。
+
+        为什么需要它：``docs/contracts/PROCESS.md`` §3.2 **R4 早已裁定** "复用键是 hash 不是
+        id"，但原实现只按 ``chunk_id`` 比对 ``content_hash``（:meth:`get_hashes`），
+        而 ``chunk_id = {path}:{fqn}:{start_line}`` 含行号——**行号一漂移就判为"新 chunk"重嵌**，
+        同一份内容被反复付费。本方法让调用方能按内容搬移向量行（只换 id，不重算 embedding）。
+
+        同一 ``content_hash`` 可能有多行（不同 id 同内容）；去重后任取一行即可
+        （向量由内容唯一决定，与 id 无关）。
+        """
+        self._ensure_open()
+        unique_hashes = list(dict.fromkeys(content_hashes))
+        if not unique_hashes:
+            return {}
+        where = _in_clause(CONTENT_HASH_COLUMN, unique_hashes)
+        with self._lock:
+            rows = self._translate_errors(
+                lambda: self._table.search(None)
+                .where(where)
+                .select([CHUNK_ID_COLUMN, CONTENT_HASH_COLUMN, VECTOR_COLUMN])
+                .to_list()
+            )
+        found: dict[str, tuple[str, list[float]]] = {}
+        for row in rows:
+            digest = row[CONTENT_HASH_COLUMN]
+            if digest in found:
+                continue
+            found[digest] = (row[CHUNK_ID_COLUMN], [float(v) for v in row[VECTOR_COLUMN]])
+        return found
+
     def count(self) -> int:
         """表内行数（测试/对账用辅助方法）。"""
         self._ensure_open()

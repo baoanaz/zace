@@ -138,3 +138,101 @@ def test_ingest_rejects_non_directory(repo: Path, engine: Engine) -> None:
     handle, _identity = engine.resolve_repo(repo)
     with pytest.raises(EngineError, match="不是目录"):
         engine.ingest_repo(handle.project_id, repo / "nope")
+
+
+# ---------------------------------------------------------------------------
+# TASK-111：分支参与身份计算
+# ---------------------------------------------------------------------------
+
+
+def _commit_all(repo: Path) -> None:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "init"],
+        check=True,
+        capture_output=True,
+        env={
+            "PATH": __import__("os").environ.get("PATH", ""),
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.com",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+        },
+    )
+
+
+def test_different_branches_of_same_remote_get_distinct_identity(tmp_path: Path) -> None:
+    """TASK-111 的核心修复：同 remote 的两个分支不得碰撞成同一个 projectId。
+
+    实测事故：main 与 feature/cvi-agent 共用一个 projectId，索引混合 353 文件，
+    检索返回**当前 checkout 不存在**的文件，且 ``index: fresh`` 仍显示正常。
+    """
+    remote = "https://example.com/team/zace.git"
+    repo = _git_repo(tmp_path / "zace", remote=remote)
+    try:
+        _commit_all(repo)
+        subprocess.run(
+            ["git", "-C", str(repo), "branch", "-M", "main"], check=True, capture_output=True
+        )
+        main_identity = repo_identity(repo)
+        assert main_identity.branch == "main"
+
+        subprocess.run(
+            ["git", "-C", str(repo), "checkout", "-qb", "feature/x"],
+            check=True,
+            capture_output=True,
+        )
+        feature_identity = repo_identity(repo)
+        assert feature_identity.branch == "feature/x"
+    except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover
+        pytest.skip(f"环境不可用 git：{exc}")
+
+    assert main_identity.identity_key != feature_identity.identity_key
+    assert project_id_for(main_identity.identity_key) != project_id_for(
+        feature_identity.identity_key
+    )
+    # 展示名带分支，UI 能一眼区分
+    assert main_identity.display_name.endswith("@main")
+    assert feature_identity.display_name.endswith("@feature/x")
+
+
+def test_same_branch_in_two_checkouts_shares_identity(tmp_path: Path) -> None:
+    """D-29 的核心价值必须保留：同分支的第二个 checkout 仍共享索引（不重复付费）。"""
+    remote = "https://example.com/team/zace.git"
+    left = _git_repo(tmp_path / "machine-a" / "zace", remote=remote)
+    try:
+        _commit_all(left)
+        subprocess.run(
+            ["git", "-C", str(left), "branch", "-M", "main"], check=True, capture_output=True
+        )
+        (tmp_path / "machine-b" / "ws").mkdir(parents=True, exist_ok=True)
+        right = tmp_path / "machine-b" / "ws" / "zace"
+        subprocess.run(
+            ["git", "clone", "-q", str(left), str(right)], check=True, capture_output=True
+        )
+        # 把 clone 的 origin 改回「同一远程」，模拟两台机器各自 clone 同一 repo。
+        subprocess.run(
+            ["git", "-C", str(right), "remote", "set-url", "origin", remote],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover
+        pytest.skip(f"环境不可用 git：{exc}")
+
+    assert repo_identity(left).identity_key == repo_identity(right).identity_key
+
+
+def test_branch_identity_material_matches_documented_formula(tmp_path: Path) -> None:
+    """身份材料的拼接口径必须可复算（``remote + repo路径 + \\x00 + branch``）。"""
+    remote = "https://example.com/team/zace.git"
+    repo = _git_repo(tmp_path / "zace", remote=remote)
+    try:
+        _commit_all(repo)
+        subprocess.run(
+            ["git", "-C", str(repo), "branch", "-M", "main"], check=True, capture_output=True
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:  # pragma: no cover
+        pytest.skip(f"环境不可用 git：{exc}")
+
+    expected = hashlib.sha256(f"{remote}\x00main".encode()).hexdigest()
+    assert repo_identity(repo).identity_key == expected

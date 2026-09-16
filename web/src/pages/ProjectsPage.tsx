@@ -34,6 +34,19 @@ const WINDOW_DAYS = 30;
 /** 待删除的项目（非 null 时弹二次确认；**不直接发请求**）。 */
 type PendingDelete = { projectId: string; name: string };
 
+/**
+ * 仓库名（去掉 `@分支` 后缀）。
+ *
+ * TASK-111 后 `displayName` 形如 `zace@feature/x`，分支已单独成列；仓库列再带上它
+ * 会让同一仓库的多个分支看起来是两个仓库，反而看不出“该不该删一个”。
+ * 没有后缀时原样返回（无 git 的项目、旧数据）。
+ */
+function repoName(displayName: string | undefined, fallback: string): string {
+  if (!displayName) return fallback;
+  const at = displayName.lastIndexOf("@");
+  return at > 0 ? displayName.slice(0, at) : displayName;
+}
+
 export function ProjectsPage() {
   const [data, setData] = useState<AccountOverview | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -113,7 +126,10 @@ export function ProjectsPage() {
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-ink-muted">
-                <th className="border-b border-ink-line py-1">项目</th>
+                <th className="border-b border-ink-line py-1">仓库</th>
+                <th className="border-b border-ink-line py-1" title="同一仓库的不同分支是不同项目">
+                  分支
+                </th>
                 <th className="border-b border-ink-line py-1">projectId</th>
                 <th className="border-b border-ink-line py-1">文件</th>
                 <th className="border-b border-ink-line py-1">chunks</th>
@@ -128,7 +144,14 @@ export function ProjectsPage() {
               {projects.map((project) => (
                 <tr key={project.projectId}>
                   <td className="border-b border-ink-line/60 py-1">
-                    {project.displayName || project.projectId}
+                    {repoName(project.displayName, project.projectId)}
+                  </td>
+                  {/* 分支（TASK-111）：没有分支信息时如实显示 `—`，不编一个“main”。 */}
+                  <td
+                    className="border-b border-ink-line/60 py-1 font-mono text-xs"
+                    data-testid={`branch-${project.projectId}`}
+                  >
+                    {project.branch ?? "—"}
                   </td>
                   <td className="border-b border-ink-line/60 py-1 font-mono text-xs">
                     {project.projectId}

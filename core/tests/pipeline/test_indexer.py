@@ -582,3 +582,75 @@ def test_embed_window_size_falls_back_and_caps() -> None:
     assert _embed_window_size(VoyageLike()) == 4_000
     assert _embed_window_size(Extreme()) == MAX_EMBED_WINDOW
     assert MAX_EMBED_WINDOW < 1000 * 32
+
+
+# ---------------------------------------------------------------------------
+# TASK-111：内容寻址复用（R4“复用键是 hash 不是 id”的落地）
+# ---------------------------------------------------------------------------
+
+
+def test_line_shift_reuses_vectors_without_rembedding(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    embedding: CountingEmbedding,
+    store: Store,
+    vectors: VectorStore,
+) -> None:
+    """文件顶部插入一行 → chunk_id 全部漂移，但**内容未变的 chunk 不得重嵌**。
+
+    这是实测浪费的根因：``chunk_id = {path}:{fqn}:{start_line}`` 含行号，
+    插入一行会让后续所有 chunk 换 id；旧实现按 id 比对 hash，于是整文件重嵌。
+
+    注意 ``(module)`` 块的内容**真的变了**（新注释进了它），所以允许恰好 1 次嵌入；
+    关键是后面的 ``helper`` / ``Service`` / ``Service.run`` 三个未变 chunk 不得出现在嵌入列表里。
+    """
+    _ingest_files(indexer, change_set, {"pkg/mod.py": PY_MODULE})
+    calls_before = embedding.calls
+    vectors_before = vectors.count()
+
+    shifted = "# 新增注释行\n" + PY_MODULE
+    report = indexer.ingest(change_set(modified={"pkg/mod.py": shifted}))
+
+    embedded = [text for batch in embedding.batches[calls_before:] for text in batch]
+    assert all("def helper" not in text for text in embedded), "未变的符号不应重嵌"
+    assert all("class Service" not in text for text in embedded), "未变的类不应重嵌"
+    assert len(embedded) == 1, f"只有 (module) 块内容变了，应恰好嵌 1 个，实际 {len(embedded)}"
+    assert report.chunks_reused > 0
+    # 向量行随 id 漂移搬运：总数不变（旧 id 被删、新 id 被插入），关键是与 chunk 数一致。
+    assert vectors.count() == vectors_before
+    assert vectors.count() == store.counts()["chunks"]
+
+
+def test_identical_content_in_new_file_reuses_existing_vector(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    embedding: CountingEmbedding,
+    store: Store,
+    vectors: VectorStore,
+) -> None:
+    """同一内容出现在新路径（复制文件）→ 复用已有向量，不重嵌。"""
+    _ingest_files(indexer, change_set, {"pkg/mod.py": PY_MODULE})
+    calls_before = embedding.calls
+
+    report = indexer.ingest(change_set(added={"pkg/copy.py": PY_MODULE}))
+
+    assert embedding.calls == calls_before, "相同内容换个路径不应重嵌"
+    assert report.chunks_reused > 0
+    assert vectors.count() == store.counts()["chunks"]
+
+
+def test_changed_content_still_embeds(
+    indexer: Indexer,
+    change_set: ChangeSetFactory,
+    embedding: CountingEmbedding,
+) -> None:
+    """内容真变了必须重嵌（复用不得吞掉变更）——防“优化过头”静默返回旧向量。"""
+    _ingest_files(indexer, change_set, {"pkg/mod.py": PY_MODULE})
+    calls_before = embedding.calls
+
+    updated = PY_MODULE.replace("return value + 1", "return value + 99")
+    report = indexer.ingest(change_set(modified={"pkg/mod.py": updated}))
+
+    assert embedding.calls == calls_before + 1
+    assert report.chunks_new == 1
+    assert any("value + 99" in text for text in embedding.batches[-1])
