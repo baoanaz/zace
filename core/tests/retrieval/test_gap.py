@@ -489,6 +489,15 @@ def test_gap_check_is_cheap(cockpit) -> None:
 
 
 def test_tests_import_path_is_available() -> None:
-    """自证：本文件使用的 ``ROOT`` 指向仓库根（真实回归用例的 golden 在它下面）。"""
+    """自证：本文件使用的 ``ROOT`` 指向仓库根（真实回归用例的 golden 在它下面）。
+
+    **不要用父目录名判断**（TASK-109 曾写成 ``ROOT.parent.name == "ACE"``）：
+    那是本机 checkout 布局的硬编码假设，而仓库目录名随 clone 方式而变
+    （GitHub Actions clone 成 ``zace``，其他人可能是任意名字），该断言在 CI 必然失败。
+    用仓库**自身的标志文件**判断——它定义“这是仓库根”，与目录叫什么无关。
+    """
+    # 仓库标志：workspace 根（D-35 monorepo）的 pyproject + 三个成员目录的 pyproject
+    assert (ROOT / "pyproject.toml").is_file(), f"ROOT 不是仓库根：{ROOT}"
+    assert (ROOT / "core" / "pyproject.toml").is_file()
+    assert (ROOT / "service" / "pyproject.toml").is_file()
     assert (ROOT / "benches" / "golden" / "cockpit-agents-py" / "cockpit.jsonl").is_file()
-    assert ROOT.parent.name == "ACE"
