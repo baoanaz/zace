@@ -73,8 +73,12 @@ class InviteCreateRequest(BaseModel):
 class UserPatchRequest(BaseModel):
     """``PATCH /api/admin/users/{id}`` 的请求体（**只改给到的字段**）。
 
-    为什么要区分"没传"与"传了 null"：``quotaBytes`` 的 ``null`` 表示
-    "恢复按角色默认"，与"不改配额"是两件事（后者是省略字段）。
+    为什么要区分"没传"与"传了 null"：``quotaBytes`` 的 ``null`` 表示"恢复按角色默认"，
+    与"不改配额"（省略该字段）是两件事。
+
+    ``model_fields_set`` 就是区分它们的依据（见 :func:`patch_user` 里的 ``"quotaBytes" in
+    payload.model_fields_set``）：Pydantic 会把**显式传入的 null** 与**没传**分开——
+    只看 `payload.quotaBytes is not None` 会把"恢复默认"静默当成"不改"。
     """
 
     role: str | None = None
@@ -195,11 +199,14 @@ def patch_user(userId: str, payload: UserPatchRequest, request: Request) -> dict
         updated = db.set_user_role(target.id, role, early_member_no=member_no)
         if updated is None:  # pragma: no cover - 上面刚取到，仅并发删除才会走到
             raise ApiError(code="admin_required", message=_USER_NOT_FOUND, status=403)
-    if payload.quotaBytes is not None:
-        if payload.quotaBytes < 0:
+    # 用 ``model_fields_set`` 而不是 ``is not None``：**显式传 null** = 恢复按角色默认，
+    # **省略字段** = 不改。只看 `is not None` 会把前者静默当成后者（实测踩到：
+    # 管理员传 `{"quotaBytes": null}` 想把单人覆盖清掉，接口 200 但值没变）。
+    if "quotaBytes" in payload.model_fields_set:
+        if payload.quotaBytes is not None and payload.quotaBytes < 0:
             raise ApiError(
                 code="invalid_quota",
-                message="quotaBytes 不能为负数（0 表示不限，None/省略表示按角色默认）",
+                message="quotaBytes 不能为负数（0 表示不限；null 表示恢复按角色默认）",
                 status=400,
             )
         db.set_user_quota(target.id, payload.quotaBytes)

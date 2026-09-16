@@ -46,8 +46,8 @@ $ curl -s -X POST http://127.0.0.1:8787/api/auth/register \
 ```console
 $ curl -s -X POST http://127.0.0.1:8787/api/auth/tokens \
     -H 'Content-Type: application/json' -b cookies.txt \
-    -d '{"name":"my-key","key":"zace_my-project-2026"}'
-{"id":"...","token":"zace_my-project-2026","prefix":"zace_my-pro","isCustom":true}
+    -d '{"name":"my-key","key":"zace_my-laptop-key-2026"}'
+{"id":"...","token":"zace_my-laptop-key-2026","prefix":"zace_my-pro","isCustom":true}
 ```
 
 规则：必须以 `zace_` 开头；其后 **≥16 个字符**，字符集 `[A-Za-z0-9_-]`；与既有 Key 冲突 → 409。

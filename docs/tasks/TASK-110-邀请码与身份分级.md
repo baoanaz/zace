@@ -355,6 +355,16 @@ CAN_CUSTOM_KEY = {ROLE_ADMIN, ROLE_BETA}   # 自定义 Key 是内测/管理员�
 | 4 | 配额语义 | **超限硬拒新索引**（上传 413；检索仍只告警，读路径不变） |
 | 5 | 项目数上限（卡内 §3.3 的能力位与 §1.5 的矛盾） | **不设项目数上限**（能力位里不出现 `projectLimit`） |
 
+#### 契约文件：已按最终形态改完（不再留悬空声明）
+
+用户 2026-09-15 追问后拍板：**本次直接按最终形态走，不留任何兼容债**。因此：
+
+- `docs/contracts/openapi.yaml` 已写入本卡及**历史累积的全部扩展路径**（TASK-034/060/062/064/
+  090/099/110），共 **36 个路径**，与 `app.openapi()` **双向零差**；
+- `test_skeleton.TASK_EXTENSION_PATHS` **收缩为空集**——不再有任何“合同与实现暂时不一致 ”
+  的例外，机制保留但不使用；
+- 同时给 `/api/auth/me` 等补了 `Account` / `Capabilities` schema 与 `Forbidden` 响应。
+
 #### 验收命令与结果
 
 ```console
@@ -363,7 +373,7 @@ All checks passed!
 $ uv run python scripts/check_dependency_direction.py
 依赖方向检查通过（core 纯库 / service 不上探）。
 $ uv run pytest -o addopts="" -q
-1107 passed, 2 skipped   # 基线 1033 passed（新增 74 条；含 test_invites.py 43 条 + test_admin.py 31 条）
+1109 passed, 2 skipped   # 基线 1033（新增 76 条：test_invites.py 44 + test_admin.py 32）
 $ cd web && npx tsc --noEmit && npx eslint src --max-warnings 0 && npm run build
 ✅ tsc 无输出 ｜ ✅ eslint 无输出 ｜ ✅ vite build 成功（49 modules）
 $ cd web && npx vitest run
@@ -372,6 +382,40 @@ $ cd web && npx vitest run
        已用 ``git stash`` 在干净 main 上复现（**预先存在**，与本卡无关）。
        本卡新增：identity.test.tsx 9 条 + App.test.tsx 邀请码 4 条。
 ```
+
+#### 真实服务上跑通的端到端验证（用户 2026-09-15 要求“跑一次看看”）
+
+用本机 live 库的副本（`/tmp/zace-t110`，33 MB）在 **:8799** 起了本卡代码 + 前端 :5199（无 sudo，无法重启:
+8787 的生产实例）。逐项实测：
+
+| # | 验收项 | 实测结果 |
+|---|---|---|
+| 1 | 旧库迁移后身份 | `xuwenzheng` → `admin` / 执炬者 / 5120 MB |
+| 2 | 旧 Key 仍可用 | `zace_123456` → `/api/projects` **200** |
+| 3 | 旧 Key 现在是管理员 | `/api/admin/users` **200** |
+| 4 | 无码注册 | **400** `invalid_invite` |
+| 5 | A 码建码 | 生成 `BIS6ID`；另一个 `B6RZXW` 现场演示用 |
+| 6 | B 码注册 | `role=beta` / `拓荒者` / `earlyMemberNo=1` / `canCustomKey=true` / 1024 MB |
+| 7 | 内测建自定义 Key | `zace_my-laptop-key-2026` → **200**，`isCustom=true` |
+| 8 | 自定义 Key 调受保护端点 | `/api/projects` **200**；`/api/auth/me` → `beta 拓荒者 #001` |
+| 9 | 自定义 Key 出现在列表 | `isCustom: true` |
+| 10 | C 码注册 | `public` / `旅人` / 无编号 / `canCustomKey=false` / 500 MB |
+| 11 | 公测传自定义 Key | **403** `custom_key_forbidden`（文案含“拓荒者”） |
+| 12 | 格式校验 | 无前缀 / 短于 16 / 含空格 → 均 **400** `invalid_custom_key` |
+| 13 | 封禁立即生效 | 封禁后该自定义 Key → **401**（无需重新登录） |
+| 14 | 解封恢复 | **200** |
+| 15 | 配额充足上传 | **200** |
+| 16 | 配额超限上传 | **413** `quota_exceeded`（数字如实：144 B / 上限 1 B / 已用 138 B） |
+| 17 | 超限时检索 | **200**（读路径不阻断） |
+| 18 | 后台五模块 | users / invites / projects / stats / system 均 **200** |
+| 19 | 统计口径 | 31 次调用 / 18 有答案 / 9 证据不足 / 4 降级 / 错误率 0.129 |
+
+**实测发现并修复的 2 个真实缺陷**（都不是测试能替代的发现）：
+
+| # | 缺陷 | 根因 | 修法 |
+|---|---|---|---|
+| A | ``{"quotaBytes": null}`` 想“恢复按角色默认”却**静默无效** | 路由只看 ``payload.quotaBytes is not None``，把显式 null 与“没传”当成同一回事 | 改看 ``payload.model_fields_set``；补 ``test_patch_quota_null_restores_role_default`` |
+| B | 手册与前端 placeholder 里的示例 Key ``zace_my-project-2026`` **只有 15 字符**，用户照着抄必得 400 | 占位串写下时没数字符 | 统一改为 ``zace_my-laptop-key-2026``；补 ``test_documented_example_keys_are_accepted`` 把“文档示例必须端到端可用”钉住 |
 
 #### 真实库迁移实测（卡内 §5 的“迁移路径”验收项）
 
@@ -403,7 +447,7 @@ admin/system: 200 ok
 | 4 | §7-3 建议"先保持告警" | 上传**硬拒**（413 `quota_exceeded`），检索仍只告警 | **用户拍板**；检索不会让占用变大，拒绝它无意义 |
 | 5 | §3.1 "迁移按名字匹配提升为 admin" | 提升放在 **`create_app` 启动时**（不只在迁移里） | 目标账户可能在首次启动时还不存在；每次启动幂等补一刀比“迁移跑一次、改名后再也提不上”可靠 |
 | 6 | §3.5 `GET /api/admin/projects` 数据源仅 `index_runs` | 外加 `projects` 表的归属人与 `quota.project_usage_bytes` 的占用 | "排查异常索引"需要知道是谁的项目、有多大 |
-| 7 | §7-4 `/api/auth/me` 走契约流程 | **未改 `docs/contracts/openapi.yaml`** | 卡头 §“不得改”明令 `docs/contracts/**` 禁改；按 TASK-099 先例用 `test_skeleton.TASK_EXTENSION_PATHS` 白名单 + 本记录声明，**待编排者同步契约文件** |
+| 7 | §7-4 `/api/auth/me` 走契约流程 | **已按最终形态写入 `docs/contracts/openapi.yaml`**（含 `Account` / `Capabilities` schema） | 用户 2026-09-15 追问后拍板：开发期不留兼容债，契约与实现**双向零差**；`TASK_EXTENSION_PATHS` 已收空 |
 
 #### 重要实现细节（后续维护者必读）
 
@@ -416,8 +460,14 @@ admin/system: 200 ok
 
 #### 未决问题 / 交接事项
 
-1. **契约文件待同步**（编排者）：`/api/admin/*` 七个路径 + `/api/auth/me` / `/api/auth/tokens` 的字段变化未写入 `docs/contracts/openapi.yaml`（卡头禁改）。`test_skeleton.TASK_EXTENSION_PATHS` 已列出精确路径集。
-2. **前端后台页未做浏览器实测**：`identity.test.tsx` 用桩 `fetch` 断言了“三身份看到的内容确实不同”，但**没有**对真实服务跑一次 E2E（`web/src/pages/e2e.test.tsx` 需要真实服务）。建议接入验证时补。
-3. **`History.trace.test.tsx` 的预存失败**：与本卡无关（干净 main 上同样失败），但会让 `npm test` 不绿——单独开卡修。
-4. **配额硬拒的 fail-open 选择**：统计失败时**放行**上传（而非拒绝）。理由见 `enforce_upload_limit` 的 docstring；若将来压测发现恶意用户能借此绕过，再改 fail-closed。
-5. **`EARLY_MEMBER_MAX` 之外的编号**：第 101 名起 `early_member_no` 为 `NULL`（卡内要求）。**但**后台把某人升为内测时会用 `_next_member_no` 补一个空缺号——若前 100 个号已发完则不给号。
+1. **生产服务未重启**：本机 live 实例（`:8787`，root 跑的）仍跑在**旧代码**上（本会话无 sudo，
+   无法 kill）。因此：① live 库**尚未跑迁移**；② 浏览器上的正式站点仍是旧版注册/无后台。
+   下次由有权限的人重启 `zace-live.service` 即自动完成迁移 + 管理员提升（幂等）。
+   **验证环境**：本卡的代码已用 live 库副本在 `:8799` + 前端 `:5199` 起过并逐项验收（见上表）。
+2. **前端后台页无真实浏览器 E2E**：`identity.test.tsx` 用桩 `fetch` 断言了"三身份内容确实不同"，
+   也已在真实服务上逐项调通了 API，但**没有**用浏览器跑过一遍（`e2e.test.tsx` 需真实服务）。
+3. **`History.trace.test.tsx` 的预存失败**：与本卡无关（干净 main 同样失败），但会让 `npm test` 不绿——单独开卡修。
+4. **配额硬拒是 fail-open**：统计失败时**放行**上传（而非拒绝）。理由见 `enforce_upload_limit` 的 docstring；
+   若将来压测发现恶意用户能借此绕过，再改 fail-closed。
+5. **`EARLY_MEMBER_MAX` 之外的编号**：第 101 名起 `early_member_no` 为 `NULL`（卡内要求）。
+   后台把某人升为内测时会用 `_next_member_no` 补一个**空缺号**（前 100 全发完则不给号）。

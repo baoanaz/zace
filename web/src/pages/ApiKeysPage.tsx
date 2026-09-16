@@ -149,7 +149,7 @@ export function ApiKeysPage() {
             <input
               value={customKey}
               onChange={(event) => setCustomKey(event.target.value)}
-              placeholder={`${KEY_PREFIX}my-project-2026`}
+              placeholder={`${KEY_PREFIX}my-laptop-key-2026`}
               autoComplete="off"
               className="w-full rounded border border-ink-line bg-paper-card px-3 py-1.5 font-mono text-xs text-ink-primary"
             />

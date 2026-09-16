@@ -28,47 +28,18 @@ from tests.conftest import make_app, make_client
 
 # --------------------------------------------------------------------------- CF-05 路径快照
 
-#: 各任务卡预授权的 CF-05 **扩展路径**（卡内登记；编排者需同步 ``openapi.yaml``）。
-#: 这个白名单是刻意的：它把"扩展"与"漂移"分开——白名单外的任何差异依然会让测试失败。
+#: 各任务卡预授权的 CF-05 **扩展路径**（卡内登记；已同步进 ``openapi.yaml``）。
 #:
-#: - TASK-034 §A：本地模式的 attach / rescan；
-#: - TASK-060：部署形态（``/api/meta``）、当前身份（``/api/auth/me``）、
-#:   首个用户初始化（``/api/auth/bootstrap``）；
-#: - TASK-062/064：账户概览、索引历史与统计、查询用量汇总。
-#: - TASK-090：按 trace id 查请求日志（只读；只查自己的）。
-#: - TASK-099 §B/§C：一次 Tool 调用的时间线（``/api/calls/{callId}``，客户端经
-#:   ``X-Request-Id`` 头承载 callId）与**用户级 LLM 配置**的写入/删除。
-#: - TASK-110：管理员后台五模块（``/api/admin/*``）。它们的**形态**是冻结的（路径 + 方法），
-#:   本卡同时把它们写进了 ``docs/contracts/openapi.yaml``（用户 2026-09-15 拍板：
-#:   开发期不做向后兼容妥协，直接按最终形态改契约）。
+#: **TASK-110 后为空**：此前累积的扩展（TASK-034 的 attach/rescan、TASK-060 的 meta/me/
+#: bootstrap、TASK-062/064 的统计、TASK-090 的请求日志、TASK-099 的调用时间线与
+#: 用户级 LLM 配置、TASK-110 的后台五模块）已**全部写入** ``docs/contracts/openapi.yaml``，
+#: 因此路径集合现在与合同**逐字相等**，不需要任何例外。
 #:
-#: TASK-099 的两个/三个新路径已列入任务卡 §D 的 **L2 契约申请**，等编排者把它写入
-#: ``docs/contracts/openapi.yaml``（实施 AI 不动契约文件）；本白名单与实现同步先行，
-#: 因此路径快照测试保持绿，但**契约文件与实现存在已声明的暂时差异**（已在执行记录里列明）。
-TASK_EXTENSION_PATHS: frozenset[str] = frozenset(
-    {
-        "/api/projects/attach",
-        "/api/projects/{id}/rescan",
-        "/api/meta",
-        "/api/auth/me",
-        "/api/auth/bootstrap",
-        "/api/auth/llm-config",
-        "/api/account/overview",
-        "/api/projects/{id}/index-runs",
-        "/api/projects/{id}/index-stats",
-        "/api/index-stats",
-        "/api/usage/summary",
-        "/api/calls/{callId}",
-        "/api/request-log/{requestId}",
-        "/api/admin/users",
-        "/api/admin/users/{userId}",
-        "/api/admin/invites",
-        "/api/admin/invites/{code}",
-        "/api/admin/projects",
-        "/api/admin/stats",
-        "/api/admin/system",
-    }
-)
+#: 保留这个空集合（而不是删掉机制）的原因：它把"合同先改、实现后跟"的流程留在原处——
+#: 将来某张卡需要先落实现再等编排者同步合同时，往这里加一条即可，且仍然会把
+#: "白名单外的任何差异"变成失败。**但首选做法是同时改合同**（TASK-110 就是这么做的：
+#: 用户 2026-09-15 明确要求不留兼容余地，直接按最终形态改）。
+TASK_EXTENSION_PATHS: frozenset[str] = frozenset()
 
 
 def test_openapi_paths_match_cf05_contract(

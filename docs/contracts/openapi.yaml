@@ -9,7 +9,7 @@ info:
 servers:
   - url: https://{host}
     variables: { host: { default: zace.example.com } }
-tags: [{ name: auth }, { name: projects }, { name: sync }, { name: query }, { name: ops }]
+tags: [{ name: auth }, { name: projects }, { name: sync }, { name: query }, { name: ops }, { name: admin }]
 
 components:
   securitySchemes:
@@ -60,8 +60,32 @@ components:
           items: { type: string }
         evidenceSummary: { type: array, items: { type: object } }
         meta: { type: object, additionalProperties: true }
+    Capabilities:
+      type: object
+      description: >
+        TASK-110 §3.3：**后端是特权的唯一事实源**，前端只渲染这些位，不自己按角色判断。
+        刻意**没有** projectLimit 字段（用户 2026-09-15 拍板不设项目数上限）。
+      properties:
+        canCustomKey: { type: boolean, description: "自定义 API Key（拓荒者 / 管理员特权）" }
+        quotaBytes: { type: integer, description: "该用户**实际生效**的索引空间上限；0 = 不限" }
+        earlyMemberNo: { type: integer, nullable: true, description: "内测编号（非内测恒为 null）" }
+        isAdmin: { type: boolean, description: "管理员（后台入口与该用户能否访问 /api/admin/* 的依据）" }
+    Account:
+      type: object
+      description: "TASK-110 §3.3：身份视图。`/api/auth/{me,login,register,bootstrap}` 共用此形态。"
+      properties:
+        userId: { type: string }
+        name: { type: string }
+        createdAt: { type: integer }
+        isLocal: { type: boolean }
+        via: { enum: [session, token, local] }
+        role: { enum: [admin, beta, public] }
+        title: { type: string, description: "头衔（执炬者 / 拓荒者 / 旅人），权威来自服务端 " }
+        earlyMemberNo: { type: integer, nullable: true }
+        capabilities: { $ref: '#/components/schemas/Capabilities' }
   responses:
     Unauthorized: { description: 401, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: 403, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
 security:
   - bearerToken: []
@@ -71,36 +95,69 @@ paths:
   /api/auth/register:
     post:
       tags: [auth]
-      summary: 注册（默认关闭；register 环境变量开启后可用）
+      summary: 注册（TASK-110 §1.1：**必须有邀请码**）
       security: []
       requestBody:
-        content: { application/json: { schema: { type: object, required: [name, password], properties: { name: { type: string }, password: { type: string } } } } }
-      responses: { '201': { description: Created }, '403': { description: 注册未开启 } }
+        content: { application/json: { schema: { type: object, required: [name, password, inviteCode], properties: { name: { type: string }, password: { type: string }, inviteCode: { type: string, description: "6 位大写字母/数字，首字母即类型：A=管理员 / B=内测 / C=公测" } } } } }
+      responses:
+        '201': { description: Account（含 role / title / earlyMemberNo / capabilities） }
+        '400': { description: 邀请码缺失、形状不对、无效、已失效或已用尽（对外同一文案） }
+        '409': { description: 账户名已被占用（事务回滚，邀请码不会被消耗） }
   /api/auth/login:
     post:
       tags: [auth]
       summary: 登录（web/CLI 通用；签发 session cookie）
       security: []
-      responses: { '200': { description: OK }, '401': { $ref: '#/components/responses/Unauthorized' } }
+      responses: { '200': { description: Account }, '401': { $ref: '#/components/responses/Unauthorized' } }
   /api/auth/logout:
     post:
       tags: [auth]
+      responses: { '204': { description: No Content } }
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: 当前身份（role / title / earlyMemberNo / capabilities）
+      responses: { '200': { description: Account }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /api/auth/bootstrap:
+    post:
+      tags: [auth]
+      summary: 首个用户初始化（空库时建账户并直接登录；TASK-110 起该账户**直接是管理员**）
+      security: []
+      requestBody:
+        content: { application/json: { schema: { type: object, required: [name, password], properties: { name: { type: string }, password: { type: string } } } } }
+      responses:
+        '201': { description: Account（role=admin） }
+        '403': { description: 已存在账户：初始化接口已关闭 }
+  /api/auth/llm-config:
+    put:
+      tags: [auth]
+      summary: 保存本用户的 LLM 配置（TASK-099 §C-3；响应不含 key 的任何部分）
+      responses: { '200': { description: OK }, '400': { description: invalid_llm_config } }
+    delete:
+      tags: [auth]
+      summary: 删除本用户的 LLM 配置（幂等：本来就没配也返回 204）
       responses: { '204': { description: No Content } }
   /api/auth/tokens:
     post:
       tags: [auth]
       summary: 创建 API token（明文仅此一次返回）
-      responses: { '201': { description: '{ id, token, prefix }' } }
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { name: { type: string }, key: { type: string, description: "TASK-110 §3.4：自定义 Key（拓荒者/管理员特权）。留空 = 服务端随机生成。须以 zace_ 开头且其后 ≥16 字符" } } } } }
+      responses:
+        '200': { description: '{ id, token, prefix, name, isCustom }' }
+        '400': { description: invalid_custom_key（前缀/长度/字符集不符） }
+        '403': { description: custom_key_forbidden（当前身份无自定义特权） }
+        '409': { description: key_taken（该 Key 明文已被使用过） }
     get:
       tags: [auth]
-      summary: 列出 token（不含明文）
-      responses: { '200': { description: OK } }
+      summary: 列出 token（不含明文；仅有效 Key）
+      responses: { '200': { description: 'ApiKeySummary[]（含 isCustom）' } }
   /api/auth/tokens/{id}:
     delete:
       tags: [auth]
       summary: revoke token（软删）
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { '204': { description: No Content } }
+      responses: { '204': { description: No Content }, '404': { description: token_not_found } }
 
   /api/projects/resolve:
     post:
@@ -231,3 +288,101 @@ paths:
       responses:
         '200': { description: RequestLogEntry }
         '404': { description: 不存在 / 不属于当前账户 / 已被窗口清理 }
+
+  /api/meta:
+    get:
+      tags: [ops]
+      summary: 部署形态 + 生效配置（**免鉴权**；TASK-060/088/094/099）
+      security: []
+      responses: { '200': { description: '{ version, localMode, authRequired, registerOpen, needsBootstrap, userCount, config }' } }
+  /api/account/overview:
+    get:
+      tags: [ops]
+      summary: 首页仪表盘（账户资料 + 索引统计 + 查询用量 + 存储配额；TASK-062/064/094/110）
+      parameters: [{ name: days, in: query, required: false, schema: { type: integer, default: 30 } }]
+      responses: { '200': { description: AccountOverview } }
+  /api/index-stats:
+    get:
+      tags: [ops]
+      summary: 跨项目索引汇总（当前用户的项目；TASK-062）
+      responses: { '200': { description: IndexStats } }
+  /api/projects/{id}/index-runs:
+    get:
+      tags: [ops]
+      summary: 单项目索引历史（TASK-062）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 'IndexRun[]' } }
+  /api/projects/{id}/index-stats:
+    get:
+      tags: [ops]
+      summary: 单项目索引统计（内存态当前进度 + 落库聚合 + 磁盘占用；TASK-062）
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: ProjectIndexStats } }
+  /api/usage/summary:
+    get:
+      tags: [ops]
+      summary: 跨项目查询用量汇总（TASK-064）
+      parameters: [{ name: days, in: query, required: false, schema: { type: integer, default: 30 } }]
+      responses: { '200': { description: UsageSummary } }
+  /api/calls/{callId}:
+    get:
+      tags: [ops]
+      summary: 一次 Tool 调用的完整时间线（TASK-099 §B；越权与不存在同为 404）
+      parameters: [{ name: callId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 'CallTimeline' }, '404': { description: call_not_found } }
+
+  # ------------------------------------------------------------------ 管理员后台（TASK-110 §3.5）
+  # 全部走 require_admin：非管理员一律 403 admin_required，且**不泄露资源是否存在**
+  # （不存在的用户 id 与无权限用同一个错误码）。
+  /api/admin/users:
+    get:
+      tags: [admin]
+      summary: 用户列表（含 Project 数 / 索引占用 / 检索次数 / 最后活跃）
+      responses: { '200': { description: 'AdminUser[]' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /api/admin/users/{userId}:
+    patch:
+      tags: [admin]
+      summary: 改身份 / 配额 / 封禁状态（只改给到的字段；封禁**立即**对全部凭据生效）
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { role: { enum: [admin, beta, public] }, quotaBytes: { type: integer, nullable: true, description: "null = 恢复按角色默认" }, banned: { type: boolean } } } } }
+      responses:
+        '200': { description: AdminUser }
+        '400': { description: 'invalid_role / invalid_quota / invalid_admin_action（如封禁自己）' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/invites:
+    get:
+      tags: [admin]
+      summary: 邀请码列表 + 使用记录
+      responses: { '200': { description: '{ invites, kinds, quotaByRole }' } }
+    post:
+      tags: [admin]
+      summary: 创建邀请码（指定类型/次数/有效期；码面可自选，须与类型首字母一致）
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { kind: { enum: [A, B, C] }, maxUses: { type: integer, default: 1 }, expiresInDays: { type: integer, nullable: true, description: "不传 = 永久" }, code: { type: string } } } } }
+      responses:
+        '201': { description: Invite }
+        '400': { description: 'invalid_invite_kind / invalid_invite_uses / invalid_invite_expiry / invalid_invite_code' }
+        '409': { description: invite_code_taken }
+  /api/admin/invites/{code}:
+    delete:
+      tags: [admin]
+      summary: 失效邀请码（软删；使用记录保留供排查）
+      parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: No Content }, '404': { description: invite_not_found } }
+  /api/admin/projects:
+    get:
+      tags: [admin]
+      summary: 全部项目 + 索引健康（跨用户；排查异常索引：失败原因 / 跳过文件）
+      responses: { '200': { description: 'AdminProject[]' } }
+  /api/admin/stats:
+    get:
+      tags: [admin]
+      summary: 调用统计（Search/Ask 次数、Token、错误率；与用户侧 usage_summary **同源**）
+      parameters: [{ name: days, in: query, required: false, schema: { type: integer, default: 30 } }]
+      responses: { '200': { description: AdminStats } }
+  /api/admin/system:
+    get:
+      tags: [admin]
+      summary: 系统状态（服务形态 + Embedding/LLM；与 /healthz?deep=1 **同源**）
+      responses: { '200': { description: Health } }

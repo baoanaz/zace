@@ -110,7 +110,7 @@ describe("Key 页特权展示（TASK-110 §1.7）", () => {
     expect(banner.textContent).toContain("可自定义 API Key");
     expect(banner.textContent).toContain("#027");
     // 自定义输入框可用（placeholder 就是引导）。
-    expect(screen.getByPlaceholderText("zace_my-project-2026")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("zace_my-laptop-key-2026")).toBeInTheDocument();
   });
 
   it("公测用户的 Key 页**显式说明**自定义是拓荒者专属，且不给输入框", async () => {
@@ -124,7 +124,7 @@ describe("Key 页特权展示（TASK-110 §1.7）", () => {
     expect(banner.textContent).toContain("拓荒者");
     expect(banner.textContent).toContain("专属");
     // 不是静默隐藏：面板仍在，只是说明了它属于谁。
-    expect(screen.queryByPlaceholderText("zace_my-project-2026")).toBeNull();
+    expect(screen.queryByPlaceholderText("zace_my-laptop-key-2026")).toBeNull();
   });
 
   it("管理员的 Key 页同样显示特权（管理员也享有自定义 Key）", async () => {

@@ -631,6 +631,21 @@ def test_custom_key_exactly_sixteen_chars_is_accepted(cloud: SimpleNamespace) ->
     assert response.json()["token"] == f"{TOKEN_PREFIX}{'a' * 16}"
 
 
+def test_documented_example_keys_are_accepted(cloud: SimpleNamespace) -> None:
+    """**示例必须真的能用**（手册与前端 placeholder 里的那一串）。
+
+    来历（实测踩到）：占位符与手册示例最早写成 ``zace_my-project-2026``——正文只有 15 个
+    字符，比下限少 1，用户照着抄会直接得到 400。任何写进文档/界面的示例都必须是
+    **端到端可用**的，否则它就是在教用户犯错。
+    改动这里时请同步 ``web/src/pages/ApiKeysPage.tsx`` 的 placeholder 与
+    ``docs/handbook/getting-started/agent接入与API-Key.md``。
+    """
+    _register(cloud, "beta", _make_invite(cloud, "B"))
+    for example in (f"{TOKEN_PREFIX}my-laptop-key-2026", f"{TOKEN_PREFIX}{'a' * 16}"):
+        response = _create_key(cloud, key=example, name=example)
+        assert response.status_code == 200, f"文档示例不可用：{example} → {response.text}"
+
+
 def test_custom_key_illegal_chars_are_400(cloud: SimpleNamespace) -> None:
     """P2：字符集限制（``[A-Za-z0-9_-]``）之外 → 400。"""
     _register(cloud, "beta", _make_invite(cloud, "B"))

@@ -306,6 +306,30 @@ def test_patch_quota_override_wins_over_role(admin_env: SimpleNamespace) -> None
     assert me["capabilities"]["quotaBytes"] == 7 * MB
 
 
+def test_patch_quota_null_restores_role_default(admin_env: SimpleNamespace) -> None:
+    """``{"quotaBytes": null}`` = **恢复按角色默认**；**省略字段** = 不改。
+
+    这是两个不同动作，实测曾因为只看 ``is not None`` 而被静默合并成一个
+    （接口 200 但值没变，管理员会以为改成功了）。前者看 ``model_fields_set``。
+    """
+    ns = admin_env
+    target = f"/api/admin/users/{ns.public['userId']}"
+    ns.client.patch(target, json={"quotaBytes": 7 * MB}, headers=_auth(ns.admin_key))
+
+    # 省略 quotaBytes（只改 role）：配额覆盖**必须保持不变**。
+    kept = ns.client.patch(target, json={"role": "public"}, headers=_auth(ns.admin_key))
+    assert kept.json()["quotaBytes"] == 7 * MB, "省略字段不该动配额"
+
+    # 显式传 null：清掉覆盖，回到角色默认。
+    cleared = ns.client.patch(target, json={"quotaBytes": None}, headers=_auth(ns.admin_key))
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["quotaBytes"] is None
+    assert cleared.json()["effectiveQuotaBytes"] == QUOTA_BY_ROLE[ROLE_PUBLIC]
+
+    me = ns.client.get("/api/auth/me", headers=_auth(ns.public_key)).json()
+    assert me["capabilities"]["quotaBytes"] == QUOTA_BY_ROLE[ROLE_PUBLIC]
+
+
 def test_patch_negative_quota_is_400(admin_env: SimpleNamespace) -> None:
     response = admin_env.client.patch(
         f"/api/admin/users/{admin_env.public['userId']}",
