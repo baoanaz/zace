@@ -505,7 +505,15 @@ def test_key_is_never_echoed_by_any_endpoint(env: SimpleNamespace) -> None:
         response = env.client.get(endpoint)
         assert secret not in response.text, f"{endpoint} 泄漏了 key"
         assert secret[:12] not in response.text, f"{endpoint} 泄漏了 key 前缀"
-    assert str(len(secret)) not in saved.text
+    # “key 长度”不得作为**独立字段值**出网。
+    #
+    # 为什么不写成裸子串（``str(len(secret)) not in saved.text``）：那会误报——
+    # 响应体里的 ``updatedAt`` 是 epoch 秒（如 1789536840），其中含 "36" 就与 key 长度
+    # （36）碰撞，2026-09-16 起该用例会**稳定假失败**，与任何代码改动无关（实测）。
+    # 带引号/分隔符的边界既拦住真正的“把长度当字段吐出来”，又不受时间戳干扰。
+    length = str(len(secret))
+    for pattern in (f'"{length}"', f":{length},", f":{length}}}"):
+        assert pattern not in saved.text, f"响应把 key 长度当字段值吐出：{pattern}"
     # 库里的明文仍然在（明文存储是本卡的裁定，见 §C-2）——上面守的是"不出网"。
     record = env.db.get_llm_config("local")
     assert record is not None and record.api_key == secret
