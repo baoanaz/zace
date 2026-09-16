@@ -253,6 +253,44 @@ printf '%s\n' \
   换 `--base-url` 会自然作废旧缓存；
 - core 的切片或嵌入指纹变化会触发索引重建（首次检索变慢），数据不丢。
 
+### 10.1 索引“看不见了”：projectId 随身份变化
+
+**现象**：重启后项目列表里还在，但检索全部 0 命中，或客户端反复“仓库初始化”。
+
+**根因**：`projectId = sha256(identity_key)`，而 `identity_key` 由
+**git remote + 仓库内相对路径 + 分支名**决定（D-29）。“分支名”在 TASK-111 加入后,
+**切换分支或用旧索引时代的 checkout 都会算出不同的 projectId**——旧索引还在盘上，
+但已经挂不到新身份上。
+
+```bash
+# 看当前 checkout 会算出哪个 projectId
+uv run python -c "
+from zace_core.engine import repo_identity, project_id_for
+from pathlib import Path
+import sys
+i = repo_identity(Path(sys.argv[1])); print(project_id_for(i.identity_key), i.display_name)
+" /path/to/repo
+```
+
+**处置**：重建索引（这是个可重复的操作，不是故障）：
+
+```bash
+# 服务以 root 跑，用 sudo 保证索引目录权限一致
+# -E 不可省：ingest 要读 EMBED_* （source 后才能透传）
+set -a; source ~/.config/zace/live.env; set +a
+export no_proxy='*'
+sudo -E .venv/bin/zace-core ingest --repo /path/to/repo \
+  --data /home/<USER>/.zace/live --full
+```
+
+`--full` 忽略增量、全量重解析 + 重建向量表（实测 langchain 3125 文件 / 20673 切片约 7 分钟）。
+完成后服务**无需重启**（每次检索重新打开索引，见 `Engine._open_project`）。
+
+> **为什么不用客户端上传重建**：`zace-core ingest` 直接写服务端数据根，省一轮上传；
+> 但注意它**不写客户端缓存**，所以客户端下次调用仍会从零全量上传一遍
+> （服务端按 `blobHash` 幂等去重，不会重复索引，但白花一轮时间）。
+> 客户端上传一次后缓存就齐了，之后恢复增量。
+
 ## 相关文档
 
 - 生产部署 → [`vps.md`](vps.md)

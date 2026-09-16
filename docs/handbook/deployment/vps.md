@@ -204,6 +204,10 @@ startup_timeout_ms = 60000
 
 `--base-url` 填**根地址**（不带 `/mcp`），client 会自己拼 MCP 路径。
 
+> **client 版本**：`npx zace-client` 会按 npm 上的 latest 取包，再去 GitHub Release
+> 下载对应平台二进制。**发新版本**（含工具描述变更）请看
+> [`../release/README.md`](../release/README.md)——尤其是“资产未就绪就 publish 会 404”这条硬约束。
+
 ## 9. 备份与升级
 
 ```bash
@@ -218,6 +222,10 @@ sudo systemctl restart zace-service
 
 **注意**：core 的切片/嵌入指纹变化（如 parser 版本升级）会触发索引重建，
 表现为首次检索变慢（`PARSER_CONFIG_VERSION` 变更时全量重解析）。数据不丢，但需要等重建完成。
+
+**换分支或换 checkout 后索引失效**（projectId 随“remote + 仓库内路径 + 分支名”变化）：
+现象是项目还在但检索 0 命中。重建方式与实测耗时见
+[`wsl-live.md` §10.1](wsl-live.md#101-索引看不见了projectid-随身份变化)。
 
 ## 10. 常见故障
 

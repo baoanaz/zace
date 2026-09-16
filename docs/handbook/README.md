@@ -24,6 +24,7 @@
 | 本地单用户模式验收（M2a） | [getting-started/M2a-验收手册.md](getting-started/M2a-验收手册.md) |
 | **发布到公网 VPS** | [deployment/vps.md](deployment/vps.md) |
 | **本地跑一套跟生产同构的环境** | [deployment/wsl-live.md](deployment/wsl-live.md) |
+| **发新版本 / 重建前端 / 重启服务** | [release/README.md](release/README.md) |
 | **改检索/排序后跑跨仓库回归** | [benchmark/README.md](benchmark/README.md) |
 | **准备密钥与隐私资产** | [privacy/资产清单.md](privacy/资产清单.md) |
 | 切换 embedding 参数 / 看实测数字 | [operations/embedding-provider切换.md](operations/embedding-provider切换.md) |
@@ -38,6 +39,7 @@
 handbook/
 ├── getting-started/   装依赖 → 配 key → 接入 Agent（本地第一次跑通）
 ├── deployment/        部署到真实环境（VPS 生产 / WSL 同构验证）
+├── release/           发一次新版本（npm + Release 六平台 + 重启生效）
 ├── benchmark/         改动 core 检索后的回归测试台
 ├── privacy/           密钥与环境变量的统一管理（新增 2026-09-15）
 └── operations/        日常运维：调参、排障、日志
@@ -60,6 +62,12 @@ handbook/
 | [wsl-live.md](deployment/wsl-live.md) | 要本地同构验证的人 | `http://localhost/zace-web/` |
 
 按需启停（**不设开机自启**）：收到部署指令 `systemctl start`，收到暂停指令 `stop`。
+
+### release/
+
+| 文档 | 内容 |
+|---|---|
+| [README.md](release/README.md) | **发一次新版本**：版本号四处一致 → tag → Release 六平台资产 → `npm publish`；含重建前端、重启服务、顺序与坑 |
 
 ### benchmark/
 
