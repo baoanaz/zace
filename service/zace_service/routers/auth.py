@@ -483,6 +483,9 @@ def me(request: Request) -> dict[str, Any]:
         "role": normalize_role(user.role),
         "title": title_for(user.role),
         "earlyMemberNo": user.early_member_no,
+        # 全站顺序号（所有人都有；控制台展示为 ``ID #001``）。它**必须**出现在这里：
+        # 这是控制台账户卡的唯一数据源，而 ``to_json`` 只在注册/登录/初始化时用。
+        "userNo": user.user_no,
         "capabilities": user.to_json(quota_bytes=_quota_for(get_settings(request), user))[
             "capabilities"
         ],

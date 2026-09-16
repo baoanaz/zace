@@ -150,6 +150,7 @@ def list_users(request: Request) -> dict[str, Any]:
                 "role": normalize_role(user.role),
                 "title": title_for(user.role),
                 "earlyMemberNo": user.early_member_no,
+                "userNo": user.user_no,
                 "quotaBytes": user.quota_bytes,
                 "effectiveQuotaBytes": _effective_quota(user),
                 "bannedAt": user.banned_at,
@@ -566,6 +567,8 @@ def _user_detail(user: User) -> dict[str, Any]:
         "role": normalize_role(user.role),
         "title": title_for(user.role),
         "earlyMemberNo": user.early_member_no,
+        # 全站顺序号（所有人都有；前端显示为 ID #001）。
+        "userNo": user.user_no,
         "quotaBytes": user.quota_bytes,
         "effectiveQuotaBytes": _effective_quota(user),
         "bannedAt": user.banned_at,
