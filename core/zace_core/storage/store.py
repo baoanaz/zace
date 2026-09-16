@@ -668,6 +668,43 @@ class Store:
             params.append(limit)
         return [_symbol_from_row(r) for r in self._conn.execute(sql, params).fetchall()]
 
+    def symbols_in_container(
+        self, container: str, *, kinds: Sequence[str] | None = None, limit: int | None = 200
+    ) -> list[SymbolRow]:
+        """按**容器前缀**枚举成员符号（TASK-109 §G6：容器-成员断层）。
+
+        为什么需要它（实测缺陷，2026-09-15）：查询点名了容器（``CapabilityGateway``）时，
+        类骨架能进包，但它下面的方法（``._reserve_idempotency`` / ``._should_retry`` /
+        ``._normalize``）一条都不进——而这些方法恰恰是用户问的行为所在。现有读 API 做不到
+        这一步：:meth:`exact_symbols` 只按 ``name``/``fqn`` 精确匹配（类名匹配不到成员），
+        :meth:`symbol_literal_search` 只扫 ``symbols.name``（成员的名字是 ``_invoke``，
+        不含容器名，因此从 ``CapabilityGateway`` 查不到它）。
+
+        ``container`` 给**去掉成员部分的容器 fqn**（``CapabilityGateway`` /
+        ``A::B``）；同时按 ``.`` 与 ``::`` 两种分隔符匹配，因为 Python 与 C++ 抽取器
+        对同一个成员产出不同拼写（``A.b`` vs ``A::b``）。
+
+        排序：按 ``file_path, start_line``（**声明顺序**，与源码阅读顺序一致，确定性），
+        行号缺失的排在最后。``limit=None`` 表示不限量（G6 由调用方按自身配额截断）。
+        """
+        cleaned = container.strip()
+        if not cleaned:
+            return []
+        sql = (
+            "SELECT id, name, fqn, kind, chunk_id, file_path, start_line, end_line, is_exported"
+            " FROM symbols WHERE (fqn LIKE ? OR fqn LIKE ?)"
+        )
+        params: list[object] = [f"{cleaned}.%", f"{cleaned}::%"]
+        if kinds:
+            placeholders = ", ".join("?" for _ in kinds)
+            sql += f" AND kind IN ({placeholders})"
+            params.extend(kinds)
+        sql += " ORDER BY file_path, start_line IS NULL, start_line, id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_symbol_from_row(r) for r in self._conn.execute(sql, params).fetchall()]
+
     def chunk_covering(self, file_path: str, line: int) -> ChunkDef | None:
         """按 ``文件 + 行号`` 取**覆盖该行**的切片（TASK-101 §B：图扩展落到定义块）。
 

@@ -322,14 +322,20 @@ class EngineManager:
             "checkpoints": len(state.checkpoints),
         }
 
-    def search(self, project_id: str, query: str, max_tokens: int = 10_000) -> SearchTrace:
-        """Fast 模式检索（core ``search_with_trace``：通道健康度/候选计数给 meta 用，R33）。"""
+    def search(
+        self, project_id: str, query: str, max_tokens: int = 10_000, *, deep: bool = False
+    ) -> SearchTrace:
+        """检索（core ``search_with_trace``：通道健康度/候选计数给 meta 用，R33）。
+
+        ``deep``（TASK-109）：Deep 模式（``ask_project``）用更大的 **Gap 补检配额**。
+        两种模式走 core 里**同一条管线**（D-10），这里只是把模式标记透传下去——
+        service 不参与任何补检判定。
+        """
         return self._observe_provider(
-            lambda: self._engine.search_with_trace(project_id, query, max_tokens),
+            lambda: self._engine.search_with_trace(project_id, query, max_tokens, deep=deep),
             # 降级（如向量通道失败）不是"provider 恢复了"：保留故障记忆，不谎报健康。
             recovered=lambda trace: not trace.degraded,
         )
-
     # ------------------------------------------------------------------ provider 健康（§A/§B）
 
     def provider_health(self) -> tuple[bool, str | None]:
