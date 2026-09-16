@@ -80,7 +80,7 @@
 | D-16 | 融合层纯 RRF(K=60) 不加通道权重；最终质量由确定性 Evidence Rerank 负责（V1 内置无模型，V1.5 可选 cross-encoder） | Module/02 §4.3/4.5 | 定稿（待评审） |
 | D-17 | EvidenceTier = 可信度元数据 + 装填资格线 + rerank 特征，不强制决定最终排序（修订 Background/06 原表述） | Module/02 §4.6 | 定稿（待评审） |
 | D-18 | 图双角色：普通查询 = 扩展器（calls 1-hop + spec_references 双向，tier3 配额≤30%，caller 爆炸按入口点截断）；结构型查询 = 主路径（符号解析→直查） | Module/02 §4.4 | 定稿（待评审） |
-| D-19 | Deep 模式 Evidence-Gap 驱动二轮检索（G1-G5 规则表），最多 1 次定向补检，不预猜 intent | Module/02 §4.7 | 定稿（待评审） |
+| D-19 | Deep 模式 Evidence-Gap 驱动二轮检索（G1-G5 规则表），最多 1 次定向补检，不预猜 intent；**2026-09-15 追加**：Repair 是受限回路而非第五级（§3 命名 + §4.7.1 的 R31 三条不变量）；G3 按 I1 不合法、未实现 | Module/02 §4.7 | 定稿（待评审） |
 | D-20 | 中文/CJK 为一等查询场景：FTS 索引/查询双侧预分词（分词器独立模块）；已修正 01 的 unicode61 tokenizer 缺陷 | Module/02 §4.2-b、Module/01 v2.1 | 定稿（待评审） |
 | D-21 | ContextPack 双层合同：内部结构化 JSON（evidence/docs 分列 + 单一 E 编号空间）+ 对外 Markdown，两层共用 formatter | Module/03 §2 | 定稿（待评审） |
 | D-22 | 装填算法：rerank 分降序贪心 + 单文件预算上限 25% + tier3 配额 30% + spec 保底 1-2 块 + 去重三招（区间合并/同符号聚合/skeleton） | Module/03 §4 | 定稿（待评审） |
@@ -107,6 +107,7 @@
 | D-43 | 文件 blob hash、文件 content hash、chunk content hash 分离定义；Module/01 作为存储与 hash 语义唯一依据 | 用户确认；Module/01 §2.4 | 定稿（待评审） |
 | D-44 | embedding 双实现（EmbeddingProvider 接口）：本地 ONNX 小模型为默认（源码不出 VPS），OpenAI-compatible API 为可选配置；具体默认模型与维度由 Phase 1 bake-off（TASK-015）校准后钉死 | 用户确认；Module/01 §2.4、Module/06 §6 | 定稿 |
 | D-45 | CJK 分词器 = jieba（Python 实现），模块化隔离（zace_core.text）；索引与查询双侧同库预分词，消费 D-20 | 用户确认；Module/02 §4.2-b、§7-2 | 定稿 |
+| D-46 | 主链路命名 **Recall → Expand → Rank → Pack → Repair**（四级检索漏斗 + 单次 Evidence Repair Loop）；Repair 是受限反馈回路而非第五级，受 R31 三条不变量约束 | Module/02 §3、§4.7.1 | 定稿（2026-09-15） |
 
 ## 4. 写作纪律（新文档必须遵守）
 

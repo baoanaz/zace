@@ -310,26 +310,106 @@ def cockpit() -> tuple[Engine, str]:
 
 
 def test_cockpit_0035_container_members_reach_the_pack(cockpit) -> None:
-    """回归护栏（用例 A）：``CapabilityGateway`` 的成员方法必须进包（修复前 0 个）。"""
+    """回归护栏（用例 A）：``CapabilityGateway`` 的成员方法确实被补进包。
+
+    **口径诚实声明（2026-09-15 修正）**：本条断言的是“内容进包”，**不是“进入 top-10”**。
+    两者不等价，且必须区分——实测该题三个目标虽然都进了包，但排在 **15-19 位**，
+    而 benchmark 的 `first_hit_rank` 只看 top-10，因此 **``cockpit-0035`` 官方口径下仍不通过**
+    （修复前是“一条都不在包”，现在是“在包尾”）。
+
+    为什么保留本条：它锁定的是 G1 的**召回/补检能力**（修复前 0 个成员进包）。
+    排序问题属 rerank 层（目标分 0.31 vs 12 个同名 ``Provider.verify`` 的 1.87-1.90），
+    是另一个缺陷，不能用 G1 掩盖。
+    """
     engine, project_id = cockpit
     case = _load_case("cockpit-0035")
     trace = engine.search_with_trace(project_id, case["query"], 10_000)
     assert "G1" in trace.gap_kinds
     assert trace.backfilled > 0
     assert sum(_targets_in_pack(trace.pack, case)) >= 2, (
-        "验收标准要求 _reserve_idempotency/_should_retry/_normalize 至少 2 个进包"
+        "G1 应把 _reserve_idempotency/_should_retry/_normalize 至少 2 个补进包"
+    )
+    # 补检候选必须带来源标注（I3）
+    marked = [i for i in [*trace.pack.evidence, *trace.pack.docs] if "gap backfill" in i.reason]
+    assert marked, "补检证据必须标注来源"
+
+
+def test_cockpit_0035_still_misses_top10(cockpit) -> None:
+    """**已知缺口（诚实锁定）**：``cockpit-0035`` 官方口径（top-10）仍不通过。
+
+    本卡（TASK-109）修的是“目标不在包”，**没有修**“目标在包尾”。
+    写成断言而不是注释，是为了防止“指标没动但卡片说过了”这类误报：
+    哪天真把排序修好了，这条会**失败**，提醒去更新卡片与期望。
+    """
+    from zace_core.cli.eval import first_hit_rank, ordered_evidence
+
+    engine, project_id = cockpit
+    case = _load_case("cockpit-0035")
+    trace = engine.search_with_trace(project_id, case["query"], 10_000)
+    items = ordered_evidence(trace.pack)
+    expectations = tuple(
+        _expectation(e["path"], e.get("symbol")) for e in case["expected"]
+    )
+    ranked = _case_with(expectations)
+    assert first_hit_rank(items, ranked, top_k=10) is None, (
+        "0035 已进入 top-10 → 排序问题已修复，请更新本测试与 TASK-109 执行记录"
     )
 
 
-def test_cockpit_0033_call_chain_reaches_the_pack(cockpit) -> None:
-    """回归护栏（用例 B）：``Runtime.admit`` 或 ``InputDispatcher`` 必须进包。"""
+def _expectation(path: str, symbol: str | None):
+    """构造 ``GoldenCase`` 用的 ``Expectation``（避免手工拼 golden 文件）。"""
+    from zace_core.cli.eval import Expectation
+
+    return Expectation(path=path, symbol=symbol)
+
+
+def _case_with(expectations):
+    """只有 ``expected`` 与 ``category`` 参与命中的最小 case（供 ``first_hit_rank`` 用）。"""
+    from zace_core.cli.eval import GoldenCase
+
+    return GoldenCase(
+        id="probe", query="", lang="zh", category="behavior", expected=tuple(expectations)
+    )
+
+
+def test_repair_only_promotes_pool_candidates(cockpit) -> None:
+    """**R31 / I1 守卫**：Repair 只提池内候选，永不引入池外候选。
+
+    这是 Repair 不演变成“第二套检索策略”的**结构不变量**：无论以后加多少条规则，
+    召回空间都不会因此扩大。违反即 bug。
+    """
     engine, project_id = cockpit
     case = _load_case("cockpit-0033")
     trace = engine.search_with_trace(project_id, case["query"], 10_000)
-    assert "G2" in trace.gap_kinds
-    hits = _targets_in_pack(trace.pack, case)
-    # expected: Runtime.admit / InputDispatcher / FixedIntentRouter，至少前两个之一。
-    assert hits[0] or hits[1], "验收标准要求 runtime.py 或 dispatcher.py 进包"
+    pool_ids = {candidate.chunk_id for candidate in trace.candidates}
+    promoted = [i for i in [*trace.pack.evidence, *trace.pack.docs] if "gap backfill" in i.reason]
+    assert promoted, "本用例应触发补检（否则本测试没有在守任何东西）"
+    for item in promoted:
+        # 补检证据必须能在池里找到对应候选（同路径 + 行区间重叠）
+        assert any(
+            c.path == item.path
+            and c.start_line is not None
+            and item.lines is not None
+            and not (c.end_line < item.lines[0] or c.start_line > item.lines[1])
+            for c in trace.candidates
+            if c.chunk_id in pool_ids
+        ), f"补检证据不在候选池内：{item.path}:{item.lines}（违反 R31/I1）"
+def test_cockpit_0033_call_chain_reaches_the_pack(cockpit) -> None:
+    """回归护栏（用例 B）：``Runtime.admit`` 或 ``InputDispatcher`` 进包且 **进入 top-10**。
+
+    与 0035 不同，本题在本卡后**官方口径下也通过了**（rank=3）；因此这里可以严格断言排名。
+    """
+    from zace_core.cli.eval import first_hit_rank, ordered_evidence
+
+    engine, project_id = cockpit
+    case = _load_case("cockpit-0033")
+    trace = engine.search_with_trace(project_id, case["query"], 10_000)
+    assert "G2" in trace.gap_kinds, "0033 应触发 G2（文档锚点闭包）"
+    ranked = _case_with(
+        _expectation(e["path"], e.get("symbol")) for e in case["expected"]
+    )
+    rank = first_hit_rank(ordered_evidence(trace.pack), ranked, top_k=10)
+    assert rank is not None, "0033 应在 top-10 内命中（官方口径通过）"
 
 
 def test_deep_uses_larger_gap_quota_but_same_pipeline(cockpit) -> None:
