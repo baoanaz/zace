@@ -204,11 +204,22 @@ def get_project(id: str, request: Request) -> dict[str, Any]:  # noqa: A002 - �
 
 @router.delete("/api/projects/{id}")
 def delete_project(id: str, request: Request) -> Response:  # noqa: A002 - 路径参数名与 CF-05 一致
-    """级联删除（D-03：整个项目目录 rm -rf，含 index.db / vectors / blobs / 同步账本）。"""
+    """级联删除（D-03：整个项目目录 rm -rf，含 index.db / vectors / blobs / 同步账本）。
+
+    TASK-111 修正：目录删掉后必须**同时删掉元数据库里的归属行**。原先只有管理员路径
+    （``routers/admin.py``）调了 ``delete_project_owner``，用户侧这条路径漏了，于是留下
+    "目录已不存在的幽灵项目"——``GET /api/projects`` 会列出它、点进去 404（实测复现）。
+    归属行与目录同生共死是 ``delete_project_owner`` docstring 已经写明的纪律。
+
+    历史数据（``index_runs`` / ``query_audit``）**不删**：它们是运营证据（TASK-093）。
+    """
     manager = get_engine_manager(request)
     project_id = require_project_id(request, id)  # TASK-061 §C：存在 + 归属
     if not manager.delete_project(project_id):
         raise ApiError("project_not_found", f"项目不存在：{project_id}", 404)
+    db = getattr(request.app.state, "meta_db", None)
+    if isinstance(db, MetaDB):
+        db.delete_project_owner(project_id)
     return Response(status_code=204)
 
 
