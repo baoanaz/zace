@@ -100,7 +100,7 @@ def test_rich_pack_validates(store, seed_file, sym, cand, validator) -> None:
     payload = to_json(pack)
     validator.validate(payload)
     assert payload["evidence"] and payload["docs"] and payload["flows"]
-    assert payload["budget"]["hardCap"] == 10_000
+    assert payload["budget"]["hardCap"] == 14_000
     assert payload["mode"] == "fast"
 
 

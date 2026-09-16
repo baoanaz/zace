@@ -44,12 +44,16 @@ Codex / Claude Code / Cursor（Harness）
 ```json
 search_context:
   { "query":        "string, required",
-    "project_root": "string, required（绝对路径，正斜杠）",
-    "max_tokens":   "int, optional, ≤16000, 默认 10000" }
+    "project_root": "string, required（绝对路径，正斜杠）" }
 ask_project:
   { "question":     "string, required",
-    "project_root": "string, required",
-    "max_tokens":   "int, optional（answer 上限）" }
+    "project_root": "string, required" }
+
+> **TASK-MCP-BUDGET（2026-09-16）**：删除两个工具上的 `max_tokens`。
+> 包大小是**服务端按证据密度决定的内部量**，不是调用方该猜的参数——实测 AI 会传偏小值
+> （8000/10000）把长函数截断成"签名 + 前 15 行"，恰好毁掉它自己要的链路完整性。
+> 运行时仍接受该字段（旧编辑器兼容），只是不再出现在 `tools/list` 的 `inputSchema` 中。
+> 内部预算：Fast 14K / Deep 16K（见 Module/03 §4.1）。
 ```
 
 工具 description 写法（notace/四项目共识——description 即行为控制）：包含 good/bad query 示例、与 grep/read 的分工边界（"精确标识符全量引用请用 grep；已知文件请直接 read"）、两工具间的导航（"需要直接结论用 ask_project"）。

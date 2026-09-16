@@ -48,6 +48,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from zace_core.contextpack import (
+    MODE_DEEP,
     MODE_FAST,
     BudgetConfig,
     assemble,
@@ -572,12 +573,18 @@ class Engine:
         不在分支；分叉点在**组装之后**（Fast 拿到包即停，Deep 交给 LLM）。
         两边都触发补检：实测两个失败用例（``cockpit-0033``/``0035``）都是 search 题，
         只在 Deep 触发就修不了它们。
+
+        ``deep`` 同时选定**装填预算档位**（TASK-MCP-BUDGET 修复）：此前两次 ``assemble``
+        都硬编码 ``mode=MODE_FAST``（该参数与 ``config`` 二选一，传了 ``config`` 后 ``mode``
+        就是死参），因此 ``DEEP_BUDGET`` 从未生效、``ask_project`` 实际按 Fast 预算装填。
+        现在 ``mode`` 随 ``deep`` 走：Fast 14K / Deep 16K。
         """
         if not query.strip():
             raise EngineError("query 不能为空")
         if max_tokens <= 0:
             raise EngineError(f"max_tokens 必须为正整数，收到 {max_tokens}")
         limits = DEEP_GAP_LIMITS if deep else GapLimits()
+        mode = MODE_DEEP if deep else MODE_FAST
         with self._open_project(project_id) as (store, vectors, provider):
             recalled = recall(
                 store,
@@ -597,8 +604,8 @@ class Engine:
                 ranked,
                 flows=expansion.flows,
                 freshness=store.freshness(),
-                mode=MODE_FAST,
-                config=self._budget(max_tokens),
+                mode=mode,
+                config=self._budget(max_tokens, mode),
                 signals=collect_index_signals(store, ranked),
             )
             # ---- 第二轮：Evidence-Gap 定向补检（≤ 1 次，确定性） ----
@@ -612,8 +619,8 @@ class Engine:
                     ranked,
                     flows=expansion.flows,
                     freshness=store.freshness(),
-                    mode=MODE_FAST,
-                    config=self._budget(max_tokens),
+                    mode=mode,
+                    config=self._budget(max_tokens, mode),
                     signals=collect_index_signals(store, ranked),
                     backfill=backfill,
                 )
@@ -808,8 +815,13 @@ class Engine:
 
     # ------------------------------------------------------------------ 内部
 
-    def _budget(self, max_tokens: int) -> BudgetConfig:
-        base = budget_for(MODE_FAST)
+    def _budget(self, max_tokens: int, mode: str = MODE_FAST) -> BudgetConfig:
+        """装填预算：调用方给的 ``max_tokens`` 优先，否则用该 mode 的默认档位。
+
+        TASK-MCP-BUDGET：``mode`` 参与选择基准档位（Fast 14K / Deep 16K）。
+        调用方显式传的 ``max_tokens`` 仍是硬上限（CLI ``--max-tokens`` 与基准脚本靠它做对照）。
+        """
+        base = budget_for(mode)
         return base if max_tokens == base.hard_cap else replace(base, hard_cap=max_tokens)
 
     def _source_for(self, project_id: str):

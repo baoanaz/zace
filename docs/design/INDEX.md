@@ -84,7 +84,7 @@
 | D-20 | 中文/CJK 为一等查询场景：FTS 索引/查询双侧预分词（分词器独立模块）；已修正 01 的 unicode61 tokenizer 缺陷 | Module/02 §4.2-b、Module/01 v2.1 | 定稿（待评审） |
 | D-21 | ContextPack 双层合同：内部结构化 JSON（evidence/docs 分列 + 单一 E 编号空间）+ 对外 Markdown，两层共用 formatter | Module/03 §2 | 定稿（待评审） |
 | D-22 | 装填算法：rerank 分降序贪心 + 单文件预算上限 25% + tier3 配额 30% + spec 保底 1-2 块 + 去重三招（区间合并/同符号聚合/skeleton） | Module/03 §4 | 定稿（待评审） |
-| D-23 | 预算默认值：Fast 8-12K（默认 10K）/ Deep 12K 硬顶（拒绝 20-50K，flash 长输入注意力衰减） | Module/03 §4.2 | 定稿（待评审） |
+| D-23 | 预算默认值：Fast 14K / Deep 16K（TASK-MCP-BUDGET 2026-09-16 由 10K/12K 调档；仍拒绝 20-50K，flash 长输入注意力衰减）。单文件上限与 spec 份额锚定绝对值，不随 hardCap 缩放 | Module/03 §4.2 | 定稿（待评审） |
 | D-24 | answerable=false 短路：Deep 模式不走 LLM，返回结构化证据不足包 + nextQueries | Module/03 §4.4、Module/04 §3 | 定稿（待评审） |
 | D-25 | Citation 回验：服务端正则校验 [E*]/[F*] 引用存在性，无效只删标记不改写，coverage 入审计 | Module/04 §5 | 定稿（待评审） |
 | D-26 | LLM 失败降级 never-empty-handed：超时/未配置均返回 ContextPack 渲染 + 故障说明 | Module/04 §6 | 定稿（待评审） |

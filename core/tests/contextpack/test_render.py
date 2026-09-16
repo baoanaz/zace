@@ -168,7 +168,8 @@ def test_render_meta_budget_and_index_fresh(store, seed_file, sym, cand) -> None
     text = render_markdown(pack, now=NOW)
     assert "index: fresh (5 min ago)" in text
     # TASK-096 §A：预算账 = 框架开销 + 渲染开销（header+reason+行号），不再是只算正文 → 504 → 515。
-    assert "budget: 515/10.0K" in text   # <1000 用原值，≥1000 用 K（Module/03 §6 例）
+    # TASK-MCP-BUDGET：默认预算 10K→14K，分母随之变化（分子 515 与预算无关，未变）。
+    assert "budget: 515/14.0K" in text   # <1000 用原值，≥1000 用 K（Module/03 §6 例）
     assert "confidence: low" in text
 
 

@@ -111,7 +111,7 @@ fn argument_errors_use_json_rpc_error_codes_without_touching_the_network() {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_context","arguments":{"query":"   ","project_root":"/tmp"}}}"#,
             // 未知工具
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#,
-            // max_tokens 超上限（CF-06：search_context ≤ 16000）
+            // max_tokens 超服务端上限（TASK-MCP-BUDGET：已从 schema 移除，但仍接收并校验）
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_context","arguments":{"query":"x","project_root":"/tmp","max_tokens":99999}}}"#,
         ],
         "http://127.0.0.1:1",

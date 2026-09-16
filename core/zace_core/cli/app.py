@@ -108,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(evaluate, repo_required=False)
     evaluate.add_argument("--golden", type=Path, required=True, help="golden 文件或目录（*.jsonl）")
     evaluate.add_argument("--report", type=Path, required=True, help="Markdown 报告输出路径")
+    # TASK-MCP-BUDGET：允许跑分时指定装填预算——默认值调档（10K→14K）后，
+    # 必须能拿旧档位做**同一索引、同一题目**的对照跑分，否则无法区分
+    # “预算变化的效果”与“本次改动的效果”。默认仍是 CLI 的 DEFAULT_MAX_TOKENS。
+    evaluate.add_argument(
+        "--max-tokens",
+        type=_positive_int,
+        default=None,
+        help=f"ContextPack 装填预算上限（默认 {DEFAULT_MAX_TOKENS}）",
+    )
     _add_vector_cache_args(evaluate)
     evaluate.set_defaults(handler=_cmd_eval)
     return parser
@@ -425,13 +434,14 @@ def _cmd_eval(args: argparse.Namespace, factory: EngineFactory) -> int:
     cases = load_cases(args.golden)
     if not cases:
         raise GoldenError(f"golden 集为空：{args.golden}")
+    max_tokens = DEFAULT_MAX_TOKENS if args.max_tokens is None else args.max_tokens
     report = run_golden(
         cases,
-        lambda query: engine.search_with_trace(handle.project_id, query, DEFAULT_MAX_TOKENS),
+        lambda query: engine.search_with_trace(handle.project_id, query, max_tokens),
         golden=str(args.golden),
         repo=str(repo) if repo is not None else "(未绑定仓库：--project-id 模式)",
         project_id=handle.project_id,
-        max_tokens=DEFAULT_MAX_TOKENS,
+        max_tokens=max_tokens,
     )
     if cache is not None:
         # 预热：把本次取到的 query 向量写回侧车文件（供其他主机/离线回放复用）。

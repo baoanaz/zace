@@ -65,6 +65,7 @@ from zace_service.metadb import MetaDB
 from zace_service.packmeta import pack_meta
 from zace_service.quota import append_warning, warning_for
 from zace_service.routers.query import (
+    ASK_MAX_TOKENS,
     DEFAULT_MAX_TOKENS,
     DEGRADED_NOTICE,
     INSUFFICIENT_NOTICE,
@@ -97,6 +98,12 @@ MCP_MOUNT_PATH = "/mcp"
 MCP_SERVER_NAME = "zace"
 #: ``search_context`` 的 ``max_tokens`` 上限（**CF-06 冻结值**：16000）。
 MAX_TOKENS_LIMIT = 16_000
+#: 对 AI **隐藏**的工具参数（TASK-MCP-BUDGET）：仍可接收，但不进 ``inputSchema``。
+#:
+#: 为什么隐藏而不是删除：预算是**服务端按证据密度决定的**，不是调用方该猜的；
+#: 实测 AI 会传一个偏小的值（如 8000/10000）把长函数截断，而这恰恰毁掉它自己要的链路完整性。
+#: 保留入参是为了向后兼容（老编辑器/脚本仍在发），删掉声明则是“不让它选”。
+HIDDEN_PARAMS = frozenset({"max_tokens"})
 
 SEARCH_TOOL = "search_context"
 ASK_TOOL = "ask_project"
@@ -117,8 +124,11 @@ _SEARCH_DESCRIPTION = (
     "【定位器｜不调 LLM｜毫秒级】在当前项目仓库中检索与问题最相关的证据包"
     "（代码片段 + 行号 + 设计文档），返回 Markdown，由你自己阅读后作答。"
     "\n\n**先用我（而不是 grep/read）当**：你不知道该看哪个文件/符号，需要在陌生仓库里"
-    "找到「答案的位置」——某功能在哪实现、某配置项有哪些取值、某机制的调用链与边界、"
+    "找到「答案的位置」——某功能在哪实现、某配置项有哪些取值、某机制的边界与依赖、"
     "某契约/设计文档怎么说。一次调用即可跨文件批量取证，比逐文件 grep 快得多。"
+    "\n\n**适合看“在哪里/谁调用了什么”，不适合查“谁在调用它”**：调用链（`### Flow`）只给"
+    "**一跳**且遇分叉即停（标 `（已截断）`），反向调用方（callers）不作为一趟展示；"
+    "要穷举调用方或反向依赖，用 grep 按符号名搜。"
     "\n\n**不要用我**：已经知道确切文件 → 直接 read；需要完整/精确引用（每个调用点、"
     "每次赋值）→ 直接 grep，我只返回相关度最高的若干块，不是穷举；需要深度推理与"
     "跨文件综合判断并要一份带引用的结论 → 用 `ask_project`。"
@@ -148,6 +158,12 @@ _ASK_DESCRIPTION = (
     "\n\n**不要用我**：① 单点定位（「X 在哪个文件」）→ `search_context` 更快且免费；"
     "② 你要读原始代码自己判断 → `search_context` 或直接 read；"
     "③ 同一问题**不要连续问两次**——第二次不会带来新证据，只会重复消耗模型调用。"
+    "\n\n**长函数/内部流程类问题，请改用 `search_context`**（实测口径）：如果问题要的是"
+    "「某方法内部具体怎么做/依次发生了什么」（尤其是几十上百行的长方法、异步生成器、"
+    "调度入口），我的证据块对超长符号会做**签名 + 前 15 行**的降级，"
+    "最容易恰好丢掉你要问的那段正文。"
+    "这时应当：先 `search_context` 拿到包含该方法**完整正文**的证据块并自己读，"
+    "再决定是否需要我用结论。"
     "\n\n**提问写法**：用完整问句描述你的调查意图（中文即可），可在句中带上关键符号名/文件名帮助定位。"
     "问题越具体（指明范围、版本、与其他机制的对比），回答越可靠。"
     "\n\n**返回格式**：正文是带 `[E*]` 引用的回答，末行附状态行"
@@ -279,7 +295,12 @@ def build_mcp(
         ],
         max_tokens: Annotated[int, Field(ge=1, le=MAX_TOKENS_LIMIT)] = DEFAULT_MAX_TOKENS,
     ) -> str:
-        """CF-06 的 ``search_context``（Fast 模式：检索 + 组装 + 服务端渲染）。"""
+        """CF-06 的 ``search_context``（Fast 模式：检索 + 组装 + 服务端渲染）。
+
+        TASK-MCP-BUDGET：``max_tokens`` 已从 CF-06 的 ``inputSchema`` 中**移除**
+        （工具面向 AI 不再暴露预算参数），此处保留入参只是为了兼容仍然发送该字段的旧编辑器；
+        不传时用服务端默认值（14K）。
+        """
         _require_query(query)
         manager = resolve()
         project_id = _project_id_for(manager, project_root)
@@ -298,9 +319,13 @@ def build_mcp(
         ],
         max_tokens: Annotated[
             int, Field(ge=1, description="answer 输出上限（token）")
-        ] = DEFAULT_MAX_TOKENS,
+        ] = ASK_MAX_TOKENS,
     ) -> str:
-        """CF-06 的 ``ask_project``（Deep 模式：grounded LLM 总结；未配置/失败 → 降级包）。"""
+        """CF-06 的 ``ask_project``（Deep 模式：grounded LLM 总结；未配置/失败 → 降级包）。
+
+        TASK-MCP-BUDGET：同 ``search_context``，``max_tokens`` 不再出现在 ``inputSchema`` 中；
+        入参默认值改为 Deep 档（16K），与 HTTP ``ask`` 路由一致。
+        """
         _require_query(question, field="question")
         _require_service_max_tokens(max_tokens)
         manager = resolve()
@@ -387,11 +412,23 @@ def _cf06_tool(fn: Callable[..., Any], *, name: str, description: str) -> Tool:
     而 CF-06 声明了 ``additionalProperties: false``——这里补上这一个键，使 ``tools/list`` 与冻结
     合同逐字段一致（纯声明性，不改变运行时行为：多余参数本来就被 pydantic 忽略）。
 
+    ``HIDDEN_PARAMS``（TASK-MCP-BUDGET）：从 ``inputSchema`` 里删掉这些字段，**但函数签名
+    与运行时入参保留**——这样仍能接受旧编辑器发来的字段（不报错、不改变行为），
+    而 AI 在 ``tools/list`` 里看不到它们，也就不会去调预算那样一个它无法判断的参数。
+
     ``structured_output=False``：工具只返回**文本**（ContextPack 的 Markdown + 一行 zace 状态），
     与 Module/05 §5"客户端只透传 Markdown"一致，不给编辑器再塞一份 JSON。
     """
     tool = Tool.from_function(fn, name=name, description=description, structured_output=False)
     tool.parameters["additionalProperties"] = False
+    properties = tool.parameters.get("properties")
+    if isinstance(properties, dict):
+        for hidden in HIDDEN_PARAMS:
+            properties.pop(hidden, None)
+        # ``required`` 里若残留被隐藏字段会生成非法 schema（字段既必填又不存在）。
+        required = tool.parameters.get("required")
+        if isinstance(required, list):
+            tool.parameters["required"] = [item for item in required if item not in HIDDEN_PARAMS]
     return tool
 
 
@@ -506,6 +543,10 @@ def _ask_text(
     **证据优先（D-24，TASK-107）**：``answerable=false`` 时不调 LLM，直接返回尽力而为的
     上下文包 + 缺口说明。HTTP ``ask`` 路由一直如此，MCP 侧此前漏了这一步（会在证据不足时
     仍然消耗一次 LLM 调用，且返回的回答没有任何证据支撑）。现在两侧行为一致。
+
+    TASK-MCP-BUDGET：``max_tokens`` 是**装填预算**，与回答长度无关。
+    此前 MCP 的 ``ask_project`` 把工具参数的默认值（10K）直接当装填预算用，
+    而 HTTP ``ask`` 走 16K——两个面不一致；现在两边都由调用方传 ``ASK_MAX_TOKENS``。
     """
     _rescan_if_due(manager, settings, project_id)
     trace = _call_engine(lambda: manager.search(project_id, question, max_tokens))

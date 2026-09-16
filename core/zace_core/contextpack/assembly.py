@@ -240,8 +240,20 @@ def estimate_render_tokens(item: EvidenceItem) -> int:
 class BudgetConfig:
     """装填预算与配额（Module/03 §4.1/§4.2；D-23）。"""
 
-    hard_cap: int = 10_000               # Fast 默认 10K（用户可 8-12K）
+    hard_cap: int = 14_000               # Fast 默认 14K（TASK-MCP-BUDGET：10K→14K）
     framework_overhead: int = 500        # query/freshness/missing 等元数据
+    # A2：单文件 ≤25% hardCap。
+    #
+    # **锚定绝对值**（TASK-MCP-BUDGET，2026-09-16）：预算 10K→14K 后，若仍按比例算，
+    # 单文件上限会从 2500 抬到 3500——一个文件就能吃掉近整包的三分之一，包体分布随默认值漂移。
+    # 实测（cockpit-agents-server / “完整链路”题）：预算 10K→12K 时 ``process_with_streaming``
+    # 才从 184 行截断转为完整 199 行——真正需要的是“该文件多装”，但“多装”应当由装填层
+    # 按证据价值决定，而不是由预算比例顺带放大。
+    # 故生产预设在 :data:`FAST_BUDGET` / :data:`DEEP_BUDGET` 里显式设 ``single_file_tokens``，
+    # 新增预算一余给“更多文件”而不是“同一个文件更多行”。
+    # 字段默认 0 = “不设绝对上限，按比例算”——既保证未显式设置的 ``BudgetConfig``
+    # （测试与参数扫描脚本）行为不变，也让“关掉单文件上限”（ratio=1.0）的旧写法继续有效。
+    single_file_tokens: int = 0          # A2：单文件绝对上限（token）；0 = 只用 ratio
     single_file_ratio: float = 0.25      # A2：单文件 ≤25% hardCap
     tier3_ratio: float = 0.30            # A3：tier3 配额 ≤30%
     spec_floor: int = 1                  # 存在相关 spec 时至少装 1-2 块
@@ -252,7 +264,18 @@ class BudgetConfig:
     # 默认 0.10 由 TASK-021 的基线对照实测选定（见 benches/results/phase1-baseline.md 修复后复测），
     # 属 TASK-015 校准项：0.25 仅 2 条 R21 用例转 pass，0.15 为 3 条，0.10 为 4 条；而 0.05 会
     # 把文档密集的 spec 用例（aibox-0001，期望 4 条 doc）挤出 top-10。
+    # 仅在 ``docs_tokens == 0`` 时作为回退口径使用（同 ``single_file_tokens`` 的理由）。
     docs_ratio: float = 0.10
+    # R21 的**绝对值**形式（TASK-MCP-BUDGET）：
+    #
+    # 与 ``single_file_tokens`` 同一类问题——实测（cockpit-agents-py golden，同一索引同一题目）：
+    # 预算 10K→16K 时，按比例的文档份额从 950 涨到 1550 token，多出的名额让
+    # ``docs/internal-design.md`` / ``benchmarks/llm/datasets/README.md`` 这类
+    # **分数高但不是目标**的长文档切片插到代码/测试证据前面：``cockpit-0037`` 的首个命中
+    # 从 rank 3 滑到 rank 6（recall@5 0.861→0.833），而目标代码并未变差。
+    # 文档份额的用途是**限制**文档挤占代码，不是“预算大了就多给文档”；
+    # 故生产预设施加绝对值（950 = 旧 10K 口径 ``(10_000−500)×0.10``）。
+    docs_tokens: int = 0
     skeleton_line_threshold: int = 300   # 超过此行数且超预算 → skeleton 降级
     skeleton_context_lines: int = 15     # 降级保留的上下文行数（±15）
     # TASK-109（G1/G2 补检）：第二轮的**独立小预算**（占 hard_cap 比例）。
@@ -287,9 +310,14 @@ class BudgetConfig:
     score_ratio: float = CONTEXT_SCORE_RATIO
 
 
-FAST_BUDGET = BudgetConfig()
-#: Deep 12K 硬顶（Module/03 §4.2 裁决；Phase 3 接入，本卡只实现配置）。
-DEEP_BUDGET = BudgetConfig(hard_cap=12_000)
+FAST_BUDGET = BudgetConfig(hard_cap=14_000, single_file_tokens=2_500, docs_tokens=950)
+#: Deep 16K 硬顶（Module/03 §4.2 裁决口径；TASK-MCP-BUDGET 将 12K→16K）。
+#:
+#: **此前是死配置**：``Engine.search_with_trace`` 在两次 ``assemble`` 调用里都硬编码
+#: ``mode=MODE_FAST``（该参数与 ``config`` 二选一，传了 ``config`` 后 ``mode`` 就是死参），
+#: 因此 Deep 预算从未生效——实测 ``ask_project`` 走的就是 10K Fast 装填。
+#: TASK-MCP-BUDGET 把 ``mode`` 贯通到 assemble，使本配置真正被使用。
+DEEP_BUDGET = BudgetConfig(hard_cap=16_000, single_file_tokens=2_500, docs_tokens=950)
 
 #: TASK-095：``score_ratio`` 的环境变量覆盖名（不暴露给 MCP 工具参数——CF-06 冻结）。
 SCORE_RATIO_ENV = "ZACE_CONTEXT_SCORE_RATIO"
@@ -332,6 +360,32 @@ def budget_for(mode: str) -> BudgetConfig:
         base = FAST_BUDGET
     ratio = _score_ratio_from_env(os.environ)
     return base if ratio == base.score_ratio else replace(base, score_ratio=ratio)
+
+
+def _docs_cap(active: BudgetConfig, content_budget: int) -> int:
+    """spec（文档）份额上限（R21）。
+
+    TASK-MCP-BUDGET：``docs_tokens > 0`` 时取**绝对值**，不再随 ``hard_cap`` 缩放——
+    实测同一索引同一题目下 10K→16K 会把文档份额从 950 抬到 1550，多出的名额插到代码/测试
+    证据之前（``cockpit-0037`` 首个命中 rank 3→6）。为 0 时回退 ``docs_ratio × content_budget``。
+    """
+    if active.docs_tokens > 0:
+        return active.docs_tokens
+    return int(content_budget * active.docs_ratio)
+
+
+def _single_file_cap(active: BudgetConfig) -> int:
+    """单文件 token 上限（A2）。
+
+    ``single_file_tokens > 0`` 时取该**绝对值**，不再随 ``hard_cap`` 缩放（TASK-MCP-BUDGET：
+    避免预算从 10K 提到 14K 时把单文件上限一并抬到 3500，让新增预算全部给“更多文件”）；
+    为 0（字段默认值）时回退旧口径 ``single_file_ratio × hard_cap``——这样未显式设置
+    该字段的 ``BudgetConfig``（测试、``param_sweep``）行为**逐字不变**，
+    ``single_file_ratio=1.0``（显式关闸）也继续有效。
+    """
+    if active.single_file_tokens > 0:
+        return active.single_file_tokens
+    return int(active.hard_cap * active.single_file_ratio)
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,7 +591,7 @@ def assemble(
     ``reason`` 写进证据的 ``reason`` 行，让 Agent 能看出"这条是二轮补来的"。
     """
     active = config or budget_for(mode)
-    single_file_cap = int(active.hard_cap * active.single_file_ratio)
+    single_file_cap = _single_file_cap(active)
     index_signals = signals if signals is not None else IndexSignals()
     fresh = freshness if freshness is not None else store.freshness()
     pool = sorted(candidates, key=lambda c: (-c.score, -c.rrf_score, c.chunk_id))
@@ -547,7 +601,7 @@ def assemble(
     # （纯文档问题——如 spec 类查询——不应被本机制伤害）。
     content_budget = max(active.hard_cap - active.framework_overhead, 0)
     has_code = any(candidate.kind != _SPEC_KIND for candidate in pool)
-    docs_cap = int(content_budget * active.docs_ratio) if has_code else content_budget
+    docs_cap = _docs_cap(active, content_budget) if has_code else content_budget
 
     # TASK-095 §A：相对分数阈值（自适应查询难度）。“明显弱于最佳命中”才是噪音的判据——
     # 绝对阈值无法通用（实测同仓库不同查询的 top-1 在 1.2~5.8 之间波动）。
@@ -783,6 +837,19 @@ def assemble(
             continue
         # 单成员公平上限（见 ``backfill_single_ratio`` 注释）：超了就跳过，让后面的成员有机会。
         # 因为补检候选已按池序给出，跳过大的调度器不会损失“最相关”的判定（池序不变）。
+        #
+        # **例外：本轮首个装得下的候选不受单成员上限约束**（TASK-MCP-BUDGET）。
+        #
+        # 为什么（实测 cockpit-agents-server，2026-09-16）：补检候选按优先级（池序）给出，
+        # 排第一的就是最该补的那个。当它恰好是一个**长方法**（本次实测：
+        # ``StreamingService.process_with_streaming`` 199 行 / 2016 token）时，
+        # 单成员上限（16K × 0.35 × 0.25 = 1400 token）把它强制降级成“签名 + 前 15 行”——
+        # 而它正是**能唯一回答该问题的那条证据**（完整正文含 memory_query / preference_updated /
+        # complete 三个事件与知识检索调用点）。公平上限的目的是“防止一个大调度器独吞配额、
+        # 让后面 13 个成员无处可放”（cockpit-0035 的 ``_invoke``），但那个场景里
+        # 目标是**多个小成员**；当首要目标就是单个长方法时，让位换不来任何东西。
+        # 故只对首个候选豁免：后面的候选仍按原来的公平上限排队（冲突时“最相关”优先）。
+        first_backfill = backfill_placed == 0
         slot = _build_slot(store, candidate, index_signals)
         if slot is None:
             continue
@@ -797,12 +864,35 @@ def assemble(
         over_file_cap = file_usage.get(file_key, 0) + tokens > single_file_cap
         over_backfill = backfill_used + tokens > backfill_cap
         over_budget = base_flow_tokens + used + backfill_used + tokens > active.hard_cap
-        over_single = tokens > backfill_single_cap
-        if over_file_cap or over_backfill or over_budget or over_single:
+        over_single = tokens > backfill_single_cap and not first_backfill
+        # **首位补检候选的降级豁免**（TASK-MCP-BUDGET）——但只在“完整正文真装得下”时生效。
+        #
+        # 豁免动机：补检池首位 = 优先级最高、最该补的那条。实测它是唯一能回答该问题的
+        # 长方法（``process_with_streaming`` 199 行 / 2016 token）时，两道闸门会合力把它降级：
+        #   ① 单成员公平上限（14K × 0.35 × 0.25 = 1225 token）；
+        #   ② 单文件上限（2500 token）——同文件里已有 ``_build_memory_query_result`` /
+        #      ``StreamingService`` 等条目，再加上它就超了。
+        # 降级结果是“签名 + 前 15 行”，恰好丢掉 ``memory_query`` / ``preference_updated`` /
+        # ``complete`` 三个事件与检索调用点——而那正是问题要问的东西。
+        #
+        # 为什么可以豁免（不是拆闸门）：首位候选仍受**自己的总额约束**
+        # （``backfill_ratio`` = 35% of hard_cap）与硬预算约束，不可能失控；
+        # 而两道配额闸门的原本目的是“防止大调度器挤掉**后面的多个小成员**”，
+        # 当首位本身就是唯一答案、后面也没有同权重的小成员时，让位换不来任何东西。
+        #
+        # **但豁免不能变成丢弃**：若完整包真的装不下（破补检总额或硬预算），仍要降级求入包——
+        # 实测踩到过：直接跳过降级会让这条证据**整个掉出包**（比截断更差）。
+        exempt_first = first_backfill and not (over_backfill or over_budget)
+        if (over_file_cap and not exempt_first) or over_backfill or over_budget or over_single:
             # 仅按**行数**降级不够（行数 ≠ token 数，见 ``_degrade`` 的 ``force`` 说明）：
             # 超过单成员 token 配额时一律强制降级，否则这些调用链目标会被直接跳过。
             degraded = _degrade(
-                candidate, slot, active, store, backfill=True, force=over_single
+                candidate,
+                slot,
+                active,
+                store,
+                backfill=True,
+                force=over_single,
             )
             if degraded is not None:
                 # reason 含降级签名，重写一次（_degrade 会重置 content，但不动 reason）
@@ -812,9 +902,9 @@ def assemble(
                     )
                     slot.base_reason = slot.item.reason
                 tokens = slot.tokens
-        if file_usage.get(file_key, 0) + tokens > single_file_cap:
+        if not exempt_first and file_usage.get(file_key, 0) + tokens > single_file_cap:
             continue
-        if tokens > backfill_single_cap:
+        if tokens > backfill_single_cap and not first_backfill:
             continue  # 降级后仍超单成员上限 → 放弃（不与小成员抢配额）
         # **不重复受 tier3 配额约束**（TASK-109 的关键设计决定，实测驱动）：
         #
