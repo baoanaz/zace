@@ -36,6 +36,8 @@ pub struct RepoIdentity {
     pub remote_url: Option<String>,
     pub git_root: Option<String>,
     pub repo_path: String,
+    /// 参与身份计算的分支名（TASK-111）；`None` = 未引入分支维度（无 git / detached 取不到）。
+    pub branch: Option<String>,
 }
 
 /// 按 D-29 计算仓库身份（**不触碰网络**，只读本地 git 配置）。
@@ -47,7 +49,7 @@ pub fn repo_identity(root: &Path) -> RepoIdentity {
         None => None,
     };
 
-    let (material, remote_url, resolved_git_root, repo_path) = match (git_root, remote) {
+    let (material, remote_url, resolved_git_root, repo_path, branch) = match (git_root, remote) {
         (Some(git_root), Some(remote)) => {
             let resolved = abs_path(Path::new(&git_root));
             // Python 的 relative_to：仅当 git 根是 path 的祖先时成功；否则整体退回 ""。
@@ -56,12 +58,26 @@ pub fn repo_identity(root: &Path) -> RepoIdentity {
                 .and_then(|base| path.strip_prefix(base).ok())
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
-            let material = format!("{remote}{}", if relative == "." { "" } else { &relative });
+            let repo_path = if relative == "." {
+                String::new()
+            } else {
+                relative
+            };
+            // TASK-111：分支参与身份计算（与 core `repo_identity` 逐字节一致）。
+            // 分隔符 `\x00` 防止 (remote+路径) 与分支名的拼接歧义。
+            let branch = git_branch(&path);
+            let mut material = format!("{remote}{repo_path}");
+            if let Some(name) = &branch {
+                // NUL 分隔符：与 core 的 "\x00" 同字节，防拼接歧义。
+                material.push('\u{0}');
+                material.push_str(name);
+            }
             (
                 material,
                 Some(remote),
                 Some(resolved.to_string_lossy().into_owned()),
-                relative,
+                repo_path,
+                branch,
             )
         }
         _ => (
@@ -69,21 +85,41 @@ pub fn repo_identity(root: &Path) -> RepoIdentity {
             None,
             None,
             String::new(),
+            git_branch(&path),
         ),
     };
 
     let identity_key = sha256_hex(material.as_bytes());
+    let base_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let display_name = match &branch {
+        Some(name) => format!("{base_name}@{name}"),
+        None => base_name,
+    };
     RepoIdentity {
         project_id: project_id_for(&identity_key),
         identity_key,
-        display_name: path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        display_name,
         remote_url,
         git_root: resolved_git_root,
         repo_path,
+        branch,
     }
+}
+
+/// 当前分支名（TASK-111 身份维度）：`rev-parse --abbrev-ref HEAD`。
+///
+/// 退化顺序：分支名 → detached HEAD 的短 commit → `None`（取不到时不引入分支维度，
+/// 与旧口径一致）。无 remote/无 git 场景也调用本函数，仅用于**展示**，不影响 identity_key。
+fn git_branch(cwd: &Path) -> Option<String> {
+    if let Some(name) = git(&["rev-parse", "--abbrev-ref", "HEAD"], cwd) {
+        if name != "HEAD" {
+            return Some(name);
+        }
+    }
+    git(&["rev-parse", "--short", "HEAD"], cwd).map(|head| format!("detached@{head}"))
 }
 
 /// `project_id = sha256(identity_key)` 前 16 位十六进制（与 core `project_id_for` 一致）。

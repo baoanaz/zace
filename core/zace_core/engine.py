@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -74,6 +75,9 @@ from zace_core.types import (
     SyncStatus,
 )
 from zace_core.vectors import VectorStore
+from zace_core.vectors.cache import EmbeddingCache
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DATA_ROOT_ENV",
@@ -98,6 +102,10 @@ __all__ = [
 DEFAULT_DATA_ROOT = Path.home() / ".zace"
 #: 覆盖数据根的环境变量（CLI ``--data`` 优先）。
 DATA_ROOT_ENV = "ZACE_DATA_ROOT"
+
+#: 关闭跨项目 embedding 缓存的开关（TASK-111）：``off`` / ``0`` / ``false`` / ``no``。
+#: 用于回归对比（验证"开了缓存省了多少"）与受限环境。
+EMBED_CACHE_ENV = "ZACE_EMBED_CACHE"
 #: 项目目录所在子目录（D-03）。
 PROJECTS_DIRNAME = "projects"
 #: 项目元数据文件名（本卡扩展：identity_key/display_name 的落盘记录，也是"创建"标记）。
@@ -131,13 +139,21 @@ class EngineError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class RepoIdentity:
-    """一个本地仓库目录的 D-29 身份（``repo_path`` 是它在 git 根内的相对路径）。"""
+    """一个本地仓库目录的 D-29 身份（``repo_path`` 是它在 git 根内的相对路径）。
+
+    ``branch``（TASK-111）：D-29 原文要求"同一机器不同 checkout 应隔离"，但原实现只 hash
+    ``remote + 相对路径``，**不含分支**——同一 remote 的两个分支/两个 worktree 会碰撞成同一个
+    projectId，索引互相污染（实测：main 与 feature 分支混合索引 353 文件，检索返回对方分支的
+    文件且 ``index: fresh`` 仍显示正常）。本字段记录参与身份计算的分支名
+    （detached HEAD 时为短 commit，取不到则为 ``None`` = 退回不含分支的旧口径）。
+    """
 
     identity_key: str
     display_name: str
     remote_url: str | None = None
     git_root: str | None = None
     repo_path: str = ""
+    branch: str | None = None
 
 
 def project_id_for(identity_key: str) -> str:
@@ -181,6 +197,20 @@ def _git(args: list[str], cwd: Path) -> str | None:
     return completed.stdout.strip() or None
 
 
+def git_branch(root: str | Path) -> str | None:
+    """当前分支名（TASK-111 身份维度）：``rev-parse --abbrev-ref HEAD``。
+
+    退化顺序：分支名 → detached HEAD 的短 commit → ``None``（取不到时**不引入分支维度**，
+    与旧口径一致，保证无 git / 异常环境下的行为不回归）。
+    """
+    path = Path(root).expanduser()
+    name = _git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+    if name and name != "HEAD":
+        return name
+    head = _git(["rev-parse", "--short", "HEAD"], path)
+    return f"detached@{head}" if head else None
+
+
 def git_remote_url(root: str | Path) -> str | None:
     """仓库的 git remote URL：优先 ``origin``，否则取第一个 remote；无 git/无 remote → ``None``。"""
     path = Path(root).expanduser()
@@ -207,19 +237,26 @@ def repo_identity(root: str | Path) -> RepoIdentity:
             relative = path.relative_to(resolved_git_root).as_posix()
         except ValueError:  # show-toplevel 不是 path 的祖先（符号链接等）：退回仓库自身
             relative = ""
-        material = remote + (relative if relative != "." else "")
+        repo_path = "" if relative == "." else relative
+        branch = git_branch(path)
+        # TASK-111：分支参与身份计算（D-29"不同 checkout 应隔离"的字面落地）。
+        # 分隔符 \x00 防止 (remote+路径) 与分支名的拼接歧义。
+        material = remote + repo_path + ("\x00" + branch if branch else "")
+        display_name = f"{path.name}@{branch}" if branch else path.name
         return RepoIdentity(
             identity_key=hashlib.sha256(material.encode("utf-8")).hexdigest(),
-            display_name=path.name,
+            display_name=display_name,
             remote_url=remote,
             git_root=str(resolved_git_root),
-            repo_path="" if relative == "." else relative,
+            repo_path=repo_path,
+            branch=branch,
         )
     return RepoIdentity(
         identity_key=hashlib.sha256(str(path).encode("utf-8")).hexdigest(),
         display_name=path.name,
         remote_url=None,
         git_root=str(Path(git_root).resolve()) if git_root else None,
+        branch=git_branch(path) if git_root else None,
     )
 
 
@@ -375,7 +412,12 @@ class Engine:
         return project_dir_for(self._data_root, project_id)
 
     def resolve_project(self, identity_key: str, display_name: str = "") -> ProjectHandle:
-        """幂等解析/创建项目（D-29：identity_key 由调用方给出）。"""
+        """幂等解析/创建项目（D-29：identity_key 由调用方给出）。
+
+        注意：**不在此处追加分支**。TASK-111 把分支并进 ``identity_key``（客户端算），
+        因此同一仓库的不同分支自然得到不同 projectId；``display_name`` 由调用方给出
+        （CLI/MCP 路径已含 ``@分支`` 后缀，见 :meth:`repo_identity`）。
+        """
         project_id = project_id_for(identity_key)
         directory = self.project_dir(project_id)
         directory.mkdir(parents=True, exist_ok=True)
@@ -783,8 +825,36 @@ class Engine:
         source: SourceProvider | None = None,
     ) -> IngestReport:
         with self._open_project(project_id) as (store, vectors, provider):
-            indexer = Indexer(store, provider, vectors, source or self._source_for(project_id))
+            indexer = Indexer(
+                store,
+                provider,
+                vectors,
+                source or self._source_for(project_id),
+                embedding_cache=self._embedding_cache(),
+            )
             return indexer.full_reparse(changes) if full else indexer.ingest(changes)
+
+    def _embedding_cache(self) -> EmbeddingCache | None:
+        """data_root 级的跨项目 embedding 缓存（TASK-111）。
+
+        为什么放在这里：TASK-111 让分支进身份后，同一仓库的每个分支都是独立项目；
+        没有共享缓存时"换分支 = 全量重嵌"（实测 lane-c 对 main 零复用，各嵌 5842/5913 个 chunk）。
+        缓存按 ``(model_id, content_hash)`` 索引，因此跨分支/跨项目命中同一向量。
+
+        失败一律降级为 ``None``（不建缓存、不阻断索引）——它是优化而非正确性来源。
+
+        ``ZACE_EMBED_CACHE=off`` 可关闭（回归对比 / 受限环境）。
+        """
+        if os.environ.get(EMBED_CACHE_ENV, "").strip().lower() in {"off", "0", "false", "no"}:
+            return None
+        try:
+            provider = self.provider
+            return EmbeddingCache.open(
+                self._data_root, provider.profile.model_id, provider.profile.dim
+            )
+        except Exception as exc:  # noqa: BLE001 - 缓存不可用不得阻断索引
+            logger.warning("embedding 缓存不可用，退化为项目内复用：%s", exc)
+            return None
 
     @contextmanager
     def _open_project(

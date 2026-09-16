@@ -170,10 +170,15 @@ class EngineManager:
         if not isinstance(raw, Mapping):
             return None
         created_at = raw.get("created_at")
+        display_name = str(raw.get("display_name") or "")
         return {
             "projectId": project_id,
-            "displayName": str(raw.get("display_name") or ""),
+            "displayName": display_name,
             "createdAt": created_at if isinstance(created_at, int) else 0,
+            # TASK-111：分支是身份的一部分（同一仓库不同分支 = 不同项目）。``display_name``
+            # 由 CLI/MCP 路径写成 ``<name>@<branch>``；这里拆成结构化字段，UI 可直接分组，
+            # 不必让前端去 split 一个展示字符串。取不到分支时如实给 ``null``。
+            "branch": _branch_from_display_name(display_name),
         }
 
     def project_exists(self, project_id: str) -> bool:
@@ -700,6 +705,22 @@ class EngineManager:
                 lock = threading.Lock()
                 self._locks[project_id] = lock
             return lock
+
+
+def _branch_from_display_name(display_name: str) -> str | None:
+    """``<name>@<branch>`` → ``branch``；无后缀时返回 ``None``（TASK-111）。
+
+    为什么从展示名解析而不是新增一个落盘字段：``project.json`` 是**已存在**的元数据文件，
+    TASK-111 不改它的 schema（避免旧项目需要迁移）。分支已经在 ``display_name`` 里
+    （:func:`zace_core.engine.repo_identity` 生成），``rpartition`` 拆开即可。
+
+    边界：仓库名本身含 ``@``（罕见）时，取**最后一个** ``@`` 之后的部分——
+    与生成侧的拼接方式对称（后缀总是最后追加的）。
+    """
+    if "@" not in display_name:
+        return None
+    _base, _sep, branch = display_name.rpartition("@")
+    return branch or None
 
 
 def _persist_error_text(exc: BaseException) -> str:

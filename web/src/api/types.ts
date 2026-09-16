@@ -55,6 +55,11 @@ export interface Project {
   projectId: string;
   displayName?: string;
   createdAt?: number;
+  /**
+   * 分支（TASK-111）：同一仓库的不同分支是**不同项目**（分支参与 D-29 身份计算）。
+   * `null`/缺失表示该项目没有分支信息（无 git、detached 取不到、或旧数据）。
+   */
+  branch?: string | null;
   attachedRoot?: string | null;
   indexProgress?: IndexProgress | null;
   sync?: SyncStatus;

@@ -96,3 +96,53 @@ def test_engine_manager_is_lazily_created_when_not_injected(tmp_path) -> None:  
         assert test_client.get("/api/projects").json() == []
     assert isinstance(application.state.engine_manager, EngineManager)
     assert application.state.engine_manager.data_root == test_settings(tmp_path / "data").data_root
+
+
+def test_delete_project_removes_owner_row(tmp_path) -> None:  # noqa: ANN001
+    """TASK-111 修正：用户侧删除必须同时清掉 ``projects`` 归属行（否则留幽灵项目）。
+
+    原缺陷（实测复现于 live 库）：``DELETE /api/projects/{id}`` 删了目录但没删归属行，
+    于是 ``GET /api/projects`` 仍列出该项目、点进去 404。清理函数
+    （``MetaDB.delete_project_owner``）原先只接在管理员路径上。
+
+    必须是**云端形态**（local_mode=False）才有关联的 meta_db 与真实用户；本地模式的
+    ``client`` fixture 没有 ``meta_db``，测不到这个缺陷。
+    """
+    from zace_core.engine import Engine
+    from zace_service.app import create_app
+    from zace_service.config import Settings
+
+    from tests.conftest import DeterministicBigramEmbedding, make_client
+
+    settings = Settings(data_root=tmp_path / "data", local_mode=False, local_rescan_interval_s=0.0)
+    app = create_app(settings)
+    manager = EngineManager.open(
+        settings.data_root,
+        engine_factory=lambda root: Engine.open(root, provider=DeterministicBigramEmbedding()),
+    )
+    manager.attach_meta_db(app.state.meta_db)
+    app.state.engine_manager = manager
+    try:
+        with make_client(app) as test_client:
+            boot = test_client.post("/api/auth/bootstrap", json={"name": "alice", "password": "pw"})
+            assert boot.status_code == 201, boot.text
+            owner_id = boot.json()["userId"]
+            db = app.state.meta_db
+
+            project_id = test_client.post(
+                "/api/projects/resolve",
+                json={"identityKey": "identity:ghost", "displayName": "ghost@main"},
+            ).json()["projectId"]
+            upload_files(manager, project_id, SAMPLE_FILES)
+
+            assert project_id in db.list_projects(owner_id), "前置：归属行已写入"
+            assert manager.project_dir(project_id).is_dir()
+
+            deleted = test_client.delete(f"/api/projects/{project_id}")
+            assert deleted.status_code == 204
+            assert not manager.project_dir(project_id).exists()
+
+            assert project_id not in db.list_projects(owner_id), "归属行必须与目录同生共死"
+            assert test_client.get("/api/projects").json() == [], "不得留下幽灵项目"
+    finally:
+        manager.close()
