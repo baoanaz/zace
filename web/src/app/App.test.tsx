@@ -163,6 +163,20 @@ describe("首屏门禁", () => {
           registerOpen: false,
           needsBootstrap: false,
           userCount: null,
+          // 控制台会渲染 ServiceModels，它读 config.llm / config.embedding。
+          // 服务端 effective_config 是**无条件**返回这两项的（见 routers/auth.py），
+          // 所以这里必须同步给全，否则组件会读到 undefined。
+          config: {
+            embedding: {
+              mode: "api",
+              configured: true,
+              missingEnv: [],
+              model: "voyage-4-lite",
+              provider: "voyage",
+              dim: 1024,
+            },
+            llm: { configured: true, apiKeyConfigured: true, missingEnv: [], model: "deepseek-flash" },
+          },
         },
       },
       "/api/auth/me": { body: { ...ACCOUNT, isLocal: true, via: "local" } },
