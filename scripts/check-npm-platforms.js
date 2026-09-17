@@ -27,8 +27,8 @@ const EXPECTED = [
   { suffix: "linux-arm64", os: "linux", cpu: "arm64" },
   { suffix: "darwin-x64", os: "darwin", cpu: "x64" },
   { suffix: "darwin-arm64", os: "darwin", cpu: "arm64" },
-  { suffix: "win32-x64", os: "win32", cpu: "x64" },
-  { suffix: "win32-arm64", os: "win32", cpu: "arm64" },
+  { suffix: "windows-x64", os: "win32", cpu: "x64" },
+  { suffix: "windows-arm64", os: "win32", cpu: "arm64" },
 ];
 
 const expectedVersion = process.argv[2];

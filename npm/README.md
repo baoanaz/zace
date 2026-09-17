@@ -102,8 +102,8 @@ zace-client                    ← 启动器
 ├── zace-client-linux-arm64
 ├── zace-client-darwin-x64     ┐ 两个架构各自独立构建
 ├── zace-client-darwin-arm64   ┘
-├── zace-client-win32-x64
-└── zace-client-win32-arm64
+├── zace-client-windows-x64
+└── zace-client-windows-arm64
 ```
 
 npm 会按子包自己的 `os`/`cpu` 字段**只装本平台那一个**（其余跳过），

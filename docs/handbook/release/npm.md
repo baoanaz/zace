@@ -15,8 +15,8 @@ zace-client                       ← 启动器（run.js）+ 6 个平台子包�
 ├── zace-client-linux-arm64
 ├── zace-client-darwin-x64        ┐ 两个架构**各自独立构建**（不用 lipo/universal）
 ├── zace-client-darwin-arm64      ┘
-├── zace-client-win32-x64
-└── zace-client-win32-arm64
+├── zace-client-windows-x64
+└── zace-client-windows-arm64
 ```
 
 npm 按子包自己的 `os`/`cpu` 字段**只装本平台那一个**。用户侧**没有下载步骤**：
@@ -174,6 +174,7 @@ bash scripts/check-version.sh v0.0.5
 | 用户报「找不到本平台的二进制」 | 该平台子包没发/版本不一致。`npm view zace-client-<os>-<arch> version` 确认；`check-version.sh` 定位 |
 | 用户 `npx` 行为没变 | npx 缓存了旧包。配置里加 `--prefer-online`（§1 已是标准形态） |
 | `npm publish` 报 `cannot publish over` | 该版本号已发布过（**不可逆**）。换 patch 版本号 |
+| `npm publish` 报 `403 … Package name triggered spam detection` | **包名**被 npm 防刷规则拦（不是速率）。实测：`zace-client-win32-x64` 必然被拒，改名 `zace-client-windows-x64` 即通过 —— `win32` 是恶意软件命名的常见特征词。**注意**：npm 包名用 `windows`，而 package.json 的 `os` 字段必须仍是 `win32`（Node `process.platform` 的取值） |
 | CI `publish` 401 | 缺 `NPM_TOKEN` secret，或 token 不是 Automation 类型 |
 | `latest` 没指到新版本 | `promote` 步骤失败：手动 `npm dist-tag add zace-client@<v> latest` |
 | 想回退 latest 到旧版本 | `npm dist-tag add zace-client@<旧版本> latest`（**不要**用 `npm unpublish`） |

@@ -150,3 +150,27 @@ def test_verify_has_platforms_and_latest_phases():
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "verify --phase platforms" in workflow
     assert "verify --phase latest" in workflow
+
+
+def test_no_win32_in_package_names():
+    """npm 包名不得含 `win32-`（真实故障：`Package name triggered spam detection`）。
+
+    实测（2026-09-17）：`zace-client-win32-x64` 发布被 registry 拒绝，
+    完整错误 `403 Forbidden - PUT .../zace-client-win32-x64 - Package name triggered
+    spam detection`。同一次发布里前 4 个包（linux/darwin）全部成功，
+    换成 `zace-client-windows-x64` 后正常——`win32` 是恶意软件命名的常见特征词。
+
+    注意：**npm 包名**用 `windows`，而 package.json 的 `os` 字段必须仍是 `win32`
+    （那是 Node `process.platform` 的取值，不能被"统一"掉）。
+    """
+    main = json.loads((mk.NPM_DIR / "package.json").read_text(encoding="utf-8"))
+    for name in list(main.get("optionalDependencies", {})) + [main["name"]]:
+        assert "win32" not in name, f"npm 包名不得含 win32（会被 spam detection 拦）：{name}"
+    for spec in mk.PLATFORMS:
+        assert "win32" not in f"{mk.MAIN_PACKAGE_NAME}-{spec['suffix']}"
+        if spec["os"] == "win32":
+            # os 字段必须仍是 win32（Node 的取值），别跟着包名一起改名
+            assert spec["suffix"].startswith("windows-")
+    # run.js 的 platform 字段也必须是 win32
+    text = (mk.NPM_DIR / "run.js").read_text(encoding="utf-8")
+    assert 'platform: "win32"' in text

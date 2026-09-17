@@ -21,8 +21,8 @@ zace-client                    ← 包装器（run.js）+ 6 个平台子包作�
 ├── zace-client-linux-arm64
 ├── zace-client-darwin-x64
 ├── zace-client-darwin-arm64
-├── zace-client-win32-x64
-└── zace-client-win32-arm64
+├── zace-client-windows-x64
+└── zace-client-windows-arm64
 ```
 
 npm 按**子包自己的 `os`/`cpu` 字段**挑一个装上（其余跳过），包装器直接执行它。
@@ -67,8 +67,8 @@ PLATFORMS = (
     {"suffix": "linux-arm64", "os": "linux", "cpu": "arm64", "binary": "zace-client"},
     {"suffix": "darwin-x64", "os": "darwin", "cpu": "x64", "binary": "zace-client"},
     {"suffix": "darwin-arm64", "os": "darwin", "cpu": "arm64", "binary": "zace-client"},
-    {"suffix": "win32-x64", "os": "win32", "cpu": "x64", "binary": "zace-client.exe"},
-    {"suffix": "win32-arm64", "os": "win32", "cpu": "arm64", "binary": "zace-client.exe"},
+    {"suffix": "windows-x64", "os": "win32", "cpu": "x64", "binary": "zace-client.exe"},
+    {"suffix": "windows-arm64", "os": "win32", "cpu": "arm64", "binary": "zace-client.exe"},
 )
 
 MAIN_PACKAGE_NAME = "zace-client"

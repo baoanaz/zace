@@ -38,8 +38,8 @@ const PLATFORMS = [
   { platform: "linux", arch: "arm64", suffix: "linux-arm64" },
   { platform: "darwin", arch: "x64", suffix: "darwin-x64" },
   { platform: "darwin", arch: "arm64", suffix: "darwin-arm64" },
-  { platform: "win32", arch: "x64", suffix: "win32-x64" },
-  { platform: "win32", arch: "arm64", suffix: "win32-arm64" },
+  { platform: "win32", arch: "x64", suffix: "windows-x64" },
+  { platform: "win32", arch: "arm64", suffix: "windows-arm64" },
 ];
 
 function log(message) {

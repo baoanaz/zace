@@ -80,13 +80,13 @@ jobs:
             npm_binary: zace-client
             cross: false
           # ---- Windows ----
-          - suffix: win32-x64
+          - suffix: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: zace-client.exe
             npm_binary: zace-client.exe
             cross: false
-          - suffix: win32-arm64
+          - suffix: windows-arm64
             os: windows-latest
             target: aarch64-pc-windows-msvc
             binary_name: zace-client.exe
@@ -182,8 +182,8 @@ jobs:
           stage_one linux-arm64  zace-client
           stage_one darwin-x64   zace-client
           stage_one darwin-arm64 zace-client
-          stage_one win32-x64    zace-client.exe
-          stage_one win32-arm64  zace-client.exe
+          stage_one windows-x64    zace-client.exe
+          stage_one windows-arm64  zace-client.exe
 
       - name: Guard (versions + 6 platform packages present)
         run: |
