@@ -137,10 +137,11 @@ npm 会按子包自己的 `os`/`cpu` 字段**只装本平台那一个**（其余
 刻意**不含**「PATH 里的 zace-client」：npm 安装的 shim 就叫这个名字，
 回退到它会把包装器自己当二进制，造成无限自我递归（TASK-099 实测踩到）。
 
-> 维护者请按 [`docs/handbook/release/npm.md`](../docs/handbook/release/npm.md) 发布：
-> **先发 6 个子包 → 验证 → 发主包（`--tag next`）→ 冒烟 → promote 到 latest**。
-> 缺任一平台 = 该平台用户装不上（且是**静默**故障——npm 不报错，只是跳过解析不了的可选依赖）。
-> `python3 scripts/make-platform-packages.py check` 与 `bash scripts/check-version.sh` 能提前发现不一致。
+> 维护者发布只跑一条命令：`bash scripts/release-client.sh x.y.z`
+> （详细 SOP 见 [`docs/handbook/release/npm.md`](../docs/handbook/release/npm.md)）。
+> 流程是**先发 6 个子包 → 验证 → 发主包（`--tag next`）→ 冒烟 → promote 到 latest**，
+> 缺任一平台 = 该平台用户装不上（且是**静默**故障——npm 不报错，
+> 只是跳过解析不了的可选依赖）。
 
 ## 已知限制
 

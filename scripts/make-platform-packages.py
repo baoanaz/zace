@@ -328,7 +328,13 @@ def cmd_check(args: argparse.Namespace) -> int:
         directory = sub_package_dir(spec["suffix"])
         binary = directory / spec["binary"]
         if not binary.is_file():
-            problems.append(f"{name}：缺二进制 {spec['binary']}（跑 stage）")
+            if args.allow_missing_binaries:
+                # 本地发布入口用：二进制只存在于 CI 的构建产物里，
+                # 本地不可能（也不应该）有 6 平台产物。此时只校验元数据一致性，
+                # 产物齐备由 CI 的 `check`（不带本开关）负责。
+                pass
+            else:
+                problems.append(f"{name}：缺二进制 {spec['binary']}（跑 stage）")
             continue
         size = binary.stat().st_size
         if size < 64 * 1024:
@@ -528,6 +534,11 @@ def build_parser() -> argparse.ArgumentParser:
     stage.set_defaults(func=cmd_stage)
 
     check = sub.add_parser("check", help="发布前硬门：6 个平台包都真有二进制")
+    check.add_argument(
+        "--allow-missing-binaries",
+        action="store_true",
+        help="只校验元数据，不要求二进制就位（本地发布入口用；CI 必须不带本开关）",
+    )
     check.set_defaults(func=cmd_check)
 
     publish = sub.add_parser("publish", help="分阶段发布（先 platforms、后 main）")

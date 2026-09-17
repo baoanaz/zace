@@ -33,15 +33,15 @@ CI 里由 `scripts/make-platform-packages.py publish` 保证这个顺序。
 
 **完整发布手册见 [`npm.md`](npm.md)**（六步流水线、脚本速查、排障、为什么删掉 GitHub 下载回退）。
 
-速览：
+速览（**只有这一条命令**，不要手工拼分步命令）：
 
 ```bash
-# ① 改三处版本号 → 同步子包 → 校验
-python3 scripts/make-platform-packages.py generate
-bash scripts/check-version.sh v0.0.5
-# ② 打 tag 触发 CI（构建 6 平台 → 发子包 → 验证 → 发主包 next → 冒烟 → promote latest）
-git tag -a v0.0.5 -m "v0.0.5" && git push origin v0.0.5
+bash scripts/release-client.sh 0.0.5
 ```
+
+它内含：前置检查 → 改版本号 → 校验 → 测试 → commit/push main → push tag →
+（gh 可用时）等 CI → 复核 `npm view` 与 `latest`。CI 负责
+构建 6 平台 → 发子包 → 验证 → 发主包(next) → 冒烟 → promote latest。
 
 要点：
 

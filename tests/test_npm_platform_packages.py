@@ -21,6 +21,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+
+def _code_lines(text: str) -> str:
+    """去掉注释行，只留可执行内容。
+
+    为什么需要：这些断言守的是"行为"，而注释里**解释**"我们为什么不做 X"是好事
+    （例如脚本开头写明"不使用 --force"）。若连注释一起禁字，就会把正确的文档判成违规
+    —— 实测踩到过（lipo / NPM_TOKEN / npm publish 三处假阳性）。
+    """
+    kept = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#") or stripped.startswith("//"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _load_generator():
     """加载 ``scripts/make-platform-packages.py``（文件名带连字符，不能直接 import）。"""
     spec = importlib.util.spec_from_file_location(
@@ -91,7 +108,7 @@ def test_run_js_has_no_github_download_fallback():
     为何要守：保留下载回退 = 两条分发渠道并存，出错时无法判断用户拿到的是哪个二进制。
     且 Node 默认不读 `https_proxy`，下载在代理环境下会以 403 限流形式静默失败。
     """
-    text = (mk.NPM_DIR / "run.js").read_text(encoding="utf-8")
+    text = _code_lines((mk.NPM_DIR / "run.js").read_text(encoding="utf-8"))
     for banned in ("api.github.com", "releases/tags", "browser_download_url", "downloadToFile"):
         assert banned not in text, f"run.js 里还有 GitHub 下载残留：{banned}"
     # 不应 require https（下载专用）；也不应再写缓存目录
@@ -130,10 +147,7 @@ def test_promote_is_separate_and_after_smoke():
 def test_macos_builds_per_arch_without_lipo():
     """macOS 两架构**独立构建**，不得再用 universal/lipo（D-48 补充）。"""
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    # 只看可执行语句（注释里提到 lipo 作为“为什么不用”的说明是允许的）
-    code = "\n".join(
-        line for line in workflow.splitlines() if not line.lstrip().startswith("#")
-    )
+    code = _code_lines(workflow)
     assert "lipo" not in code, "不应再用 lipo 合并 universal"
     assert "universal-apple-darwin" not in code
     assert "x86_64-apple-darwin" in workflow
@@ -174,3 +188,65 @@ def test_no_win32_in_package_names():
     # run.js 的 platform 字段也必须是 win32
     text = (mk.NPM_DIR / "run.js").read_text(encoding="utf-8")
     assert 'platform: "win32"' in text
+
+
+# --------------------------------------------------------------------------- #
+# 发布入口（scripts/release-client.sh）：它才是"每次做法一致"的保证。
+# 文档只能防遗忘，所以这里把它写死的几条纪律也钉成断言。
+# --------------------------------------------------------------------------- #
+
+
+def _release_script() -> str:
+    return (ROOT / "scripts/release-client.sh").read_text(encoding="utf-8")
+
+
+def test_release_entry_script_exists_and_is_executable():
+    path = ROOT / "scripts/release-client.sh"
+    assert path.is_file(), "缺少统一发布入口 scripts/release-client.sh"
+    import os
+
+    assert os.access(path, os.X_OK), "发布入口必须可执行（chmod +x）"
+
+
+def test_release_script_never_forces_or_moves_tags():
+    """硬约定：禁止 force push、禁止移动/重写已有 tag。"""
+    text = _code_lines(_release_script())
+    for banned in ("--force", "push --delete", "tag -f", "tag --force"):
+        assert banned not in text, f"发布入口不得出现 {banned!r}"
+    # 必须显式拒绝已存在的 tag（本地与远端都要查）
+    assert "refs/tags/v$VERSION" in text
+    assert "ls-remote --exit-code --tags origin" in text
+
+
+def test_release_script_never_touches_npm_token():
+    """发布凭据只存在于 GitHub Actions secret；本地脚本不得读取或打印。"""
+    text = _code_lines(_release_script())
+    assert "NPM_TOKEN" not in text, "本地发布入口不得引用 NPM_TOKEN"
+    assert "npm publish" not in text, "本地发布入口绝不直接发布平台包（由 CI 负责）"
+    assert "npm login" not in text
+
+
+def test_release_script_defers_publishing_to_ci():
+    """六平台构建与发布全部交 CI：本地脚本只 push tag 并等结果。"""
+    text = _code_lines(_release_script())
+    assert "gh run watch" in text and "--exit-status" in text
+    assert "make-platform-packages.py publish" not in text
+
+
+def test_release_script_waits_via_gh_not_polling():
+    """禁止长时间 sleep + curl 轮询：等 CI 只用 gh run watch。"""
+    text = _release_script()
+    assert "api.github.com/actions/runs" not in text
+    assert "run watch" in text
+
+
+def test_release_script_verifies_latest_after_ci():
+    text = _release_script()
+    assert "npm view" in text and "dist-tags" in text
+
+
+def test_release_script_runs_tests_and_version_check():
+    text = _release_script()
+    assert "check-version.sh" in text
+    assert "uv run pytest" in text
+    assert "check_dependency_direction.py" in text

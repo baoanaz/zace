@@ -7,7 +7,38 @@
 > **D-49**（今后所有预编译二进制一律按此形态分发）。
 > 重建前端 / 重启服务见 [`README.md`](README.md)；本文件只管 **npm**。
 
-## 0. 一句话理解形态
+## 0. 发一个版本：只有一条命令
+
+```bash
+bash scripts/release-client.sh x.y.z
+```
+
+**这是唯一入口**，Agent 收到"发布 zace-client x.y.z"时应直接跑它，
+不要手工拼 `git tag` / `npm publish` / `check-version.sh` 等零散步骤
+（手工零散执行正是下文 §6 那次真实故障的背景）。
+
+它做的事（含每一步的前置校验）：
+
+```text
+① 前置检查  在 main、工作区干净、tag 不存在、版本高于已发布
+② 改版本号  client/Cargo.toml + npm/package.json + server.json
+③ 同步校验  generate 子包 → check-version.sh → 平台包元数据 check
+④ 测试      ruff + 依赖方向 + pytest
+⑤ 交付      commit → push main → 打并 push tag v<version>
+⑥ 等 CI     gh 可用 → `gh run watch --compact --exit-status`
+            不可用 → 只报告"CI 已触发"，不阻塞
+⑦ 复核      npm view zace-client version / dist-tags，确认 latest == 本次版本
+            且 6 个平台子包都在 registry 上
+```
+
+**边界（它刻意不做的事）**：不构建二进制、不发布任何 npm 包 ——
+六平台 build / publish / verify / promote 全部由 GitHub Actions 负责
+（本地编不了 macOS，也不该让本地产物进 npm）。
+
+**失败处置**：npm 版本号不可撤回、已 push 的 tag 不移动 ——
+**放弃当前版本号，修复后递增新版本重跑**（§6 有 0.0.5 一例）。
+
+## 0.1 一句话理解形态
 
 ```text
 zace-client                       ← 启动器（run.js）+ 6 个平台子包作 optionalDependencies
@@ -73,26 +104,25 @@ startup_timeout_ms = 60000
 合并只会让每个用户多下另一个架构的代码（体积翻倍），
 并让产物校验、签名、按架构排查都变复杂。
 
-### 2.1 自动发布（推荐）
+### 2.1 触发方式（脚本内部等价于这几步）
 
-推送 tag 即触发 `.github/workflows/release.yml`，六步全自动：
+`release-client.sh` 最终就是「push main + push tag」，tag 触发
+`.github/workflows/release.yml`，六步全自动。若需手工复现（例如脚本本身有问题时）：
 
 ```bash
-# ① 改版本号（见 §3.1）并确认一致性
-bash scripts/check-version.sh v0.0.5
-
-# ② 提交并打 tag
-git commit -am "release: v0.0.5"
+python3 scripts/make-platform-packages.py generate
+bash scripts/check-version.sh v0.0.5      # 须通过
+git commit -am "release: zace-client v0.0.5"
 git push origin main
-git tag -a v0.0.5 -m "v0.0.5"
-git push origin v0.0.5        # ← 触发构建与发布
+git tag -a v0.0.5 -m "zace-client v0.0.5"
+git push origin v0.0.5                    # ← 触发构建与发布
 ```
 
 **需要仓库 secret `NPM_TOKEN`**（Settings → Secrets → Actions）：
 npm 上 Access Tokens 的 **Automation** 类型（绕过 2FA，CI 必需）。
-没有它 `publish` 步骤会 401。
+没有它 `publish` 步骤会 401。**本地永不读取该 token。**
 
-### 2.2 手动发布（无 CI，或需要本机跑）
+### 2.2 逐平台手工发布（仅当 CI 不可用时；不推荐，仅作兜底）
 
 本机只能编出**本机平台**的产物。要发全 6 平台必须用 CI，或逐平台在对应机器上构建。
 
@@ -166,6 +196,9 @@ bash scripts/check-version.sh v0.0.5
 
 ## 4. 排障
 
+> 本表是**故障对照表**：正常发布路径只有 `bash scripts/release-client.sh x.y.z` 一条，
+> 下面的条目只在出问题时才需要读。§6 是历史事故复盘，**不参与正常流程**。
+
 | 现象 | 原因 / 处置 |
 |---|---|
 | `check` 报「缺二进制」 | 该平台没 stage。**不要绕过** —— 缺一个平台就是该平台用户静默装不上 |
@@ -197,7 +230,45 @@ bash scripts/check-version.sh v0.0.5
 （`npm view <子包> version` 是第一步）。“第一次只发 Linux”这类过渡也不允许 ——
 缺失平台是**静默**故障，用户侧没有任何提示。
 
-## 6. 与其它发布步骤的关系
+## 6. 历史事故复盘（不参与正常流程，仅供排查参考）
+
+### 0.0.5：首次发布卡在 Windows 包，最终放弃该版本
+
+**现象**：build 六平台全绿、stage/guard 通过、前 4 个包（linux×2 + darwin×2）发布成功，
+从第 5 个起失败；流水线按设计停在 `pre-verify`，**主包未发布、latest 仍指旧版本**
+（这就是"六步流水线"要保住的东西）。
+
+**第 5 个包的完整错误**（包名是 `zace-client-win32-x64`）：
+
+```text
+403 Forbidden - PUT https://registry.npmjs.org/zace-client-win32-x64
+Package name triggered spam detection; if you believe this is in error,
+please contact support at https://npmjs.com/support
+```
+
+**根因是包名，不是发布速率**：错误信息明确指向包名，且同一次发布里前 4 个包成功。
+`win32` 是恶意软件命名的常见特征词，被 npm 防刷规则命中。
+
+> 曾被误判为"9 秒连发 4 个新包触发限流"。该假设已被上述证据否决，
+> **未落地任何节流代码** —— 如果以后遇到真正的速率限制，错误串会是
+> `429`/`rate limit`，而不是 `spam detection`。以错误串为准。
+
+**修法**（0.0.6）：子包名 `zace-client-win32-*` → `zace-client-windows-*`；
+**`os` 字段保持 `win32`**（Node `process.platform` 取值，改了会装错平台）；
+加了守卫 `test_no_win32_in_package_names` 防回归。
+
+**版本处置**：0.0.5 的 tag 与已发布的 4 个子包**保持不动**（npm 版本不可撤回），
+升到 0.0.6 重新完整发布；0.0.5 从未发主包，用户无感知。
+这就是"失败不移动 tag、递增新版本"这条约定的来源。
+
+### 结论（沉淀成规则）
+
+1. 发布是**七步不可逆流程**，必须由 `release-client.sh` 一条命令走完，
+   避免手工零散执行造成状态半成品（0.0.5 就是半成品：4 个子包已占版本号）；
+2. 失败时**放弃版本号**，不要试图修补已有 tag/版本；
+3. npm 报错先看**完整错误串**，不要凭"时间间隔"猜原因。
+
+## 7. 与其它发布步骤的关系
 
 | 改动类型 | 要不要发 npm |
 |---|---|

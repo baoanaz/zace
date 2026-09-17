@@ -69,7 +69,7 @@ handbook/
 | 文档 | 内容 |
 |---|---|
 | [README.md](release/README.md) | **发一次新版本**：版本号一致 → tag → 重建前端 / 重启服务 / VPS 部署；含顺序与坑 |
-| [npm.md](release/npm.md) | **npm 发布专篇**（D-48/D-49）：6 平台子包形态、六步流水线（子包→验证→主包 next→冒烟→promote）、脚本速查、排障、为什么删掉 GitHub 下载回退 |
+| [npm.md](release/npm.md) | **npm 发布专篇（唯一 SOP，D-48/D-49）**：入口 `bash scripts/release-client.sh x.y.z`、6 平台子包形态、六步流水线（子包→验证→主包 next→冒烟→promote）、排障表、历史事故复盘 |
 
 ### benchmark/
 
