@@ -3,7 +3,7 @@
 **为什么需要它**：Module/02 §7 与 R29/R30 都写着"rerank 分值/配额需 benchmark 校准"，但
 **没有任何脚本回答过"这些参数在当前测试集上到底有没有信号"**。本脚本做的就是这件事：
 对每个参数取一组候选值，量出 ΔMRR；**若 Δ 落在噪声内，那这个参数现在就不该调**
-（基于 93 条靶场拟合出来的值，换一批题就会反向）。
+（基于 105 条靶场拟合出来的值，换一批题就会反向）。
 
 用法（仓库根，先加载 benchmark.env）：
 
@@ -31,7 +31,7 @@
 局限（诚实声明）：
 
 - 只覆盖**候选池之后**；改解析/切片/召回通道本身必须重建索引；
-- 93 条正例（4 靶场）下，**单条用例的排名变化即可移动 MRR 约 0.002**，因此
+- 105 条正例（4 靶场）下，**单条用例的排名变化即可移动 MRR 约 0.002**，因此
   |ΔMRR| < 0.005 一律按噪声处理，不当作改进；
 - 靶场是**人工出题**，不代表真实分布（这正是 TASK-093 要补的）。
 """
@@ -60,6 +60,7 @@ from zace_core.retrieval import RecallLimits, recall  # noqa: E402
 from zace_core.retrieval import rerank as rerank_mod  # noqa: E402
 from zace_core.retrieval.expand import ExpansionLimits, expand  # noqa: E402
 from zace_core.retrieval.gap import GapLimits  # noqa: E402
+from zace_core.retrieval.qcache import PersistentQueryVectorCache  # noqa: E402
 from zace_core.retrieval.rerank import RerankWeights, collect_signals, rerank  # noqa: E402
 
 #: 靶场（name, golden 目录, project_id）。含 internal 的 cockpit——它是本卡两个真实失败
@@ -71,13 +72,34 @@ TARGETS: tuple[tuple[str, str, str], ...] = (
     ("langchain", "benches/golden/langchain", "ca2050db0db5b1e2"),
 )
 
-#: 官方四靶场的合并基线（实测于 `main @ 5b60fc4`）。逐仓原始证据见
-#: `benches/results/raw-task109-*.md`（正例数 36 / 19 / 19 / 19）。
+#: 官方四靶场的合并基线（实测于 `main @ 20346f8`，`company-wsl`）。
+#: 正例数 36 / 19 / 19 / 31 = 105。
 #: `--verify` 用它守住"离线复算 = 官方口径"。
-OFFICIAL_BASELINE = (0.892, 0.925, 0.684, 93)
+#:
+#: **必须配合侧车缓存**：provider 的 query 向量不是逐位可复现的（实测 `api:voyage-4-lite`
+#: 165 条 query 跨进程只有 65 条逐位相同，最大绝对差 5.6e-3），不缓存则 R@5 在
+#: 0.8857 / 0.8952 之间摆动，超过下面的 0.002 容差。本值是在侧车文件上测得的。
+#:
+#: **口径变更史（勿删，否则下次漂移又无人察觉）**：
+#: - `main @ 5b60fc4`：`(0.892, 0.925, 0.684, 93)`，langchain 20 条；
+#: - `6836deb` / `7167388` / `83d877a` 三次提交把 langchain 扩到 26 / 29 / 32 条，
+#:   正例数 93 → 105，MRR 0.6844 → 0.6678（−0.0166，超噪声阈值）；
+#: - 2026-09-17 更新为此值，并在同一轮复核中发现 `vector_rank_top=0` 的信号
+#:   从 −0.0334 衰减到 −0.0138（见 `docs/core-architecture-runtime-review-assessment.md` §2）。
+OFFICIAL_BASELINE = (0.8857, 0.9238, 0.6678, 105)
 
-#: 噪声上限：93 条正例下改 1 条用例的排名即可动 ~0.002 MRR。
+#: 噪声上限：105 条正例下改 1 条用例的排名即可动 ~0.002 MRR。
 NOISE = 0.005
+
+#: `--verify` 的基线容差。
+#:
+#: **为什么不是 0.002**：那是理论上的“1 条用例排名变化”，但 provider 本身的
+#: query 向量噪声就能造成多条用例各掉一位——实测同一批 query 重新预热一次，
+#: 合并 R@5 在 0.8857 / 0.8952 之间摆动（差 0.0095）。容差比 provider 噪底还紧，
+#: 自检就会变成随机的假警报（这正是 2026-09-17 复核时发现 --verify 间歇性失败的原因）。
+#: 侧车缓存能把**同机**跑分锁成逐位一致，但换机器重新预热仍然会落到噪声带的另一头，
+#: 因此容差必须高于噪底。
+VERIFY_TOLERANCE = 0.012
 
 
 def default_data_root() -> str:
@@ -87,13 +109,32 @@ def default_data_root() -> str:
     )
 
 
-def precompute(data_root: str) -> dict[str, list]:
-    """真实 embedding 跑一次：每题只做召回，留下候选池供后续任意重算。"""
+def default_vector_cache(data_root: str) -> Path:
+    """侧车文件默认路径：索引根下的 ``query-vectors.json``。"""
+    return Path(data_root) / "query-vectors.json"
+
+
+def precompute(data_root: str, cache: PersistentQueryVectorCache) -> dict[str, list]:
+    """真实 embedding 跑一次：每题只做召回，留下候选池供后续任意重算。
+
+    **query 向量必须过侧车缓存**（否则基线不可复现）：实测 `api:voyage-4-lite` 的
+    ``embed_query()`` 同一输入会间歇返回**略有差异**的向量（165 条 query 跨进程只有 65 条
+    逐位相同，最大绝对差 5.6e-3），足以让个别用例的排名掉一位——同一命令连跑四次，
+    合并 R@5 在 0.8857 / 0.8952 之间摆动（3 用例的差），超过 ``--verify`` 的 0.002 容差。
+    缓存后命中即逐位复用，抖动消失；未命中才调 provider 并写回。
+    """
     pre: dict[str, list] = {}
+    bound = False
     for name, golden, project in TARGETS:
         engine = Engine.open(data_root)
         pre[name] = []
         with engine._open_project(project) as (store, vectors, provider):
+            if not bound:
+                # 侧车自证字段（model/dim）：不绑定则文件里是 null，
+                # 将来拿别个模型的向量来跑也无从察觉（qcache 的 identity 校验会退化为空操作）。
+                profile = provider.profile
+                cache.bind_identity(model=profile.model_id, dim=profile.dim)
+                bound = True
             for case in load_cases(ROOT / golden):
                 result = recall(
                     store,
@@ -101,6 +142,7 @@ def precompute(data_root: str) -> dict[str, list]:
                     provider=provider,
                     vector_store=vectors,
                     limits=RecallLimits(),
+                    cache=cache,
                 )
                 pre[name].append((case, result.candidates))
         print(f"  预计算 {name}: {len(pre[name])} 题", flush=True)
@@ -259,6 +301,16 @@ def main() -> int:
     ap.add_argument("--data", default=default_data_root(), help="索引根（默认复用持久索引）")
     ap.add_argument("--axis", default=None, help="只跑某个轴（默认全跑）")
     ap.add_argument("--verify", action="store_true", help="只校验离线复算 = 官方基线")
+    ap.add_argument(
+        "--vector-cache",
+        type=Path,
+        default=None,
+        help=(
+            "query 向量侧车文件（默认 <索引根>/query-vectors.json）。**必须持久化**："
+            "provider 的 query 向量不是逐位可复现的，不缓存则基线会随机漂移，"
+            "--verify 将间歇性失败。首次跑会联网预热并写回，之后完全离线。"
+        ),
+    )
     args = ap.parse_args()
 
     if not (Path(args.data) / "projects").is_dir():
@@ -267,7 +319,12 @@ def main() -> int:
 
     print(f"索引根：{args.data}")
     print("预计算召回（真实 embedding，只做一次）…", flush=True)
-    pre = precompute(args.data)
+    cache_path = args.vector_cache or default_vector_cache(args.data)
+    cache = PersistentQueryVectorCache(cache_path)  # __init__ 内部已 load
+    print(f"query 向量侧车：{cache_path}（已有 {len(cache)} 条）", flush=True)
+    pre = precompute(args.data, cache)
+    written = cache.put_all()
+    print(f"query 向量侧车已落盘：{written} 条", flush=True)
 
     base = evaluate(args.data, pre)
     print(
@@ -275,7 +332,8 @@ def main() -> int:
         f"MRR={base[2]:.4f}  n={base[3]}"
     )
     expected = OFFICIAL_BASELINE
-    if abs(base[0] - expected[0]) > 0.002 or abs(base[2] - expected[2]) > 0.002:
+    drift = max(abs(base[0] - expected[0]), abs(base[2] - expected[2]))
+    if drift > VERIFY_TOLERANCE:
         print(
             f"!! 离线复算与官方基线不符：得到 {base[:3]}，期望 {expected[:3]}。\n"
             "   说明离线口径已漂移或索引/代码已变——本脚本的结论此时不可用。",
@@ -312,7 +370,7 @@ def main() -> int:
             f"{result[2]:8.4f}{delta:+9.4f}  {verdict}"
         )
     print(
-        f"\n判读纪律：93 条正例下改 1 条用例的排名即可动约 0.002 MRR；"
+        f"\n判读纪律：{OFFICIAL_BASELINE[3]} 条正例下改 1 条用例的排名即可动约 0.002 MRR；"
         f"|ΔMRR| < {NOISE} 一律按噪声处理（见模块 docstring 与 "
         "benches/results/param-sensitivity-2026-09-15.md）。"
     )
