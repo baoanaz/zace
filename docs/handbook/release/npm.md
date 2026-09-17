@@ -209,6 +209,7 @@ bash scripts/check-version.sh v0.0.5
 | `npm publish` 报 `cannot publish over` | 该版本号已发布过（**不可逆**）。换 patch 版本号 |
 | `npm publish` 报 `403 … Package name triggered spam detection` | **包名**被 npm 防刷规则拦（不是速率）。实测：`zace-client-win32-x64` 必然被拒，改名 `zace-client-windows-x64` 即通过 —— `win32` 是恶意软件命名的常见特征词。**注意**：npm 包名用 `windows`，而 package.json 的 `os` 字段必须仍是 `win32`（Node `process.platform` 的取值） |
 | CI `publish` 401 | 缺 `NPM_TOKEN` secret，或 token 不是 Automation 类型 |
+| `pre-verify` 报「查不到」但 `publish-platforms` 是绿的 | **registry 读端缓存还没传播**（实测一次发布里 6 个子包在 4 分钟内陆续可见），不是包没发出去。verify 现已自动重试 ≈6 分钟；若仍失败就手动重跑该 job，**不要放弃版本号** |
 | `latest` 没指到新版本 | `promote` 步骤失败：手动 `npm dist-tag add zace-client@<v> latest` |
 | 想回退 latest 到旧版本 | `npm dist-tag add zace-client@<旧版本> latest`（**不要**用 `npm unpublish`） |
 
@@ -261,12 +262,31 @@ please contact support at https://npmjs.com/support
 升到 0.0.6 重新完整发布；0.0.5 从未发主包，用户无感知。
 这就是"失败不移动 tag、递增新版本"这条约定的来源。
 
+### 0.0.6：Windows 改名生效，但 pre-verify 误判「查不到」
+
+改名后 6 个平台子包**全部发布成功**（含 `windows-x64`/`windows-arm64`），
+但 `pre-verify` 在 60s 内宣告查不到并失败，主包未发。
+
+**根因不是发布失败，是读端缓存传播**：
+
+```text
+publish-platforms  02:47:25 → 02:47:53（绿）
+pre-verify         02:47:55 → 02:49:08（失败，预算 6×10s）
+注册表里 0.0.6 可见：02:47:47 … 02:51:52（linux-x64 直到 02:50:15 才可见）
+```
+
+即 linux-x64 可见的时刻**晚于** pre-verify 结束。把成功的发布判成失败会触发错误处置
+（放弃版本号）。修法：verify 重试预算 60s → ≈6 分钟（`--attempts`/`--interval` 可配），
+并加守卫 `test_verify_retry_budget_tolerates_registry_propagation` 钉住下限。
+
 ### 结论（沉淀成规则）
 
 1. 发布是**七步不可逆流程**，必须由 `release-client.sh` 一条命令走完，
    避免手工零散执行造成状态半成品（0.0.5 就是半成品：4 个子包已占版本号）；
 2. 失败时**放弃版本号**，不要试图修补已有 tag/版本；
-3. npm 报错先看**完整错误串**，不要凭"时间间隔"猜原因。
+3. npm 报错先看**完整错误串**，不要凭"时间间隔"猜原因；
+4. **CI 的失败不等于发布失败**：先分清「publish job 红」还是「verify job 红」——
+   后者常常只是 registry 读端缓存没传播完。
 
 ## 7. 与其它发布步骤的关系
 
