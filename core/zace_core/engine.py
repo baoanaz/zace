@@ -63,7 +63,15 @@ from zace_core.pipeline.source import SourceProvider
 from zace_core.retrieval import RecallLimits, recall
 from zace_core.retrieval.exact import extract_inferred
 from zace_core.retrieval.expand import REASON_REEXPORT, ExpansionLimits, expand
-from zace_core.retrieval.gap import GapLimits, GapPlan, SymbolMember, plan_gaps
+from zace_core.retrieval.gap import (
+    GAP_REASON_CALLEE,
+    GAP_REASON_CONTAINER,
+    GAP_REASON_REEXPORT,
+    GapLimits,
+    GapPlan,
+    SymbolMember,
+    plan_gaps,
+)
 from zace_core.retrieval.rerank import collect_signals, rerank
 from zace_core.storage import Store
 from zace_core.types import (
@@ -674,6 +682,10 @@ class Engine:
                     config=self._budget(max_tokens, mode),
                     signals=collect_index_signals(store, ranked),
                     backfill=backfill,
+                    # 本轮的主贪心循环会把预算再填满一次（candidates 含全部候选），
+                    # 若不为补检留出余量，补检循环会在第一行 ``break``——
+                    # 实测 LC-21：首轮留的余量被本轮贪心吃掉，19 个补检候选全部落空。
+                    reserve_backfill=True,
                 )
         degraded_reason = recalled.degraded_reason
         if vector_gap is not None:
@@ -870,14 +882,49 @@ class Engine:
                 return 2
             return 0 if fqn in callees_of_packed else 1
 
-        def order_key(chunk_id: str) -> tuple[int, float, int, str]:
+        def source_priority(chunk_id: str) -> int:
+            """补检来源的确定性分档（0 最优先）——决定配额先给谁。
+
+            为什么需要（实测 langchain LC-21，2026-09-17）：补检总额（``backfill_ratio``
+            × hard_cap = 3500）在第 7 条就被吃完，而真正的答案
+            ``_chain_model_call_handlers``（90 行 / 1262 token）排在第 9 位。
+            吃掉配额的前 7 条里，**3 条是同一个 ``create_agent`` 切片**（G2 文档符号
+            引用对着同一符号的三条 spec_references）——它们内容完全重复，却各占一笔预算。
+
+            分档依据是“该来源对回答的不可替代性”：
+
+            - 0：G3 容器成员的被调用方——调用链题的唯一答案（``_chain_*`` / ``_make_*``）；
+            - 1：G4 公开导出点——“在哪导出”类题的唯一答案；
+            - 2：G1 同容器成员；
+            - 3：G2 文档符号引用——它常与其它规则指向**同一个** chunk（本例的 3 条
+              ``create_agent``），重复计份；排在最后，让真正的实现函数先拿配额。
+
+            这不改变任何闸门，只改**同一次补检内部的先后**（``plan.chunk_ids`` 原本按
+            G1→G2→G3→G4 固定顺序，与本档位恰好相反）。
+            """
+            reason = plan.reason_for(chunk_id) or ""
+            if reason.startswith(GAP_REASON_CALLEE):
+                return 0
+            if reason.startswith(GAP_REASON_REEXPORT):
+                return 1
+            if reason.startswith(GAP_REASON_CONTAINER):
+                return 2
+            return 3
+
+        def order_key(chunk_id: str) -> tuple[int, int, float, int, str]:
             candidate = by_id[chunk_id]
             span = (
                 (candidate.end_line - candidate.start_line + 1)
                 if candidate.start_line is not None and candidate.end_line is not None
                 else 1 << 30
             )
-            return (chain_priority(chunk_id), -candidate.score, span, chunk_id)
+            return (
+                source_priority(chunk_id),
+                chain_priority(chunk_id),
+                -candidate.score,
+                span,
+                chunk_id,
+            )
 
         missing = [
             by_id[chunk_id]

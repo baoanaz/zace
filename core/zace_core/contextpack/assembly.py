@@ -95,6 +95,16 @@ MODE_DEEP = "deep"
 #: 相邻区间合并的行距阈值（Module/03 §3：同文件两 chunk 行距 ≤10 → 合并）。
 ADJACENT_GAP_LINES = 10
 
+#: 低于此 ``hard_cap`` 就不为二轮补检预留预算（TASK-MCP-BACKFILL-RESERVE）。
+#:
+#: 为什么需要这条下限（实测 service ``test_missing_evidence_retrieval_truncated``）：
+#: 该用例用 ``maxTokens=600`` 跑，此时按 ``backfill_ratio`` 预留会把首轮压到装不下
+#: 任何内容，于是产出与“预算裁剪”无关的 ``no_context_match``，把
+#: ``missingEvidence == ["retrieval_truncated"]`` 的断言打翻。
+#: 1500 的取法：补检目标（实测 ``_chain_model_call_handlers`` 降级后 320 token、
+#: 未降级 1262）在此以下的预算里本来就装不下，预留没有意义。
+BACKFILL_RESERVE_MIN_HARD_CAP = 1_500
+
 #: TASK-095（用户 2026-09-14 拍板）：相对 top-1 的分数阈值。
 #: 分数 ≥ ``top1_score × 本值`` 的候选才进装填循环（相对而非绝对：实测同仓库不同查询的
 #: top-1 在 1.2~5.8 之间波动，绝对阈值无法通用；"明显弱于最佳命中"才是噪音的判据）。
@@ -311,6 +321,7 @@ class BudgetConfig:
 
 
 FAST_BUDGET = BudgetConfig(hard_cap=14_000, single_file_tokens=2_500, docs_tokens=950)
+
 #: Deep 16K 硬顶（Module/03 §4.2 裁决口径；TASK-MCP-BUDGET 将 12K→16K）。
 #:
 #: **此前是死配置**：``Engine.search_with_trace`` 在两次 ``assemble`` 调用里都硬编码
@@ -581,6 +592,7 @@ def assemble(
     structural_result: bool = False,
     graph_boundary: bool = False,
     backfill: Sequence[tuple[Candidate, str]] = (),
+    reserve_backfill: bool = False,
 ) -> ContextPack:
     """候选（已 rerank）→ 预算内的 ContextPack（CF-03 字段）。
 
@@ -589,6 +601,10 @@ def assemble(
     （``config.backfill_ratio``）补入，并受与主装填**同一套**上限约束（单文件、tier3、
     docs_ratio、hard_cap）——不绕过任何闸门（TASK-108 的教训，见 ``BudgetConfig`` 注释）。
     ``reason`` 写进证据的 ``reason`` 行，让 Agent 能看出"这条是二轮补来的"。
+
+    ``reserve_backfill``（TASK-MCP-BACKFILL-RESERVE）：**首轮**装配时为主预算收窄出
+    ``backfill_ratio × hard_cap`` 的余量，保证二轮补检有额度可用。由 engine 在
+    首轮装配时传入（它已知道后面会跑 gap 检查）；二轮自己传 False。
     """
     active = config or budget_for(mode)
     single_file_cap = _single_file_cap(active)
@@ -670,11 +686,44 @@ def assemble(
             break
     reserved_id = reserved.candidate.chunk_id if reserved is not None else None
 
+    # 补检份额预留（TASK-MCP-BACKFILL-RESERVE）：首轮贪心不得吃掉二轮补检的配额。
+    #
+    # 为什么必须预留（实测 langchain LC-21，2026-09-17）：首轮贪心把预算吃到只剩
+    # 384~447 token，而补检目标 `_chain_model_call_handlers` 要 1262 token、
+    # `_chain_tool_call_wrappers` 要 549 —— **一个都放不下**，19 个补检候选全部
+    # 因 "预算不足" 被 break 掉。于是出现最反直觉的现象：把 ``backfill_ratio``
+    # 从 0.35 调到 1.0、``max_tokens`` 从 10K 加到 30K，**补检命中数一个不变**
+    # ——因为卡点不在补检自己的份额，而在首轮把余量吃光了。
+    #
+    # 补检候选带**确定性结构依据**（gap.py 判定的容器成员 / 文档引用），
+    # 且是“调用链断裂”的唯一答案；首轮的可比候选（同分 tier3 邻居、测试同名符号）
+    # 没有这种依据。故从首轮收窄出 ``backfill_ratio × hard_cap`` 的余量，
+    # 与 spec 保底预留同一套语义（预留而非切走：若无补检候选，预算照样全给首轮）。
+    #
+    # 注意“预留”与“独立预算”的区别：``backfill_ratio`` 一直存在，但它只管**上限**
+    # （补检最多用这么多），不保证**有余额可用**——本处补的正是这一环。
+    #
+    # 但预留**不能把首轮挤空**（实测踩到）：极小预算（如 service 的
+    # ``test_missing_evidence_retrieval_truncated`` 用 ``maxTokens=600``）下，
+    # 按比例预留会把首轮压到无内容可装，于是产出与“预算裁剪”无关的
+    # ``no_context_match``，把该用例的 ``missingEvidence`` 断言打翻。故加两道约束：
+    #   ① 预留量不超 ``hard_cap / 2``（首轮至少留一半）；
+    #   ② 预算太小（< :data:`BACKFILL_RESERVE_MIN_HARD_CAP`）就不预留——
+    #      那种规模下补检候选（数百 token 起）本来也装不下。
+    backfill_reserve = 0
+    if reserve_backfill and active.hard_cap >= BACKFILL_RESERVE_MIN_HARD_CAP:
+        backfill_reserve = min(
+            int(active.hard_cap * active.backfill_ratio), active.hard_cap // 2
+        )
+
     def _hard_limit() -> int:
         """预留期间收窄的硬顶；预留块被装填后即归还预留预算（R15，不再挤压其它候选）。"""
         pending = reserved_id is not None and reserved_id not in placed_ids
         reserve_tokens = reserved.tokens if pending and reserved is not None else 0
-        return max(active.hard_cap - reserve_tokens, active.framework_overhead)
+        return max(
+            active.hard_cap - reserve_tokens - backfill_reserve,
+            active.framework_overhead,
+        )
 
     for candidate in pool:
         if candidate.chunk_id in placed_ids:
@@ -788,6 +837,10 @@ def assemble(
             tokens = slot.tokens
             file_key = candidate.path or ""
             over_file_cap = file_usage.get(file_key, 0) + tokens > single_file_cap
+            # 用 ``_hard_limit()``（含补检预留）而不是 ``active.hard_cap``：
+            # 用裸 hard_cap 会让保底分支吃掉为二轮补检留的余量——
+            # 实测 LC-21：保底先把 used 冲到 11344，补检目标（320 token）
+            # 因 ``over_budget`` 差 115 token 被丢弃。
             if over_file_cap or used + tokens > active.hard_cap:
                 degraded = _degrade(candidate, slot, active, store)
                 if degraded is not None:
@@ -903,7 +956,30 @@ def assemble(
                     slot.base_reason = slot.item.reason
                 tokens = slot.tokens
         if not exempt_first and file_usage.get(file_key, 0) + tokens > single_file_cap:
-            continue
+            # 补检目标的单文件豁免（TASK-MCP-BACKFILL-RESERVE，实测驱动）。
+            #
+            # 为什么（实测 langchain LC-21，2026-09-17）：目标 ``_chain_model_call_handlers``
+            # （降级后仅 320 token）被 ``single_file_cap``（2500）拦下，因为同文件的
+            # ``create_agent``(474) + ``_build_commands``(585) + 已补入的
+            # ``_make_model_to_model_edge`` / ``_chain_tool_call_wrappers`` 已占 2224。
+            # 结果是：**同文件里先到的兄弟函数把唯一能回答该问题的实现挤出了包**。
+            #
+            # 为何可以豁免：单文件上限的目的（见 ``single_file_ratio``）是防止
+            # “一个文件里的多个候选挤掉其它文件的证据”。补检是**最后一轮**，
+            # 首轮证据已全部就位，不会再挤走任何东西；而且补检整体仍受
+            # ``backfill_ratio`` 独立预算约束（``over_backfill`` 仍是硬闸），不会失控。
+            # 仅在**已降级到单成员上限以内**时豁免（``tokens <= backfill_single_cap``）：
+            # 完整正文仍会被拦，避免一个巨函数靠豁免独吞整个单文件配额。
+            #
+            # 注意用**降级后**的 ``tokens`` 重算 ``over_overfill``/``over_budget``：
+            # 上面那两个变量是用降级**前**的 tokens 算的（用于判断要不要降级），
+            # 降级后直接沿用会把已变小、已能装下的候选误判为超预算而丢弃。
+            over_backfill_now = backfill_used + tokens > backfill_cap
+            over_budget_now = (
+                base_flow_tokens + used + backfill_used + tokens > active.hard_cap
+            )
+            if tokens > backfill_single_cap or over_backfill_now or over_budget_now:
+                continue
         if tokens > backfill_single_cap and not first_backfill:
             continue  # 降级后仍超单成员上限 → 放弃（不与小成员抢配额）
         # **不重复受 tier3 配额约束**（TASK-109 的关键设计决定，实测驱动）：
