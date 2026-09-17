@@ -911,16 +911,48 @@ class Engine:
                 return 2
             return 3
 
-        def order_key(chunk_id: str) -> tuple[int, int, float, int, str]:
+        #: 查询词元（与 ``callees_of`` 内的 ``rank`` 同源：同一个 ``_query_words``）。
+        #: 提到函数级只算一次，避免在 ``order_key`` 里每个候选重算。
+        query_words = _query_words(query)
+
+        def word_overlap(chunk_id: str) -> int:
+            """候选符号名与查询词面的重合度（复用 ``callees_of.rank`` 的同一条规则）。
+
+            为什么需要（实测 langchain LC-21，2026-09-17）：补检目标
+            ``_chain_model_call_handlers`` 与同容器的 4 个兄弟同为 G3 来源、同为 tier3、
+            score 均为 0.0，原先只能按 span 升序 tie-break，于是 4 个 span 更小的兄弟
+            （``_make_model_to_model_edge`` 25 行 … ``_chain_async_tool_call_wrappers`` 62 行）
+            排在目标（90 行）之前，累计 2406 token 先把 ``backfill_ratio`` 配额耗掉，
+            目标（第 6 位、累计 4927）直接出局。
+
+            而名字里的词面证据能把它们区分开：目标名含查询里的 ``model`` 与 ``call``
+            （overlap=2），四个兄弟只含一个（overlap=1）。
+
+            **这不是新启发式**：``callees_of`` 内部的 ``rank``（本文件 :818-838）早在用
+            完全相同的 ``_query_words`` + ``_split_identifier`` overlap 判定，当时的注释
+            写明理由——``_make_tools_to_model_edge`` 与 ``_chain_*`` 都是私有函数，
+            单靠“私有优先”排不出来，必须用词面证据（与 BM25 同源）。本处只是把**同一个
+            已存在的原则**补到 ``order_key``（先前那里只有 span 升序，与 callees_of 不一致）。
+            """
+            fqn = by_id[chunk_id].symbol_fqn
+            if not fqn:
+                return 0
+            name = fqn.replace("::", ".").rsplit(".", 1)[-1]
+            return len([t for t in _split_identifier(name) if t in query_words and len(t) >= 3])
+
+        def order_key(chunk_id: str) -> tuple[int, int, int, float, int, str]:
             candidate = by_id[chunk_id]
             span = (
                 (candidate.end_line - candidate.start_line + 1)
                 if candidate.start_line is not None and candidate.end_line is not None
                 else 1 << 30
             )
+            # 分层：来源分档 → 调用链闭合 → 词面重合 → 分数 → span → chunk_id。
+            # 后三项仍是原有 tie-break（保证与改动前同分候选的相对次序不变）。
             return (
                 source_priority(chunk_id),
                 chain_priority(chunk_id),
+                -word_overlap(chunk_id),
                 -candidate.score,
                 span,
                 chunk_id,
