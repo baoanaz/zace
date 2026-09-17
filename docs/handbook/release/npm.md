@@ -46,6 +46,14 @@ bash scripts/release-client.sh 0.0.8
 
 **push tag 后就结束，不等 CI。** 结果直接在 GitHub Actions 页面看。
 
+> **Agent 行为约定（硬性）**：执行到 `push tag` 成功即**停止**，只回报
+> “vX.Y.Z 已推送 / release CI 已触发”。禁止 `sleep` 等待、禁止轮询
+> `npm view`、禁止用 `gh` 或 GitHub API 查 CI 状态、禁止手动重跑或补发。
+> 主人几分钟后自己打开 GitHub Actions 页面看即可。
+>
+> CI 失败时也只做只读分析并汇报；禁止移动 tag、force push、`npm unpublish`、
+> 自行发布新版本号或自行改 `latest`。
+
 ## 4. CI 做什么
 
 `v*` tag 触发 `.github/workflows/release.yml`：
