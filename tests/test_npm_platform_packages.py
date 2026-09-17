@@ -250,3 +250,24 @@ def test_release_script_runs_tests_and_version_check():
     assert "check-version.sh" in text
     assert "uv run pytest" in text
     assert "check_dependency_direction.py" in text
+
+
+def test_verify_retry_budget_tolerates_registry_propagation():
+    """verify 的重试预算必须够长，否则**成功的发布会判成失败**。
+
+    真实故障（0.0.6）：`pre-verify` 在 60s 内宣告「查不到」，而包其实已发布成功
+    （publish-platforms 是绿的）—— registry 读端缓存传播了约 4 分钟
+    （6 个子包在 02:47:47-02:51:52 陆续可读）。
+    预算太短会导致错误处置（"放弃版本号"），故钉住下限。
+    """
+    import re
+
+    text = (ROOT / "scripts/make-platform-packages.py").read_text(encoding="utf-8")
+    attempts = int(
+        re.search(r'"--attempts",\s*\n\s*type=int,\s*\n\s*default=(\d+)', text).group(1)
+    )
+    interval = float(
+        re.search(r'"--interval",\s*\n\s*type=float,\s*\n\s*default=([0-9.]+)', text).group(1)
+    )
+    seconds = attempts * interval
+    assert seconds >= 300, f"verify 重试预算仅 {seconds:.0f}s，不足以覆盖 registry 传播（应 ≥300s）"

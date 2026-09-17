@@ -489,7 +489,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if not missing:
             break
         if attempt < attempts:
-            time.sleep(10)
+            # registry 的**读端点缓存**传播可能长达数分钟：实测 0.0.6 一次发布里，
+            # 6 个包在 02:47:47-02:51:52 陆续可读，而 pre-verify 在 02:47:55-02:49:08
+            # 跑完（60s 预算）——于是它报"查不到"，而包其实**已经发布成功**
+            # （publish-platforms 是绿的）。故默认给到约 6 分钟。
+            time.sleep(args.interval)
     problems = list(missing)
     if args.phase == "latest":
         latest = _registry_version(MAIN_PACKAGE_NAME)
@@ -503,6 +507,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if missing and args.phase == "platforms":
             print(
                 "  ⚠️ 子包不齐：**不要发主包**（该平台用户会静默装不上）。",
+                file=sys.stderr,
+            )
+            print(
+                "  先区分两件事：① 真的没发出去（看 publish-platforms job 的日志）；"
+                "② 只是 diff 读端缓存还没传播（publish 是绿的、几分钟后再查就有）。",
                 file=sys.stderr,
             )
         if args.phase == "latest":
@@ -573,8 +582,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--attempts",
         type=int,
-        default=6,
-        help="registry 同步延迟导致的重试次数（每次间隔 10s）",
+        default=24,
+        help="registry 同步延迟导致的重试次数（默认 24 次 × 15s ≈ 6 分钟）",
+    )
+    verify.add_argument(
+        "--interval",
+        type=float,
+        default=15.0,
+        help="重试间隔秒数（默认 15s）",
     )
     verify.set_defaults(func=cmd_verify)
 

@@ -230,12 +230,13 @@ if [ -z "$run_url" ] || [ "$WAIT" -eq 0 ]; then
   echo "  npm view $NPM_PACKAGE version"
   echo "  npm view $NPM_PACKAGE dist-tags"
 else
-  # registry 同步有秒级延迟，最多重试 6 次 × 10s
+  # registry 的读端缓存传播可能长达数分钟（实测一次发布里 6 个子包在 4 分钟内陆续可读），
+  # 故给到约 6 分钟；这只是"等自己刚发的包变可见"，不是在轮询别人的状态。
   latest=""
-  for attempt in 1 2 3 4 5 6; do
+  for attempt in $(seq 1 24); do
     latest="$(npm view "$NPM_PACKAGE" version 2>/dev/null || echo "")"
     [ "$latest" = "$VERSION" ] && break
-    sleep 10
+    sleep 15
   done
   echo "  npm view $NPM_PACKAGE version  → ${latest:-（查询失败）}"
   npm view "$NPM_PACKAGE" dist-tags 2>/dev/null || true
