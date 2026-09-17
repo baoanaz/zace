@@ -58,9 +58,16 @@ class VectorStoreLike(Protocol):
 class QueryEmbeddingCache:
     """进程内 query embedding TTL 缓存（同一 query 默认 60s 复用）。
 
-    - key = query 原文（不做归一化：分词器两侧已由 BM25 通道负责，向量侧原样输入）；
+    - key = ``(model_id, query 原文)``。**必须带模型身份**（TASK-REVIEW-RUNTIME P2-1）：
+      缓存现在由 ``Engine`` 跨查询持有，而 ``Engine.set_provider()`` 可以在生命周期内换模型
+      （``--replay`` 切离线 provider、D-47 换用户模型）。只按 query 做 key 会取到**另一个
+      模型**的向量——维度不同会直接崩，维度相同则静默给出错误相似度，更难察觉；
+    - 不做 query 归一化：分词器两侧已由 BM25 通道负责，向量侧原样输入；
     - 过期条目在 ``get`` 时惰性淘汰；``maxsize`` 溢出时按插入顺序淘汰最旧条目（FIFO）；
     - ``clock`` 可注入（测试用假时钟，避免 sleep）。
+
+    模型身份通过 :meth:`bind_identity` 或构造参数给出；未给时退化为旧行为（只按 query），
+    便于单测与不关心模型的调用点。
     """
 
     def __init__(
@@ -68,24 +75,44 @@ class QueryEmbeddingCache:
         ttl_s: float = DEFAULT_QUERY_CACHE_TTL_S,
         maxsize: int = _DEFAULT_CACHE_MAXSIZE,
         clock=time.monotonic,
+        model: str | None = None,
     ) -> None:
         self._ttl_s = ttl_s
         self._maxsize = maxsize
         self._clock = clock
+        self._model = model
         self._entries: dict[str, tuple[float, tuple[float, ...]]] = {}
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
 
+    @property
+    def model(self) -> str | None:
+        """当前缓存的模型身份（``None`` = 未绑定，退化为只按 query 做 key）。"""
+        return self._model
+
+    def bind_identity(self, model: str | None) -> bool:
+        """绑定/切换模型身份；变了就清空（旧向量不再适用）。返回是否发生了切换。"""
+        with self._lock:
+            if self._model == model:
+                return False
+            self._model = model
+            self._entries.clear()
+            return True
+
+    def _key(self, query: str) -> str:
+        return f"{self._model}\x00{query}" if self._model is not None else query
+
     def get(self, query: str) -> list[float] | None:
         with self._lock:
-            entry = self._entries.get(query)
+            key = self._key(query)
+            entry = self._entries.get(key)
             if entry is None:
                 self.misses += 1
                 return None
             stored_at, vector = entry
             if self._ttl_s >= 0 and self._clock() - stored_at > self._ttl_s:
-                del self._entries[query]
+                del self._entries[key]
                 self.misses += 1
                 return None
             self.hits += 1
@@ -93,10 +120,11 @@ class QueryEmbeddingCache:
 
     def put(self, query: str, vector: Sequence[float]) -> None:
         with self._lock:
-            if query not in self._entries and len(self._entries) >= self._maxsize:
+            key = self._key(query)
+            if key not in self._entries and len(self._entries) >= self._maxsize:
                 oldest = next(iter(self._entries))
                 del self._entries[oldest]
-            self._entries[query] = (self._clock(), tuple(float(v) for v in vector))
+            self._entries[key] = (self._clock(), tuple(float(v) for v in vector))
 
     def clear(self) -> None:
         with self._lock:

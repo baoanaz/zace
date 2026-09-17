@@ -20,10 +20,11 @@ R4（``FileDelta`` 三集合）、R8（imports 边缘）、R10（向量相似度
   （不写 SQLite）；``full_reparse`` → 遍历 provider 全部文件重跑增量 + 重建向量表。
 - **向量阶段分窗（内存护栏）**：``_embed_and_upsert`` 按 ``批大小 × 并发`` 开窗、逐窗嵌入与
   落库，不把整仓 chunk 的向量一次性常驻内存（理由与量级见 ``_embed_window_size``）。
-- **向量清理**：``FileDelta.removed_chunk_ids`` 直接删；整文件删除用 Indexer 进程内记录过的
-  chunk id 清理（见 ``orphan_files`` 与执行记录"未决问题"：``Store`` 目前没有"按文件列 chunk id"
-  或"``apply_deletions`` 返回被删 id"的原语，跨进程删除会留孤儿向量——检索侧会跳过、下一次全量
-  重建清理）。
+- **向量清理**：``FileDelta.removed_chunk_ids`` 直接删；整文件删除由
+  ``Store.apply_deletions`` 在同一事务里返回被删 chunk id 后清理（TASK-REVIEW-RUNTIME
+  P1-2 修掉了旧的跨进程孤儿向量缺陷：之前依赖 ``Indexer`` 进程内的 ``_known_chunks``，
+  而 ``Engine`` 每次 ingest 都新建 ``Indexer``，跨调用删除就只删 SQLite 不删向量）。
+  ``orphan_files`` 仍上报“本进程未见过的删除路径”，但那只是排查信号，不再影响向量清理。
 - 单项目串行：不做并发（跨项目并行属 service 层职责）。
 - **单文件失败隔离**（TASK-018 §C，Module/01 §4.3 per-file 韧性）：解析失败走 fallback；
   但“切分/落库”环节的意外异常只写 ``report.errors`` 并跳过该文件，**不**中断整次 ingest，
@@ -57,6 +58,7 @@ from zace_core.chunking import (
 from zace_core.hashing import file_content_hash
 from zace_core.interfaces import EmbeddingProvider
 from zace_core.parsing.registry import EXTENSION_LANGUAGE, detect_language, get_parser
+from zace_core.pipeline.generated import is_generated
 from zace_core.pipeline.ignore import (
     SKIP_REASON_BINARY,
     IndexScope,
@@ -395,7 +397,12 @@ class Indexer:
         parsed = self._parse(item.path, text, language, acc)
         try:
             chunks = tuple(split_file(parsed, text))
-            delta = self._store.apply_file_change(parsed, chunks, file_content_hash(item.data))
+            delta = self._store.apply_file_change(
+                parsed,
+                chunks,
+                file_content_hash(item.data),
+                generated=is_generated(item.path, text),
+            )
         except Exception as exc:  # 单文件切分/落库失败 → 如实记录并跳过（TASK-018 §C）
             acc.errors.append(f"{item.path}: {type(exc).__name__}: {exc}")
             return None
@@ -438,17 +445,23 @@ class Indexer:
     # ------------------------------------------------------------------ 删除
 
     def _delete_files(self, paths: Sequence[str], acc: _Accumulator) -> None:
-        chunk_ids: list[str] = []
+        """整文件删除：先取被删 chunk id，再清向量。
+
+        为什么不再依赖 ``_known_chunks``（TASK-REVIEW-RUNTIME P1-2）：那是**本进程**
+        写入记录的 id，而 ``Engine`` 每次 ingest 都新建 ``Indexer``。跨调用/跨进程删除时
+        内存里没有这批 id，旧行为只删 SQLite 不删 LanceDB，留下孤儿向量。
+        现在改由 ``Store.apply_deletions`` 在同一事务里取 id 并返回（无 TOCTOU）。
+
+        ``_known_chunks`` 仍保留：它用于区分“曾索引过”与“从未见过”（``orphan_files``），
+        这是排查用的信号，与向量清理解耦。
+        """
         for path in paths:
-            known = self._known_chunks.pop(path, None)
-            if known is None:
+            if self._known_chunks.pop(path, None) is None:
                 acc.orphan_files.append(path)
-            else:
-                chunk_ids.extend(known)
-        self._store.apply_deletions(list(paths))
+        removed = self._store.apply_deletions(list(paths))
         acc.deleted += len(paths)
-        if chunk_ids:
-            acc.vectors_deleted += self._vectors.delete(chunk_ids)
+        if removed:
+            acc.vectors_deleted += self._vectors.delete(list(removed))
 
     # ------------------------------------------------------------------ 向量
 

@@ -151,6 +151,31 @@ def test_delete_is_idempotent(store: Store) -> None:
     assert store.counts()["files"] == 0
 
 
+def test_apply_deletions_returns_removed_chunk_ids(
+    store: Store,
+    make_parsed: Callable[..., ParsedFile],
+    make_chunk: Callable[..., ChunkDef],
+    make_symbol: Callable[..., SymbolDef],
+) -> None:
+    """P1-2：删除要返回被删 chunk id，调用方据此清向量（防跨进程孤儿向量）。
+
+    为什么这个返回值是必需的：``Engine`` 每次 ingest 新建 ``Indexer``，跨调用删除时
+    进程内的 ``_known_chunks`` 是空的，旧行为只删 SQLite 不删 LanceDB。
+    """
+    _write_code_file(store, make_parsed, make_chunk, make_symbol)
+
+    # 期望值：库内真实存在的 id（make_chunk 的 id = ``{path}:{fqn}:{start}``）。
+    expected = {"src/a.py:f:1", "src/a.py:g:5"}
+    assert {c.id for c in store.chunks_by_ids(sorted(expected))} == expected
+
+    removed = store.apply_deletions(["src/a.py"])
+
+    assert set(removed) == expected
+    # 幂等：再删一次（路径已不存在）不应重复上报 id。
+    assert store.apply_deletions(["src/a.py"]) == ()
+    assert store.apply_deletions(["missing/file.py"]) == ()
+
+
 def test_overload_same_fqn_all_refs_marked_stale(
     store: Store,
     make_parsed: Callable[..., ParsedFile],

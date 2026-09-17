@@ -62,6 +62,42 @@ def test_cache_is_fifo_bounded(provider) -> None:
     assert provider.embed_query_calls == 4  # a 被淘汰 → 重新嵌入
 
 
+def test_model_identity_is_part_of_cache_key(provider) -> None:
+    """P2-1：同一 query 在不同模型下不得互相命中。
+
+    为什么必须有这条：缓存现在由 ``Engine`` 跨查询持有，而 ``set_provider()``
+    能在生命周期内换模型（``--replay`` 切离线 provider、D-47 换用户模型）。
+    只按 query 做 key 就会取到**另一个模型**的向量——维度相同吋静默给出错误相似度。
+    """
+    cache = QueryEmbeddingCache(ttl_s=60.0)
+    cache.bind_identity("api:model-a")
+    embed_query(provider, "token 过期", cache)
+    assert provider.embed_query_calls == 1
+
+    # 同模型 → 命中
+    assert embed_query(provider, "token 过期", cache) == embed_query(provider, "token 过期", cache)
+    assert provider.embed_query_calls == 1
+
+    # 换模型 → 必须重算（且旧条目被清空）
+    assert cache.bind_identity("api:model-b") is True
+    assert len(cache) == 0
+    embed_query(provider, "token 过期", cache)
+    assert provider.embed_query_calls == 2
+
+    # 绑同一身份 → 不清空、不重算
+    assert cache.bind_identity("api:model-b") is False
+    assert len(cache) == 1
+
+
+def test_unbound_cache_falls_back_to_query_only_key(provider) -> None:
+    """未绑身份时退化为旧行为（单测与不关心模型的调用点）。"""
+    cache = QueryEmbeddingCache(ttl_s=60.0)
+    assert cache.model is None
+    embed_query(provider, "token 过期", cache)
+    embed_query(provider, "token 过期", cache)
+    assert provider.embed_query_calls == 1
+
+
 def test_recall_vector_ranks_hits(vector_cls) -> None:
     stub = vector_cls([("a", 0.9), ("b", 0.8), ("c", 0.7)])
     candidates = recall_vector(

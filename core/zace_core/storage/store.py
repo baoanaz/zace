@@ -294,6 +294,8 @@ class Store:
         chunks: Sequence[ChunkDef],
         file_content_hash: str,
         commit: str | None = None,
+        *,
+        generated: bool = False,
     ) -> FileDelta:
         """单事务写入/替换一个文件的全部索引行，返回 content_hash 对账结果。
 
@@ -302,7 +304,10 @@ class Store:
         - ``parsed.unresolved`` 重写本文件 unresolved_refs（status 归 pending）；
         - 本文件旧符号中消失的 fqn → 其 spec_references 置 stale=1；
         - 同名 fqn 的行号漂移 → refs 从旧 id 重挂到新 id（保持 fqn 级引用有效）；
-        - ``commit`` 仅作为同步元数据写入 ``files.commit_id``。
+        - ``commit`` 仅作为同步元数据写入 ``files.commit_id``；
+        - ``generated``（TASK-REVIEW-RUNTIME P2-5）由**扫描/索引期**传入（见
+          :mod:`zace_core.pipeline.generated`）。此列以前硬编码为 0，导致 rerank 只能靠
+          文件名约定代理，无法识别内容 banner（如 ``DO NOT EDIT`` 头）。
         """
         file_path = parsed.path
         new_chunks = list(chunks)
@@ -349,10 +354,11 @@ class Store:
 
             conn.execute(
                 "INSERT INTO files(path, content_hash, language, generated, branch, commit_id,"
-                " indexed_at, parse_errors) VALUES(?, ?, ?, 0, NULL, ?, ?, ?) "
+                " indexed_at, parse_errors) VALUES(?, ?, ?, ?, NULL, ?, ?, ?) "
                 "ON CONFLICT(path) DO UPDATE SET"
                 " content_hash = excluded.content_hash,"
                 " language = excluded.language,"
+                " generated = excluded.generated,"
                 " commit_id = excluded.commit_id,"
                 " indexed_at = excluded.indexed_at,"
                 " parse_errors = excluded.parse_errors",
@@ -360,6 +366,7 @@ class Store:
                     file_path,
                     file_content_hash,
                     parsed.language,
+                    int(generated),
                     commit,
                     int(time.time()),
                     json.dumps(list(parsed.parse_errors), ensure_ascii=False),
@@ -450,14 +457,24 @@ class Store:
                 removed_chunk_ids=tuple(i for i in old_by_id if i not in chunk_ids),
             )
 
-    def apply_deletions(self, paths: Sequence[str]) -> None:
+    def apply_deletions(self, paths: Sequence[str]) -> tuple[str, ...]:
         """级联删除文件：files/chunks/symbols/edges/FTS/unresolved/spec 全清。
 
         引用被删符号的 ``spec_references`` 置 ``stale=1``（行保留，供 MissingEvidence 警告）；
         幂等：路径不存在时不报错。
+
+        **返回被删掉的 chunk id**（TASK-REVIEW-RUNTIME P1-2）：调用方据此清理向量库。
+        为什么必须由本方法返回而不是让调用方自己查（见 ``indexer`` 模块 docstring 的边界说明）：
+        删除是单事务的，先查后删会发生 TOCTOU；且跨进程/跨 ``Indexer`` 实例时调用方内存里
+        没有这批 id，旧行为只删 SQLite 不删 LanceDB，留下**孤儿向量**。
         """
+        removed: list[str] = []
         with transaction(self._conn) as conn:
             for path in paths:
+                rows = conn.execute(
+                    "SELECT id FROM chunks WHERE file_path = ? ORDER BY rowid", (path,)
+                ).fetchall()
+                removed.extend(str(r["id"]) for r in rows)
                 symbols = conn.execute(
                     "SELECT id, fqn FROM symbols WHERE file_path = ? ORDER BY rowid", (path,)
                 ).fetchall()
@@ -482,6 +499,7 @@ class Store:
                         [(str(r["fqn"]),) for r in symbols],
                     )
                 conn.execute("DELETE FROM files WHERE path = ?", (path,))
+        return tuple(removed)
 
     # ------------------------------------------------------- TASK-006 解析原语
 
@@ -967,6 +985,18 @@ class Store:
             " (SELECT COUNT(*) FROM unresolved_refs WHERE status = 'failed') AS refs_failed"
         ).fetchone()
         return {key: int(row[key]) for key in row.keys()}
+
+    def generated_files(self) -> frozenset[str]:
+        """标记为 generated 的文件路径集合（TASK-REVIEW-RUNTIME P2-5）。
+
+        供 rerank 直接读``files.generated``列，替代原先的“文件名约定代理”——旧实现该列
+        硬编码为 0，无法识别靠内容 banner（如 ``DO NOT EDIT`` 头）标记的生成文件。
+        一次查询取全量（典型规模下是千行级，不是热路径）。
+        """
+        rows = self._conn.execute(
+            "SELECT path FROM files WHERE generated != 0 ORDER BY path"
+        ).fetchall()
+        return frozenset(str(row["path"]) for row in rows)
 
     # ------------------------------------------------------------------ 内部实现
 

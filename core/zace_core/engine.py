@@ -34,6 +34,7 @@ D-29 的计算放在模块级 :func:`repo_identity`，CLI 走 :meth:`Engine.reso
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -59,6 +60,15 @@ from zace_core.embedding import EmbeddingConfig, create_provider
 from zace_core.hashing import blob_hash, file_content_hash
 from zace_core.interfaces import ContextEngine, EmbeddingProvider
 from zace_core.pipeline import DirectorySource, Indexer, IngestReport
+from zace_core.pipeline.index_state import (
+    IndexState,
+    IndexStatus,
+    building_state,
+    failed_state,
+    read_index_state,
+    ready_state,
+    write_index_state,
+)
 from zace_core.pipeline.source import SourceProvider
 from zace_core.retrieval import RecallLimits, recall
 from zace_core.retrieval.exact import extract_inferred
@@ -73,6 +83,7 @@ from zace_core.retrieval.gap import (
     plan_gaps,
 )
 from zace_core.retrieval.rerank import collect_signals, rerank
+from zace_core.retrieval.vector import QueryEmbeddingCache
 from zace_core.storage import Store
 from zace_core.types import (
     AskResult,
@@ -320,6 +331,14 @@ class _EmptySource:
         return ()
 
 
+def _chunks_vectors(fields: dict[str, object]) -> dict[str, int]:
+    """字段桶 → ``(chunks, vectors)`` 计数（缺省 0 = 不参与对账）。"""
+    return {
+        "chunks": int(fields.get("expected_chunks") or 0),  # type: ignore[arg-type]
+        "vectors": int(fields.get("expected_vectors") or 0),  # type: ignore[arg-type]
+    }
+
+
 def _vector_index_gap(store: Store, vectors: VectorStore) -> str | None:
     """R41 附注 / TASK-036 §D：``chunks > 0`` 但向量表为空 → 返回可读的降级原因。
 
@@ -415,6 +434,9 @@ class Engine:
         self._expansion_limits = expansion_limits or ExpansionLimits()
         #: 查询向量缓存（TASK-101 §F）：传入时**复用它**（离线回放/预热），并在进程存活期间共享
         #: 同一份，使预热与回放走同一条链。取值只需满足 get/put（``retrieval.vector`` 的鸭子类型）。
+        #: 未传入时由 :attr:`query_cache` **惰性建一份默认的**并跨查询持有。
+        #: TASK-REVIEW-RUNTIME P2-1：旧行为是 ``recall()`` 每次调用新建、调用结束即丢，
+        #: 注释里写的 60s 跨查询复用压根不存在。
         self._query_cache = query_cache
         self._repo_roots: dict[str, Path] = {}
 
@@ -505,6 +527,39 @@ class Engine:
     def set_query_cache(self, cache: object | None) -> None:
         """替换查询向量缓存（TASK-101 §F：CLI 在 engine 建好后注入侧车缓存）。"""
         self._query_cache = cache
+
+    @property
+    def query_cache(self) -> object:
+        """进程内查询向量缓存（未注入时惰性建默认的）。
+
+        TASK-REVIEW-RUNTIME P2-1：缓存必须归 ``Engine`` 生命周期持有，否则 60s TTL 复用形同虚设。
+        调用方（CLI / service）不必知道具体类型，只需 it 支持 ``get/put``。
+        """
+        if self._query_cache is None:
+            self._query_cache = QueryEmbeddingCache(ttl_s=self._limits.query_cache_ttl_s)
+        return self._query_cache
+
+    def _bind_query_cache_identity(self, provider: EmbeddingProvider) -> None:
+        """把当前 provider 的模型身份绑到查询缓存（P2-1）。
+
+        为什么每次开项目都绑：``set_provider()`` 能在生命周期内换模型（``--replay`` 切离线
+        provider、D-47 换用户模型）。缓存 key 不带模型就会取到另一个模型的向量——
+        维度相同吋静默给出错误相似度，比报错更难察觉。身份变了缓存会自清。
+
+        用 getattr 探测而非硬依赖：调用方可以注入任意满足 get/put 的鸭子类型对象。
+        ``PersistentQueryVectorCache``（侧车）的绑定接口是 ``(model, dim)`` 关键字形式，
+        且其一致性由 CLI 的 ``_sync_cache_identity`` 指纹校验负责，这里**不重复处理**。
+
+        取 ``self.query_cache``（属性）而非 ``self._query_cache``（字段）：缓存是惰性建的，
+        开项目时字段可能还是 ``None``——用字段会静默跳过绑定（实测踩过）。
+        """
+        cache = self.query_cache
+        bind = getattr(cache, "bind_identity", None)
+        if not callable(bind):
+            return
+        if "dim" in inspect.signature(bind).parameters:
+            return
+        bind(provider.profile.model_id)
 
     def set_provider(self, provider: EmbeddingProvider) -> None:
         """替换 embedding provider（TASK-101 §F：``--replay`` 用它切到离线 provider）。
@@ -651,9 +706,12 @@ class Engine:
                 provider=provider,
                 vector_store=vectors,
                 limits=self._limits,
-                cache=self._query_cache,
+                cache=self.query_cache,
             )
             vector_gap = _vector_index_gap(store, vectors)
+            # P1-1 / P1-5：索引状态（building/failed/对账不一致）同样要体现在降级上。
+            # 与 _vector_index_gap 合并为同一个 degraded_reason；两者独立，都可能单独出现。
+            state_gap = self._index_state_gap(project_id, store, vectors)
             expansion = expand(store, recalled.candidates, limits=self._expansion_limits)
             pool = [*recalled.candidates, *expansion.candidates]
             ranked = rerank(pool, collect_signals(store, query, pool))
@@ -688,14 +746,13 @@ class Engine:
                     reserve_backfill=True,
                 )
         degraded_reason = recalled.degraded_reason
-        if vector_gap is not None:
-            degraded_reason = (
-                f"{degraded_reason}；{vector_gap}" if degraded_reason else vector_gap
-            )
+        for gap in (vector_gap, state_gap):
+            if gap is not None:
+                degraded_reason = f"{degraded_reason}；{gap}" if degraded_reason else gap
         return SearchTrace(
             pack=pack,
             channels_used=recalled.channels_used,
-            degraded=recalled.degraded or vector_gap is not None,
+            degraded=recalled.degraded or vector_gap is not None or state_gap is not None,
             degraded_reason=degraded_reason,
             candidates=tuple(ranked),
             gap_kinds=gaps.kinds,
@@ -1045,7 +1102,74 @@ class Engine:
                 source or self._source_for(project_id),
                 embedding_cache=self._embedding_cache(),
             )
-            return indexer.full_reparse(changes) if full else indexer.ingest(changes)
+            # P1-1：先标 building（让并发查询能看出“索引未就绪”），
+            # 成功后再标 ready 并记下期望计数（下次查询据此对账中间态）。
+            self._mark_index_state(project_id, "building")
+            try:
+                report = indexer.full_reparse(changes) if full else indexer.ingest(changes)
+            except BaseException as exc:
+                self._mark_index_state(
+                    project_id,
+                    "failed",
+                    stage="reparse" if full else "ingest",
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+                raise
+            counts = store.counts()
+            self._mark_index_state(
+                project_id,
+                "ready",
+                expected_chunks=counts["chunks"],
+                expected_vectors=vectors.count(),
+            )
+            return report
+
+    def _index_state(self, project_id: str) -> IndexState | None:
+        """读本项目的索引状态标记（P1-1/P1-5）；无标记 → ``None``。"""
+        return read_index_state(self.project_dir(project_id))
+
+    def _mark_index_state(self, project_id: str, status: IndexStatus, **fields: object) -> None:
+        """写索引状态标记（不强求成功：观测不得阻断索引）。"""
+        directory = self.project_dir(project_id)
+        if status == "building":
+            state = building_state(**_chunks_vectors(fields))
+        elif status == "ready":
+            state = ready_state(**_chunks_vectors(fields))
+        else:
+            state = failed_state(
+                stage=str(fields.get("stage") or "indexing"),
+                reason=str(fields.get("reason") or "未知原因"),
+            )
+        write_index_state(directory, state)
+
+    def _index_state_gap(
+        self, project_id: str, store: Store, vectors: VectorStore
+    ) -> str | None:
+        """索引状态是否要求降级（P1-1 / P1-5）；不需降级 → ``None``。
+
+        三种情况都在这里变成**可见的**降级原因（而不是静默给出可能错的结果）：
+
+        - ``building``：另一进程正在索引，查询可能读到 SQLite 新 / 向量旧的中间态；
+        - ``failed``：上次索引中途失败，库可能停在半成品状态；
+        - ``ready`` 但对账不一致：期望数与实际数不符，或 ``chunks>0 而 vectors=0``。
+
+        ``ready`` 且对账通过 → ``None``（正常路径不受影响，零额外 SQL 以外开销）。
+        """
+        state = self._index_state(project_id)
+        if state is None:
+            return None
+        if state.status == "building":
+            return (
+                "索引正在构建中（index-state=building）：当前结果可能基于未完成的索引，"
+                f"阶段={state.stage or 'indexing'}"
+            )
+        if state.status == "failed":
+            return (
+                f"上次索引未完成（index-state=failed）：阶段={state.stage or '未知'}，"
+                f"原因={state.reason or '未知'}"
+            )
+        counts = store.counts()
+        return state.mismatch_reason(chunks=counts["chunks"], vectors=vectors.count())
 
     def _embedding_cache(self) -> EmbeddingCache | None:
         """data_root 级的跨项目 embedding 缓存（TASK-111）。
@@ -1082,6 +1206,8 @@ class Engine:
         except BaseException:
             store.close()
             raise
+        # P2-1：缓存 key 必须带模型身份；provider 可在生命周期内被替换，因此每次开项目都重绑。
+        self._bind_query_cache_identity(provider)
         try:
             yield store, vectors, provider
         finally:
