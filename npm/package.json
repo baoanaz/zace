@@ -1,6 +1,6 @@
 {
   "name": "zace-client",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "MCP stdio client for zace: local codebase sync proxy backed by a remote zace-service",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -39,11 +39,11 @@
     "arm64"
   ],
   "optionalDependencies": {
-    "zace-client-linux-x64": "0.0.7",
-    "zace-client-linux-arm64": "0.0.7",
-    "zace-client-darwin-x64": "0.0.7",
-    "zace-client-darwin-arm64": "0.0.7",
-    "zace-client-windows-x64": "0.0.7",
-    "zace-client-windows-arm64": "0.0.7"
+    "zace-client-linux-x64": "0.0.8",
+    "zace-client-linux-arm64": "0.0.8",
+    "zace-client-darwin-x64": "0.0.8",
+    "zace-client-darwin-arm64": "0.0.8",
+    "zace-client-windows-x64": "0.0.8",
+    "zace-client-windows-arm64": "0.0.8"
   }
 }
