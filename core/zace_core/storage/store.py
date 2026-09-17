@@ -864,6 +864,37 @@ class Store:
         sql += " ORDER BY kind, source, target, IFNULL(line, -1)"
         return [_edge_from_row(r) for r in self._conn.execute(sql, params).fetchall()]
 
+    def reexport_sources(self, name: str, *, suffix: str = "__init__.py") -> list[str]:
+        """符号名的**公开导出点**：导入了该符号的包入口文件（TASK-MCP-CHAIN）。
+
+        为什么不能复用 :meth:`edges_for`：它按 **fqn 精确匹配**，而 ``imports`` 边的
+        两端拼法不同（实测）：符号表里是裸名 ``create_agent``，边里存的是模块路径形式
+        ``langchain.agents.factory.create_agent``。只按裸名查会一条也拿不到。
+
+        口径：边类型 ``imports`` + 边的 target **尾部名**与 ``name`` 相等 + 边的
+        **源路径**以 ``suffix`` 结尾（默认 ``__init__.py``——包入口才是“公开导出点”，
+        否则一堆 ``examples/`` 与 ``tests/`` 也会变成候选）。
+
+        ``.`` 与 ``::`` 两种分隔符都匹配（Python 与 C++ 抽取器的差异）。
+        """
+        cleaned = name.strip()
+        if not cleaned:
+            return []
+        rows = self._conn.execute(
+            "SELECT DISTINCT source, target FROM edges"
+            " WHERE kind = 'imports' AND source LIKE ?",
+            (f"%{suffix}",),
+        ).fetchall()
+        found: list[str] = []
+        for row in rows:
+            target = str(row["target"])
+            if target.replace("::", ".").rsplit(".", 1)[-1] != cleaned:
+                continue
+            source = str(row["source"])
+            if source not in found:
+                found.append(source)
+        return found
+
     def chunks_with_marker(
         self, chunk_ids: Sequence[str], *, marker: str
     ) -> frozenset[str]:

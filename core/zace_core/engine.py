@@ -61,7 +61,8 @@ from zace_core.interfaces import ContextEngine, EmbeddingProvider
 from zace_core.pipeline import DirectorySource, Indexer, IngestReport
 from zace_core.pipeline.source import SourceProvider
 from zace_core.retrieval import RecallLimits, recall
-from zace_core.retrieval.expand import ExpansionLimits, expand
+from zace_core.retrieval.exact import extract_inferred
+from zace_core.retrieval.expand import REASON_REEXPORT, ExpansionLimits, expand
 from zace_core.retrieval.gap import GapLimits, GapPlan, SymbolMember, plan_gaps
 from zace_core.retrieval.rerank import collect_signals, rerank
 from zace_core.storage import Store
@@ -334,6 +335,56 @@ def _vector_index_gap(store: Store, vectors: VectorStore) -> str | None:
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
+
+
+def _split_identifier(name: str) -> set[str]:
+    """标识符 → 小写词元集合（``_make_tools_to_model_edge`` → {make,tools,to,model,edge}）。
+
+    用途：G3 的“callee 名字是否含查询词”判定。拆法是确定性的两种约定：
+    下划线分词 + 驼峰分词（``getBoundModel`` → {get,bound,model}），不做词干化——
+    保守一点只是少给几个候选加分，不会引入错误证据。
+    """
+    tokens: list[str] = []
+    for chunk in str(name).replace("::", ".").split("."):
+        for piece in chunk.split("_"):
+            if not piece:
+                continue
+            current = ""
+            for char in piece:
+                if char.isupper() and current:
+                    tokens.append(current)
+                    current = char
+                else:
+                    current += char
+            if current:
+                tokens.append(current)
+    return {token.lower() for token in tokens if token}
+
+
+def _query_words(query: str) -> frozenset[str]:
+    """查询里的“词面”词元（供 G3 判断 callee 名是否名中问题）。
+
+    两个来源合并：
+
+    1. **标识符形态**的词（复用 ``extract_inferred``：驼峰/蛇形/SCREAMING）再向外拆，
+       这样 ``wrap_model_call`` / ``auto_strategy`` 里的 ``model`` / ``strategy`` 都能取出；
+    2. **普通小写英文词**（长度 ≥ 3）——这一步实测必需：``model`` / ``tools`` 在自然语言
+       问句里是普通词，不会匹配标识符正则，若只听 ``extract_inferred`` 则这两个最关键
+       的词会全部丢失，排序退化成字母序。
+
+    为什么要这一步：实测（langchain，问 model↔tools 边如何路由、何时退出循环）中，
+    ``create_agent`` 的 6 个可用 callee 里只有 ``_make_tools_to_model_edge`` 的名字含
+    ``model`` / ``tools`` —— 单靠“私有函数优先”（``_chain_*`` / ``_add_*`` / ``_dedupe_*``
+    也是私有函数）无法区分，必须用词面证据。
+    """
+    words: set[str] = set()
+    for token in extract_inferred(query):
+        for piece in _split_identifier(token):
+            if len(piece) >= 3:
+                words.add(piece)
+    for match in re.finditer(r"[A-Za-z][A-Za-z0-9]{2,}", query):
+        words.add(match.group(0).lower())
+    return frozenset(words)
 
 
 class Engine:
@@ -709,6 +760,75 @@ class Engine:
                 for row in store.symbols_in_container(container)
             ]
 
+        # G4：包内代码证据的 ``re-export site`` 候选 → 它导出的符号名。
+        # 只在**包内已存在该符号**时才计，与 G1/G3 的“锚点已进包”同一纪律：
+        # 否则“随便一个被 import 的文件”都会触发。
+        packed_fqn_set = {item.symbol for item in pack.evidence if item.symbol}
+        reexport_marks: dict[str, str] = {}
+        for candidate in ranked:
+            if not any(REASON_REEXPORT == r for r in candidate.reasons):
+                continue
+            for fqn in packed_fqn_set:
+                name = fqn.replace("::", ".").rsplit(".", 1)[-1]
+                if name and store.reexport_sources(name) and candidate.path in (
+                    store.reexport_sources(name)
+                ):
+                    reexport_marks.setdefault(candidate.chunk_id, name)
+                    break
+
+        def callees_of(container: str) -> list[SymbolMember]:
+            """G3：容器（含嵌套符号）的出边目标 → 可落地的池内候选（按“与问题的契合度”排）。
+
+            五处必须同时做对（各自实测踩过）：
+
+            1. **包含嵌套符号**：``create_agent`` 调用 ``_make_tools_to_model_edge`` 的边
+               在符号表里是一条独立记录，而嵌套回调（``create_agent.model_node``）自身
+               也可能再往外调；只取裸名会漏掉后者。
+            2. **只取出边**：``Store.edges_for`` 是**双向**的（source 侧 + target 侧，
+               ``ORDER BY kind, source, target``），不过滤就会把 caller 也当成“它调用的东西”。
+            3. **按契合度排序后再截断**：不排就按字母序截断——实测 ``_add_middleware_edge``
+               / ``_chain_*`` / ``_dedupe_transformers`` 占满名额，而目标
+               ``_make_tools_to_model_edge`` 恰好排在它们之后，被上限切掉，等于 G3 白做。
+            4. **不按池序重排**（在 :func:`gap._callee_closure` 里保证）：G3 候选几乎全是
+               图扩展进来的 tier3、``score`` 恒为 0.5，池序没有区分度。
+            5. **“名字含查询词”优先于“私有函数”**：两者在本题恰好冲突——``_chain_*
+               / ``_add_*`` 也都是私有函数，单靠“私有优先”仍然切不到目标；而
+               ``_make_tools_to_model_edge`` 的名字里恰好含查询词 ``model`` 与 ``tools``。
+               这是**词面证据**（与 BM25 同源），不是猜测：名字里出现了问题里的词，
+               说明它很可能就是被问的那个实现。
+            """
+            prefixes = (container, f"{container}.")
+            members: list[SymbolMember] = []
+            seen: set[str] = set()
+            for prefix in prefixes:
+                for edge in store.edges_for(prefix, kinds=["calls"]):
+                    if edge.source != prefix or edge.target in seen:
+                        continue
+                    seen.add(edge.target)
+                    rows = store.exact_symbols(edge.target, limit=None)
+                    chunk_id = next((r.chunk_id for r in rows if r.chunk_id is not None), None)
+                    members.append(SymbolMember(fqn=edge.target, chunk_id=chunk_id))
+
+            query_words = _query_words(query)
+
+            def rank(member: SymbolMember) -> tuple[int, int, int, str]:
+                name = member.fqn.replace("::", ".").rsplit(".", 1)[-1]
+                own = _split_identifier(name)
+                overlap = len([t for t in own if t in query_words and len(t) >= 3])
+                private = name.startswith("_") and not (
+                    name.startswith("__") and name.endswith("__")
+                )
+                local = 0 if member.chunk_id else 2
+                return (
+                    -overlap,
+                    0 if private else 1 if local == 0 else 2,
+                    local,
+                    member.fqn,
+                )
+
+            members.sort(key=rank)
+            return members
+
         plan = plan_gaps(
             query,
             packed_symbols=packed_symbols,
@@ -716,6 +836,8 @@ class Engine:
             pool_chunk_ids=[candidate.chunk_id for candidate in ranked],
             packed_spec_refs=packed_spec_refs,
             members_of=members_of,
+            callees_of=callees_of,
+            reexport_marks=reexport_marks,
             limits=limits,
         )
         if not plan.triggered:

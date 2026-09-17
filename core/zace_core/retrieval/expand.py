@@ -37,6 +37,7 @@ from zace_core.types import Candidate, Flow, FlowNode
 __all__ = [
     "GRAPH_REASON_PREFIX",
     "GRAPH_TIER",
+    "REASON_REEXPORT",
     "SYNTHESIZED_REASON",
     "ExpansionLimits",
     "ExpansionResult",
@@ -52,6 +53,9 @@ GRAPH_REASON_PREFIX = "graph-expanded from "
 
 #: synthesized 边扩展标记（provenance='synthesized'，rerank −0.2）。
 SYNTHESIZED_REASON = "synthesized edge"
+
+#: 公开导出点标记（TASK-MCP-CHAIN）：该候选是 seed 符号的包入口重导出处。
+REASON_REEXPORT = "re-export site"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,31 @@ def _caller_sort_key(store: Store, fqn: str):
     return (0 if _is_entry_point(store, fqn, exported) else 1, 0 if exported else 1, fqn)
 
 
+def _is_dunder(name: str) -> bool:
+    return name.startswith("__") and name.endswith("__")
+
+
+def _callee_rank(store: Store, target: str) -> int:
+    """callee 的“实现细节”分档（0 最优先）：
+
+    - 0：**同仓私有实现函数**（`_name` 且非 dunder）——调用链题问的正是这些
+      （实测 ``_make_tools_to_model_edge`` / ``_chain_model_call_handlers``）；
+    - 1：同仓其它函数/类；
+    - 2：落不到本仓切片的外部符号（``isinstance`` / ``len`` / ``graph.add_node``）。
+
+    为什么不能直接用“执行顺序”（边行号）排序：实测 ``create_agent`` 的 90 条 callee
+    里，``isinstance`` / ``graph.add_node`` 这类外部调用占了前 45 条，而真正的
+    边构造函数 ``_make_tools_to_model_edge`` 排在第 75 位——图扩展的 30 条配额被
+    外部调用吃光，调用链题（追问 model↔tools 边如何路由）全部落空。
+    """
+    rows = store.exact_symbols(target, limit=None)
+    local = any(row.fqn == target and row.chunk_id is not None for row in rows)
+    if not local:
+        return 2
+    name = target.replace("::", ".").rsplit(".", 1)[-1]
+    return 0 if (name.startswith("_") and not _is_dunder(name)) else 1
+
+
 def _calls_neighbours(store: Store, fqn: str, kind: str, limits: ExpansionLimits):
     """``kind='callers'``：指向本符号的 calls 入边；``kind='callees'``：本符号的出边。
 
@@ -116,7 +145,15 @@ def _calls_neighbours(store: Store, fqn: str, kind: str, limits: ExpansionLimits
             selected = selected[: limits.caller_cap]
         return [(edge.source, edge.provenance) for edge in selected]
     selected = [edge for edge in edges if edge.source == fqn]
-    selected.sort(key=lambda edge: (edge.line if edge.line is not None else 0, edge.target))
+    # TASK-MCP-CHAIN：callee 按“实现细节优先”排（见 :func:`_callee_rank`），不再按执行顺序。
+    # 行号仍作为同档内的稳定次序（同一函数体内的声明顺序）。
+    selected.sort(
+        key=lambda edge: (
+            _callee_rank(store, edge.target),
+            edge.line if edge.line is not None else 0,
+            edge.target,
+        )
+    )
     return [(edge.target, edge.provenance) for edge in selected]
 
 
@@ -125,6 +162,12 @@ def _candidate_from_chunk(store: Store, chunk, *, seed: Candidate, provenance: s
     reasons = [f"{GRAPH_REASON_PREFIX}{seed.chunk_id}"]
     if provenance == "synthesized":
         reasons.append(SYNTHESIZED_REASON)
+    if provenance == REASON_REEXPORT:
+        # 保留可读来源（G4 的判定依据），同时**仍带 GRAPH_REASON_PREFIX**：
+        # 那条前缀是 rerank 的“与 top-1 种子结构相连 +0.5”特征来源。若去掉它，
+        # 导出点候选的 ``score`` 会是 0.0（rrf=0 且无任何特征）——连补检候选池都进不去，
+        # 等于白扩展（实测踩到）。用同一前缀是符合语义的：导出点确实与 seed 结构相连。
+        reasons.append(REASON_REEXPORT)
     return Candidate(
         chunk_id=chunk.id,
         kind=classify_kind(chunk.file_path, chunk.symbol_kind),
@@ -198,7 +241,6 @@ def expand(
             _expand_spec_seed(store, seed, _add)
             continue
         _expand_code_seed(store, seed, active, _add)
-
     return ExpansionResult(
         candidates=expanded,
         flows=build_flows(store, seeds, limits=active),
@@ -210,9 +252,20 @@ def _expand_code_seed(store: Store, seed: Candidate, limits: ExpansionLimits, ad
     """代码 seed：calls 双向 1-hop + 引用它的 SpecBlock（设计意图）。"""
     fqn = seed.symbol_fqn
     if fqn:
+        # 顺序（TASK-MCP-CHAIN）：**公开导出点 → callees → callers**。配额被吃完就没了，
+        # 而三者的“确定性程度”与“对回答的不可替代性”都是递减的：
+        #
+        # 1. 导出点：名称精确匹配的 imports 边，最多 1-2 条，但它是“公开 API 在哪导出”
+        #    这类问题的**唯一答案**（实测 Q1：换序前它被前面 30 条扩展挤掉，池里根本没有）；
+        # 2. callees：调用链题问的实现细节（实测 ``_make_tools_to_model_edge`` 等）；
+        # 3. callers：实测以**测试函数**为主（``create_agent`` 的 20 条 caller 里 17 条是
+        #    ``tests/.../test_*.py``），对“实现链路”几乎无贡献。
+        #
+        # 反向可达性（“谁调用了我”）主要由 grep 与 ``### Flow`` 承担，不靠图扩展配额。
+        _expand_reexport_sites(store, seed, add)
         for neighbour, provenance in (
-            _calls_neighbours(store, fqn, "callers", limits)
-            + _calls_neighbours(store, fqn, "callees", limits)
+            _calls_neighbours(store, fqn, "callees", limits)
+            + _calls_neighbours(store, fqn, "callers", limits)
         ):
             add(_expansion_candidate(store, neighbour, seed=seed, provenance=provenance))
 
@@ -224,6 +277,46 @@ def _expand_code_seed(store: Store, seed: Candidate, limits: ExpansionLimits, ad
                 chunk = store.chunk_by_id(ref.spec_block_id)
                 if chunk is not None:
                     add(_candidate_from_chunk(store, chunk, seed=seed, provenance=ref.provenance))
+
+
+def _expand_reexport_sites(store: Store, seed: Candidate, add) -> None:
+    """补**公开导出点**（改 TASK-MCP-CHAIN）：导入该符号的 ``__init__.py`` 也是答案的一部分。
+
+    为什么必须单独做（实测 langchain，2026-09-16）：“X 在哪里定义、又在哪里公开导出”
+    是两个不同的位置，而包入口是 ``imports`` 边、**不属于 calls 图**，现有图扩展
+    （只走 calls）结构上永远召不到它。实测：``create_agent`` 在
+    ``langchain/agents/__init__.py`` 有一条 ``imports`` 边指向
+    ``langchain.agents.factory.create_agent``，而该文件只靠向量 rank 8 得存、
+    换个措辞就丢。
+
+    收敛条件（三条同时成立，避免把 calls 图变成全图遍历）：
+
+    1. 边类型 ``imports``（不是 calls/引用）；
+    2. 边的**源文件**是 ``__init__.py``（包入口才是“公开导出点”）；
+    3. 边的 target 的**尾部名字**与 seed 的符号名相同（同一符号，不是同名路径）。
+
+    不额外限“同目录”：实测 langchain 的 ``agents/__init__.py`` 与
+    ``agents/factory.py`` 同目录，但 Python 重导出跨目录也常见（如 ``__init__`` 里
+    从子包导入），硬限同目录会漏掉后者；限定 ``__init__.py`` + 同名两项已经足够收敛。
+    """
+    fqn = seed.symbol_fqn
+    if not fqn:
+        return
+    name = fqn.replace("::", ".").rsplit(".", 1)[-1]
+    for source in store.reexport_sources(name):
+        chunk = _chunk_for_file(store, source)
+        if chunk is not None:
+            add(_candidate_from_chunk(store, chunk, seed=seed, provenance=REASON_REEXPORT))
+
+
+def _chunk_for_file(store: Store, path: str):
+    """取文件的首个切片（``__init__.py`` 通常只有一个 module 级 fallback 块）。
+
+    用 ``chunk_covering(path, 1)`` 而不是新加一个 Store 读 API：导入边不带行号，
+    而包入口的 ``from ... import name`` 一定在第 1 行之下，取覆盖第 1 行的切片即可；
+    这样不扩 ``Store`` 的公开面（它属 TASK-011 领地）。
+    """
+    return store.chunk_covering(path, 1)
 
 
 def _expand_spec_seed(store: Store, seed: Candidate, add) -> None:

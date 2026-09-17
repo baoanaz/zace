@@ -44,7 +44,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 __all__ = [
+    "GAP_REASON_CALLEE",
     "GAP_REASON_PREFIX",
+    "GAP_REASON_REEXPORT",
+    "GAP_REASON_SPEC_REF",
     "GapLimits",
     "GapPlan",
     "SymbolMember",
@@ -59,6 +62,12 @@ GAP_REASON_CONTAINER = GAP_REASON_PREFIX + "同容器成员 "
 
 #: G2 的来源标注。
 GAP_REASON_SPEC_REF = GAP_REASON_PREFIX + "文档符号引用 "
+
+#: G3 的来源标注（容器成员调用的实现函数）。
+GAP_REASON_CALLEE = GAP_REASON_PREFIX + "容器成员的被调用方 "
+
+#: G4 的来源标注（seed 符号的公开导出点）。
+GAP_REASON_REEXPORT = GAP_REASON_PREFIX + "公开导出点 "
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +107,15 @@ class GapLimits:
     #: “文档完整、代码缺失”变成“文档 + 一堆无关类名”——正是相对分数闸门要挡的东西，
     #: 补检不应把它放回来。
     refs_per_spec: int = 6
+    #: G3（容器成员的被调用方）单容器最多补入数。
+    #:
+    #: 为什么需要 G3（实测 langchain，2026-09-16）：调用链题的目标常是**嵌套／模块级
+    #: 实现函数**，它们不是被点名容器的符号成员，G1 的 ``members_of`` 结构上抓不到。
+    #: 实测：问“``create_agent`` 的 model↔tools 边如何路由”，目标是
+    #: ``_make_tools_to_model_edge``（工厂函数内的嵌套回调），而 ``create_agent`` 的
+    #: callees 有 90 条（外部调用占掉大半）——即使图扩展把它拉进池，score 也是 0.0，
+    #: 进不了包。G3 用“已进包成员 + 同名容器锚点”的 calls 出边把它补上。
+    callees_per_container: int = 6
     #: 补检计划的总上限（跨规则、跨锚点）。
     max_total: int = 24
 
@@ -113,22 +131,33 @@ class GapPlan:
 
     container_members: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     spec_refs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    callee_refs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    reexport_sites: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def kinds(self) -> tuple[str, ...]:
-        """命中的规则名（``G1`` / ``G2``，按固定顺序去重）。"""
+        """命中的规则名（``G1`` / ``G2`` / ``G3`` / ``G4``，按固定顺序去重）。"""
         found: list[str] = []
         if self.container_members:
             found.append("G1")
         if self.spec_refs:
             found.append("G2")
+        if self.callee_refs:
+            found.append("G3")
+        if self.reexport_sites:
+            found.append("G4")
         return tuple(found)
 
     @property
     def chunk_ids(self) -> tuple[str, ...]:
-        """全部待补检 chunk_id（跨规则去重，保持"G1 优先、声明顺序"的稳定序）。"""
+        """全部待补检 chunk_id（跨规则去重，保持“G1 优先、声明顺序”的稳定序）。"""
         seen: list[str] = []
-        for group in (*self.container_members.values(), *self.spec_refs.values()):
+        for group in (
+            *self.container_members.values(),
+            *self.spec_refs.values(),
+            *self.callee_refs.values(),
+            *self.reexport_sites.values(),
+        ):
             for chunk_id in group:
                 if chunk_id not in seen:
                     seen.append(chunk_id)
@@ -136,7 +165,12 @@ class GapPlan:
 
     @property
     def triggered(self) -> bool:
-        return bool(self.container_members or self.spec_refs)
+        return bool(
+            self.container_members
+            or self.spec_refs
+            or self.callee_refs
+            or self.reexport_sites
+        )
 
     def reason_for(self, chunk_id: str) -> str | None:
         """该 chunk 的补检来源标注（``gap backfill: …``）；不在计划内返回 ``None``。"""
@@ -146,6 +180,12 @@ class GapPlan:
         for anchor, group in self.spec_refs.items():
             if chunk_id in group:
                 return f"{GAP_REASON_SPEC_REF}{anchor}"
+        for anchor, group in self.callee_refs.items():
+            if chunk_id in group:
+                return f"{GAP_REASON_CALLEE}{anchor}"
+        for anchor, group in self.reexport_sites.items():
+            if chunk_id in group:
+                return f"{GAP_REASON_REEXPORT}{anchor}"
         return None
 
 
@@ -230,6 +270,98 @@ def _named_containers(
     return plan
 
 
+def _callee_closure(
+    query_symbols: Iterable[str],
+    packed_symbols: Iterable[str],
+    packed_chunk_ids: Iterable[str],
+    pool_chunk_ids: Sequence[str],
+    callees_of: Callable[[str], Sequence[SymbolMember]],
+    limits: GapLimits,
+) -> dict[str, tuple[str, ...]]:
+    """G3：被点名容器的**实现函数**——包内成员的 calls 出边里、池内但未进包的那些。
+
+    与 G1 的区别（为什么 G1 不够）：G1 靠 ``symbols_in_container`` 找**符号表里的成员**
+    （``Class.method``）。但调用链题真正要问的实现常在**模块级函数或函数内的嵌套回调**，
+    它们不是任何类的成员。实测（langchain ``create_agent``）：用户问 model↔tools 边如何
+    路由，答案是 ``_make_tools_to_model_edge``（模块级工厂函数，被 ``create_agent`` 调用），
+    它既不是 ``create_agent`` 的成员，也不会因“同容器”被 G1 纳入——只能由 calls 出边抵达。
+
+    三个条件（同 G1 的"不预猜意图"）：
+
+    - **锚点**：查询点名的名字，且**包内已存在该锚点的成员**（或锚点自身）——证明这个
+      容器已被判定为相关；
+    - **池内**：补检目标必须是首轮召回过的候选（模块纪律 1）；
+    - **未进包**：已经在包里的不重复补。
+
+    为什么只取**已进包符号**的出边（不含锚点自身）：锚点自身的出边就是图扩展在做的
+    事（``expand`` 已把 top 20 种子的 callees 拉进池），两者重复；而"已进包成员的
+    被调用方"恰好是 engine 里 ``callees_of_packed`` 那层优先级的依据，与调用链断裂
+    的字面含义一致。
+    """
+    packed_chunks = set(packed_chunk_ids)
+    packed_set = {_unqualified(symbol) for symbol in packed_symbols}
+
+    anchors: list[str] = []
+    for symbol in query_symbols:
+        name = _unqualified(symbol)
+        if name in anchors:
+            continue
+        if name in packed_set or any(packed.startswith(name + ".") for packed in packed_set):
+            anchors.append(symbol)
+
+    plan: dict[str, tuple[str, ...]] = {}
+    for anchor in anchors[: limits.max_containers]:
+        wanted: dict[str, str] = {}
+        for member in callees_of(anchor):
+            if not member.chunk_id or not member.fqn:
+                continue
+            if member.chunk_id in packed_chunks:
+                continue
+            wanted.setdefault(member.chunk_id, member.fqn)
+        if not wanted:
+            continue
+        # **保持 ``callees_of`` 给出的顺序**（即“私有实现函数优先”），不按池序重排。
+        #
+        # 与 G1 的关键差别：G1 的候选带首轮池序（含 rerank 相关度判定），复用它比另起排序更诚实；
+        # 而 G3 的候选几乎全是图扩展进来的 tier3、 ``score`` 恒为 0.5，**池序没有区分度**，
+        # 按池序截断等于随机取舍——实测把本题目标
+        # （``_make_tools_to_model_edge``，字母序第 8）切掉，G3 等于白做。
+        pool_set = set(pool_chunk_ids)
+        ordered = [chunk_id for chunk_id in wanted if chunk_id in pool_set][
+            : limits.callees_per_container
+        ]
+        if ordered:
+            plan[anchor] = tuple(ordered)
+    return plan
+
+
+def _reexport_closure(
+    pool_chunk_ids: Sequence[str],
+    packed_chunk_ids: Iterable[str],
+    reexport_marks: Mapping[str, str],
+) -> dict[str, tuple[str, ...]]:
+    """G4：seed 符号的**公开导出点**——已在池内（由 ``expand`` 拉入）但未进包的那些。
+
+    与 G3 的区别：G3 补“容器调用的实现函数”，G4 补“这个符号本身在哪被公开导出”。
+    后者是 imports 边（不属 calls 图），图扩展已按 ``__init__.py`` + 同名条件拉进池
+    （见 ``expand._expand_reexport_sites``），但它们的分数被 ``fallback_block −0.5``
+    抵掉了图连通 ``+0.5``，``score`` 归零——**必须由补检带进来**。
+
+    ``reexport_marks``：``chunk_id -> 被导出的符号名``（由 engine 从候选的
+    ``re-export site`` 标记与 seed 符号名对齐后给出）。
+    """
+    packed = set(packed_chunk_ids)
+    plan: dict[str, tuple[str, ...]] = {}
+    for chunk_id in pool_chunk_ids:
+        anchor = reexport_marks.get(chunk_id)
+        if anchor is None or chunk_id in packed:
+            continue
+        plan.setdefault(anchor, [])
+        if chunk_id not in plan[anchor]:
+            plan[anchor] = (*plan[anchor], chunk_id)
+    return {k: tuple(v) for k, v in plan.items()}
+
+
 def _spec_anchor_closure(
     packed_spec_refs: Mapping[str, Sequence[str]],
     packed_chunk_ids: Iterable[str],
@@ -280,6 +412,8 @@ def plan_gaps(
     pool_chunk_ids: Iterable[str],
     packed_spec_refs: Mapping[str, Sequence[str]],
     members_of: Callable[[str], Sequence[SymbolMember]],
+    callees_of: Callable[[str], Sequence[SymbolMember]] | None = None,
+    reexport_marks: Mapping[str, str] | None = None,
     limits: GapLimits | None = None,
 ) -> GapPlan:
     """首轮包 + 候选池 → 补检计划（纯函数，无 I/O，无 LLM）。
@@ -290,35 +424,59 @@ def plan_gaps(
     - ``packed_chunk_ids``：包内全部证据对应的 ``chunk_id``（代码 + spec），用于判重；
     - ``pool_chunk_ids``：首轮候选池的 ``chunk_id``（rerank 后顺序，决定补检优先级）；
     - ``packed_spec_refs``：``spec chunk_id -> spec_references 指向的 chunk_id``；
-    - ``members_of``：容器 → 成员符号（``Store.symbols_in_container``；测试可注入假实现）。
+    - ``members_of``：容器 → 成员符号（``Store.symbols_in_container``；测试可注入假实现）；
+    - ``callees_of``：容器 → 它的实现函数（G3；``None`` = 不启用 G3）。
 
     返回的 ``GapPlan`` 只含**池内**的 ``chunk_id``（模块纪律 1），且按上限截断。
     """
     active = limits or GapLimits()
     packed_chunk_set = set(packed_chunk_ids)
+    named = _query_symbols(query)
     container_plan = _named_containers(
-        query_symbols=_query_symbols(query),
+        query_symbols=named,
         packed_symbols=packed_symbols,
         packed_chunk_ids=packed_chunk_set,
         pool_chunk_ids=pool_chunk_ids,
         members_of=members_of,
         limits=active,
     )
+    callee_plan = (
+        _callee_closure(
+            query_symbols=named,
+            packed_symbols=packed_symbols,
+            packed_chunk_ids=packed_chunk_set,
+            pool_chunk_ids=pool_chunk_ids,
+            callees_of=callees_of,
+            limits=active,
+        )
+        if callees_of is not None
+        else {}
+    )
     spec_plan = _spec_anchor_closure(
         packed_spec_refs, packed_chunk_set, pool_chunk_ids, active
     )
+    reexport_plan = _reexport_closure(pool_chunk_ids, packed_chunk_set, reexport_marks or {})
 
     total = 0
     trimmed_containers: dict[str, list[str]] = {}
+    trimmed_callees: dict[str, list[str]] = {}
     trimmed_spec: dict[str, list[str]] = {}
+    trimmed_reexport: dict[str, list[str]] = {}
 
     # 总额截断用**跨规则轮转**（round-robin）而不是"先 G1 再 G2"：
     # 两条规则是**不同类**的缺口（容器断层 / 文档闭包），顺序优先会把后一条完全饿死。
     # 实测：``max_total=6`` 而容器有 10 个成员时，顺序优先使 G2 得 0 个——
     # 而 G2 恰恰是调用链断裂那一类（``cockpit-0033``）。轮转让两条规则都能落地。
-    groups: list[tuple[dict[str, list[str]], str]] = [
-        (trimmed_containers, anchor) for anchor in container_plan
-    ] + [(trimmed_spec, anchor) for anchor in spec_plan]
+    #
+    # 规则顺序（TASK-MCP-CHAIN）：G4（导出点，最多 1 条、名字精确匹配、无替代证据）
+    # 排在轮转最前——它是“公开 API 在哪导出”这类问题的**唯一答案**，
+    # 而后三条各有多个候选、靠排序质量取胜。
+    groups: list[tuple[dict[str, list[str]], str]] = (
+        [(trimmed_reexport, anchor) for anchor in reexport_plan]
+        + [(trimmed_containers, anchor) for anchor in container_plan]
+        + [(trimmed_callees, anchor) for anchor in callee_plan]
+        + [(trimmed_spec, anchor) for anchor in spec_plan]
+    )
     cursors = [0] * len(groups)
     remaining = True
     while total < active.max_total and remaining:
@@ -327,8 +485,12 @@ def plan_gaps(
             if total >= active.max_total:
                 break
             source_group = (
-                container_plan
-                if index < len(container_plan)
+                reexport_plan
+                if index < len(reexport_plan)
+                else container_plan
+                if index < len(reexport_plan) + len(container_plan)
+                else callee_plan
+                if index < len(reexport_plan) + len(container_plan) + len(callee_plan)
                 else spec_plan
             )
             items = source_group[_anchor]
@@ -343,6 +505,8 @@ def plan_gaps(
     return GapPlan(
         container_members={k: tuple(v) for k, v in trimmed_containers.items() if v},
         spec_refs={k: tuple(v) for k, v in trimmed_spec.items() if v},
+        callee_refs={k: tuple(v) for k, v in trimmed_callees.items() if v},
+        reexport_sites={k: tuple(v) for k, v in trimmed_reexport.items() if v},
     )
 
 
