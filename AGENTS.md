@@ -46,33 +46,27 @@ cd /home/xuwenzheng/github/ACE/zace-lane-<lane>       # 切到自己的工作区
 - 共享文件（`docs/tasks/README.md` / `docs/contracts/PROCESS.md` / 根 `pyproject.toml`）**只做最小改动**，不要顺手重排格式（会让别人的 diff 全部冲突）。
 - 不提交运行时产物（数据库、`.zace/`、构建输出）；不提交任何 secret/token。
 
-## 3.1 发布 zace-client（npm）— 强制规则
+## 3.1 发布 zace-client（npm）
 
-**触发条件（硬性）：只有用户明确给出版本号（如“发布 zace-client 0.0.8”）才能发布。**
+**只有用户明确指定版本号（如“发布 zace-client 0.0.8”）时才允许发布。**
+禁止 Agent 自行 bump 版本号、自行创建 tag，禁止为了验证脚本而触发真实发布（改代码 ≠ 发版）。
 
-**禁止** Agent 自行 bump 版本号、自行创建 tag、或为了验证脚本而触发真实的 npm release。
-没有明确版本号时，即使改了 `client/` 代码也不得发布（改代码 ≠ 发版）。
-
-用户给出明确版本号后，**只跑这一条命令**，不要手工拼 `git tag`、`npm publish`、
-`check-version.sh` 等零散步骤：
+用户给出明确版本号后，只跑这一条命令：
 
 ```bash
 bash scripts/release-client.sh x.y.z
 ```
 
-它是**唯一发布入口**，已内含：main/干净工作区检查 → 改全部版本号 → 一致性校验 → 测试
-→ commit/push main → 打并 push tag → （`gh` 可用时）`gh run watch` 等 CI → 复核 `npm view` 与 `latest`。
+脚本只做本地准备（检查 main/干净/tag 不存在 → 改版本号 → 同步平台子包 → 一致性检查
+→ commit → push main → push tag）后退出，**不等 CI**。
 
-硬约束（不可协商）：
+- 六平台构建与 npm publish **全部由 GitHub Actions 完成**；禁止本地 publish；
+- 禁止 `--force`、禁止移动已有 tag、禁止覆盖/回退版本号（失败就升 patch）；
+- 禁止读取、打印或提交 `NPM_TOKEN`；
+- npm 包名用 `windows-*`，`os` 字段必须是 `win32`；
+- 禁止 GitHub Release 二进制 fallback（npm 是唯一二进制分发渠道）。
 
-- **六平台构建与 npm 发布全部交 GitHub Actions**；本地脚本绝不代替 CI 发布平台包（本地也不具备构建 macOS 的条件）；
-- **禁止** `--force`、禁止移动或重打已有 tag、禁止覆盖/回退版本号。失败就**放弃当前版本号**，修复后递增新版本重跑；
-- **禁止**读取、打印或提交 `NPM_TOKEN`（发布凭据只在 GitHub Actions secret 里）；
-- 等 CI 只用 `gh run watch --compact --exit-status`，**禁止**长时间 `sleep` + `curl` 轮询；
-  `gh` 不可用时只报告“CI 已触发”即可，不阻塞；
-- npm 包名用 `windows-*`，而 package.json 的 `os` 字段必须是 `win32`（别“统一”掉）。
-
-**详细 SOP（流程、手动发布、完整排障表、历史事故复盘）见 [`docs/handbook/release/npm.md`](docs/handbook/release/npm.md)** —— 本文件只放强制规则，不复述流程。
+详细说明见 [`docs/handbook/release/npm.md`](docs/handbook/release/npm.md)。
 
 ## 4. 验证纪律
 

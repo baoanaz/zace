@@ -6,51 +6,28 @@
 ## 0. 一条命令看懂全流程
 
 ```text
-改版本号(四处一致) → 提交 → 推 main → 打 tag v<版本>
+bash scripts/release-client.sh 0.0.8（改版本号 → 提交 → 推 main → 打 tag）
                                           ↓
             CI: 构建 6 平台 → 发 6 个子包 → 验证 → 发主包(next) → 冒烟 → promote latest
                                           ↓
                               VPS 部署（拉代码 + 重启服务）
 ```
 
-> npm 发布细节（含手动流程与排障）→ [`npm.md`](npm.md)。
+> npm 发布细节 → [`npm.md`](npm.md)。
 
-**唯一的硬约束**：发布 npm 时**先子包、后主包**。主包的 `optionalDependencies`
-指向 6 个平台子包（`zace-client-<os>-<arch>`），子包没先上去，该平台用户就装不上。
-CI 里由 `scripts/make-platform-packages.py publish` 保证这个顺序。
-
-> **不再发 GitHub Release 二进制资产，也不再有任何下载回退**（D-48/D-49）。
-> npm 平台子包是**唯一**的分发渠道。
->
-> 为什么（实测踩到）：Node 默认**不读 `https_proxy`**（只认 `NODE_USE_ENV_PROXY=1`，v20+），
-> 代理环境里启动器直连 GitHub 会命中共享出口 IP 的 403 rate limit——
-> 同一时刻 `curl`（走代理）200、`node`（直连）403。
-> 用户看到的是「MCP server failed to start: connection closed」，极难排查。
-> 更深一层：保留下载回退 = 两条分发渠道并存，出错时无法判断用户拿到的是哪个二进制。
-> 详见 [`npm.md`](npm.md) §5。
+**唯一硬约束**：发布 npm 时**先子包、后主包**。主包的 `optionalDependencies`
+指向 6 个平台子包，子包没先上去，该平台用户就装不上。CI 里由
+`scripts/make-platform-packages.py publish` 保证这个顺序。
 
 ## 1. 发布 zace-client（npm）
 
-**完整发布手册见 [`npm.md`](npm.md)**（六步流水线、脚本速查、排障、为什么删掉 GitHub 下载回退）。
-
-速览（**只有这一条命令**，不要手工拼分步命令）：
-
 ```bash
-bash scripts/release-client.sh 0.0.5
+bash scripts/release-client.sh 0.0.8
 ```
 
-它内含：前置检查 → 改版本号 → 校验 → 测试 → commit/push main → push tag →
-（gh 可用时）等 CI → 复核 `npm view` 与 `latest`。CI 负责
-构建 6 平台 → 发子包 → 验证 → 发主包(next) → 冒烟 → promote latest。
+这是唯一入口，脚本只做本地准备并 push tag，六平台构建与 npm 发布全部
+由 GitHub Actions 完成。完整说明见 [`npm.md`](npm.md)。
 
-要点：
-
-- **npm 是唯一二进制分发渠道**（D-48/D-49）：6 个平台子包 `zace-client-<os>-<arch>`
-  随包提供二进制，用户侧**没有下载步骤**；
-- **先发子包、验证、再发主包（`--tag next`）、冒烟、最后 promote 到 `latest`** ——
-  因为 npm 发布不可逆，latest 是最后一个可控点；
-- 缺任一平台 = 该平台用户**静默**装不上（npm 不报错，只是跳过解析不了的可选依赖）；
-- CI 需要仓库 secret `NPM_TOKEN`（Automation 类型）。
 
 ## 2. 重建前端
 
@@ -85,18 +62,16 @@ curl -sI http://localhost/zace-web/ | head -1
 | 场景 | 顺序 |
 |---|---|
 | 只改了后端/前端代码 | 重建前端（若涉及）→ 重启服务 |
-| 只发了 client | 打 tag → 等 5 平台资产 + 7 个 npm 包 → 服务**不用重启** |
+| 只发了 client | 打 tag → 等 CI 发布 7 个 npm 包 → 服务**不用重启** |
 | 改了 core 检索逻辑 | 跑 `benchmark/README.md` 的回归 → 重建前端 → 重启服务 |
 | 改了工具 description | 改 `docs/contracts/mcp-tools.json` → **同步 `client/contract/`** → 发 client |
 | 改了平台表（新增/删平台） | 改 `make-platform-packages.py` 的 `PLATFORMS` → `generate` → 同步 CI 矩阵 → `check-version.sh` |
 
 | 现象 | 原因 |
 |---|---|
-| Release 只有 4 个平台资产 | cross（aarch64-musl）失败，多半是编译期资源跨出 crate 目录 |
 | **某平台用户报「没有二进制」** | 该平台**子包没发或版本不一致**。这是**静默故障**（npm 跳过解析不了的可选依赖）；跑 `bash scripts/check-version.sh` 定位 |
-| `npx zace-client` 403 rate limit | 旧版包装器在走 GitHub 下载路径。升到 ≥ `zace-client@0.0.5`（子包形态）即不再出现 |
-| `npx` 仍是旧描述/旧行为 | 该版本没发，或 npx 缓存了旧二进制（清 `~/.cache/zace-client/<版本>/`） |
-| npm 报 `cannot publish over` | 该版本号已发布过，换版本号 |
+| `npx` 仍是旧描述/旧行为 | 该版本没发，或 npx 缓存了旧包（配置里加 `--prefer-online`） |
+| npm 报 `cannot publish over` | 该版本号已发布过，换 patch 版本号 |
 
 ## 相关文档
 

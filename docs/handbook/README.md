@@ -25,7 +25,7 @@
 | **发布到公网 VPS** | [deployment/vps.md](deployment/vps.md) |
 | **本地跑一套跟生产同构的环境** | [deployment/wsl-live.md](deployment/wsl-live.md) |
 | **发新版本 / 重建前端 / 重启服务** | [release/README.md](release/README.md) |
-| **发布 npm 包（六步流水线 / 手动发布 / 排障）** | [release/npm.md](release/npm.md) |
+| **发布 npm 包（入口 / 流水线 / 排障）** | [release/npm.md](release/npm.md) |
 | **改检索/排序后跑跨仓库回归** | [benchmark/README.md](benchmark/README.md) |
 | **准备密钥与隐私资产** | [privacy/资产清单.md](privacy/资产清单.md) |
 | 切换 embedding 参数 / 看实测数字 | [operations/embedding-provider切换.md](operations/embedding-provider切换.md) |
@@ -69,7 +69,7 @@ handbook/
 | 文档 | 内容 |
 |---|---|
 | [README.md](release/README.md) | **发一次新版本**：版本号一致 → tag → 重建前端 / 重启服务 / VPS 部署；含顺序与坑 |
-| [npm.md](release/npm.md) | **npm 发布专篇（唯一 SOP，D-48/D-49）**：入口 `bash scripts/release-client.sh x.y.z`、6 平台子包形态、六步流水线（子包→验证→主包 next→冒烟→promote）、排障表、历史事故复盘 |
+| [npm.md](release/npm.md) | **npm 发布专篇（唯一 SOP，D-48/D-49）**：入口 `bash scripts/release-client.sh x.y.z`、6 平台子包架构、CI 自动发布流水线、必要约束与最小排障 |
 
 ### benchmark/
 

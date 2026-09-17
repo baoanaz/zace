@@ -227,29 +227,21 @@ def test_release_script_never_touches_npm_token():
 
 
 def test_release_script_defers_publishing_to_ci():
-    """六平台构建与发布全部交 CI：本地脚本只 push tag 并等结果。"""
+    """六平台构建与发布全部交 CI：本地脚本只 push tag，不等 CI、不查 registry。"""
     text = _code_lines(_release_script())
-    assert "gh run watch" in text and "--exit-status" in text
     assert "make-platform-packages.py publish" not in text
+    # 本地不等待 CI：没有 gh watch / sleep 轮询 / npm 复核
+    for banned in ("gh run watch", "gh run list", "sleep ", "npm view", "dist-tags"):
+        assert banned not in text, f"发布入口不应包含 {banned!r}（CI 职责，见 npm.md）"
+    # 必须真的把 tag 推出去（这是触发 CI 的唯一动作）
+    assert 'git push origin "v$VERSION"' in text
 
 
-def test_release_script_waits_via_gh_not_polling():
-    """禁止长时间 sleep + curl 轮询：等 CI 只用 gh run watch。"""
-    text = _release_script()
-    assert "api.github.com/actions/runs" not in text
-    assert "run watch" in text
-
-
-def test_release_script_verifies_latest_after_ci():
-    text = _release_script()
-    assert "npm view" in text and "dist-tags" in text
-
-
-def test_release_script_runs_tests_and_version_check():
+def test_release_script_runs_version_check():
     text = _release_script()
     assert "check-version.sh" in text
-    assert "uv run pytest" in text
-    assert "check_dependency_direction.py" in text
+    assert "make-platform-packages.py generate" in text
+    assert "make-platform-packages.py check" in text
 
 
 def test_verify_retry_budget_tolerates_registry_propagation():
