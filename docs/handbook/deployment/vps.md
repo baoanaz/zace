@@ -204,9 +204,10 @@ startup_timeout_ms = 60000
 
 `--base-url` 填**根地址**（不带 `/mcp`），client 会自己拼 MCP 路径。
 
-> **client 版本**：`npx zace-client` 会按 npm 上的 latest 取包，再去 GitHub Release
-> 下载对应平台二进制。**发新版本**（含工具描述变更）请看
-> [`../release/README.md`](../release/README.md)——尤其是“资产未就绪就 publish 会 404”这条硬约束。
+> **client 版本**：`npx zace-client` 会按 npm 上的 latest 取包；二进制由**同版本的 npm 平台
+> 子包**（`zace-client-<os>-<arch>`）随包提供，**无网络下载步骤**。
+> **发新版本**（含工具描述变更）请看 [`../release/README.md`](../release/README.md)——
+> 尤其是“先发 6 个子包、再发主包，缺一个平台就是静默故障”这条硬约束。
 
 ## 9. 备份与升级
 

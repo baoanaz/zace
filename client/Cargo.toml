@@ -1,6 +1,6 @@
 [package]
 name = "zace-client"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 description = "zace MCP stdio client: local scan/hash/upload proxy for a remote zace-service"
 license = "MIT OR Apache-2.0"

@@ -7,19 +7,19 @@ zace 的 MCP stdio 客户端：编辑器把它作为子进程拉起，它负责�
 
 ## 快速开始
 
-全局安装（装完 `zace-client` 进 `PATH`，首次启动更快）：
+全局安装（装完 `zace-client` 进 `PATH`）：
 
 ```bash
-npm install -g zace-client
+npm install -g zace-client@latest
 ```
 
-也可以不安装，直接用 `npx`（按需下载二进制后启动）：
+也可以不安装，直接用 `npx`（按平台子包直接启动，无下载）：
 
 ```bash
-npx zace-client --base-url http://127.0.0.1:8787 --token "<你的 API Key>"
+npx --yes --prefer-online zace-client@latest --base-url http://127.0.0.1:8787 --token "<你的 API Key>"
 ```
 
-两种方式都会按平台下载对应二进制并启动服务（stdio）。
+两种方式都会按平台从**平台子包**取二进制并启动服务（stdio），无需额外下载。
 
 ## 客户端配置
 
@@ -31,7 +31,7 @@ npx zace-client --base-url http://127.0.0.1:8787 --token "<你的 API Key>"
 claude mcp add-json zace --scope user '{
   "type": "stdio",
   "command": "npx",
-  "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
+  "args": ["--yes", "--prefer-online", "zace-client@latest", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
 }'
 ```
 
@@ -42,7 +42,7 @@ claude mcp add-json zace --scope user '{
 ```toml
 [mcp_servers.zace]
 command = "npx"
-args = ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
+args = ["--yes", "--prefer-online", "zace-client@latest", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
 startup_timeout_ms = 60000
 ```
 
@@ -56,7 +56,7 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
   "mcpServers": {
     "zace": {
       "command": "npx",
-      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
+      "args": ["--yes", "--prefer-online", "zace-client@latest", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
     }
   }
 }
@@ -69,7 +69,7 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
   "mcpServers": {
     "zace": {
       "command": "npx",
-      "args": ["zace-client", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
+      "args": ["--yes", "--prefer-online", "zace-client@latest", "--base-url", "http://127.0.0.1:8787", "--token", "<你的 API Key>"]
     }
   }
 }
@@ -82,7 +82,6 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
 | `--base-url` | `ZACE_BASE_URL` | 是 | `zace-service` 基础地址（须带 `http://` 或 `https://`） |
 | `--token` | `ZACE_API_TOKEN` | **服务端启用鉴权后必填** | 远端 API token：在管理面「API Key」页创建（`zace_` 前缀，明文只显示一次）。本地单用户模式（默认）无鉴权，可省略 |
 | `--cache-root` | `ZACE_CLIENT_CACHE` | 否 | 本地索引缓存根，默认 `~/.cache/zace` |
-
 命令行参数优先于环境变量。
 
 ## 工具
@@ -90,18 +89,58 @@ pi 本身不含 MCP，需先装适配器：`pi install npm:pi-mcp-adapter`。
 | 工具 | 作用 |
 |---|---|
 | `search_context` | 检索与问题最相关的上下文（代码/调用链/文档证据包，带文件:行号） |
-| `ask_project` | 项目级问题；当前返回检索结果 + 降级说明（LLM 总结属 Phase 3） |
+| `ask_project` | 项目级综合问答（带引用的 grounded answer，证据不足时如实说明缺口） |
 
-## 二进制从哪来（三级回退）
+## 二进制从哪来（**npm 平台子包，无网络下载**）
 
-1. **缓存命中** —— `~/.cache/zace-client/<version>/zace-client` 已存在，直接拉起（不上网）；
-2. **下载** —— 从 `github.com/baoanaz/zace` 的 `v<version>` Release 取对应平台资产
-   （带文件锁防并发、指数退避重试）；
-3. **回退** —— 下载失败时依次尝试：仓库内已构建的 `client/target/{release,debug}/zace-client`
-   → `PATH` 里的 `zace-client`（如 `cargo install --path client` 装的）；都没有则打印安装指引并以非 0 退出。
+`zace-client` 本身只是启动器（`run.js`）；真正的二进制由 **6 个平台子包**提供，
+它们是主包的 `optionalDependencies`：
 
-> 因此**发布顺序很重要**：必须**先发 GitHub Release（五平台资产）再发 npm 包**，
-> 否则用户首次运行会拿到 404（包装器会提示这一点）。
+```text
+zace-client                    ← 启动器
+├── zace-client-linux-x64      ← 含 bin/zace-client
+├── zace-client-linux-arm64
+├── zace-client-darwin-x64     ┐ 两个架构各自独立构建
+├── zace-client-darwin-arm64   ┘
+├── zace-client-win32-x64
+└── zace-client-win32-arm64
+```
+
+npm 会按子包自己的 `os`/`cpu` 字段**只装本平台那一个**（其余跳过），
+启动器直接执行它。**没有下载步骤、没有网络依赖、没有缓存。**
+
+### 为什么要改成这样（实测踩到）
+
+早期形态是「启动器按版本号去 GitHub Release 下载二进制」。两个真实故障：
+
+1. **Node 默认不读 `https_proxy`**（只认 `NODE_USE_ENV_PROXY=1`，v20+），
+   代理环境里启动器直连 GitHub → 命中共享出口 IP 的 API 限流：
+   实测同一时刻 `curl`（走代理）200、`node`（直连）403 `rate limit exceeded`。
+   用户看到的是 `MCP server failed to start: connection closed`，排查代价极高。
+2. **版本对齐是人为纪律**：`npm publish` 必须等 Release 资产全绿，慢一步就是 404。
+
+平台子包是 esbuild / swc / biome 等工具的通行做法，两个问题一次消掉。
+
+### 没有回退链（这是故意的）
+
+子包找不到就**直接退出并打印诊断**，不偷下载、不静默降级。
+
+理由：保留任何“自动下载”路径都等于**两条分发渠道并存**——出错时无法判断用户
+拿到的是哪个二进制（是 npm 的？还是 GitHub 上的旧货？），排查会往错误方向跑。
+「npm 是唯一二进制分发渠道」是已定决策（D-48/D-49）。
+
+**唯一的例外是开发期通道**（不是用户分发路径，命中时会打印用了哪一条）：
+
+1. `ZACE_CLIENT_BINARY=/abs/path/zace-client` —— 开发者显式指定；
+2. 仓库内 `client/target/{release,debug}/zace-client` —— `cargo build` 后直接跑。
+
+刻意**不含**「PATH 里的 zace-client」：npm 安装的 shim 就叫这个名字，
+回退到它会把包装器自己当二进制，造成无限自我递归（TASK-099 实测踩到）。
+
+> 维护者请按 [`docs/handbook/release/npm.md`](../docs/handbook/release/npm.md) 发布：
+> **先发 6 个子包 → 验证 → 发主包（`--tag next`）→ 冒烟 → promote 到 latest**。
+> 缺任一平台 = 该平台用户装不上（且是**静默**故障——npm 不报错，只是跳过解析不了的可选依赖）。
+> `python3 scripts/make-platform-packages.py check` 与 `bash scripts/check-version.sh` 能提前发现不一致。
 
 ## 已知限制
 
@@ -116,4 +155,5 @@ git clone https://github.com/baoanaz/zace && cd zace/client
 cargo build --release        # 产物：target/release/zace-client
 ```
 
-`npm/run.js` 在下载不可用时会自动回退到 `client/target/{release,debug}/zace-client` 或 PATH 里的 `zace-client`。
+`npm/run.js` 找不到平台子包时会回退到**开发期通道**：`ZACE_CLIENT_BINARY` 指定的二进制，
+或仓库内 `client/target/{release,debug}/zace-client`。（用户分发路径只有 npm 子包。）

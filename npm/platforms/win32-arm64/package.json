@@ -1,0 +1,21 @@
+{
+  "name": "zace-client-win32-arm64",
+  "version": "0.0.5",
+  "description": "Platform binary for zace-client (win32/arm64). Installed automatically by zace-client; do not install directly.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baoanaz/zace.git"
+  },
+  "homepage": "https://github.com/baoanaz/zace#readme",
+  "files": [
+    "zace-client.exe"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "scripts": {}
+}

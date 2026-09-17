@@ -1,347 +1,156 @@
 #!/usr/bin/env node
 // zace-client 的 npm 启动器。
 //
-// 职责（与 notace 的 npm/run.js 同思路，但按 zace 的现状做了取舍）：
-//   1. 在缓存目录里找平台二进制；
-//   2. 找不到 → 从 GitHub Release 下载对应归档并解压（带并发锁与重试）；
-//   3. 都失败 → 回退到"本地已构建的二进制"或给出可操作的安装指引；
-//   4. 用 stdio 拉起它（**inherit**：编辑器看到的就是二进制的 stdin/stdout）。
+// **唯一职责**：找到本平台的二进制并把它拉起来（stdio 透传）。
+//
+// 二进制来自 **npm 平台子包** `zace-client-<os>-<arch>`（主包的 optionalDependencies），
+// npm 自己按子包的 `os`/`cpu` 字段装本平台那一个。**没有任何网络下载步骤。**
+//
+// 为什么不做 GitHub 下载回退（D-48/D-49，用户 2026-09-16 明确要求删掉）：
+//   ① Node 默认**不读** `https_proxy`（只认 `NODE_USE_ENV_PROXY=1`，v20+），
+//      于是代理环境里包装器直连 GitHub，命中共享出口 IP 的 403 rate limit
+//      （实测：同一时刻 curl 走代理 200、node 直连 403）。用户看到的是
+//      「MCP server failed to start: connection closed」，极难排查；
+//   ② 保留回退 = 保留一条**两条分发渠道并存**的隐路径，出错时无法判断用户拿的是
+//      哪个二进制；而「npm 是唯一二进制分发渠道」是定下来的决策。
+//   故：子包缺失就**显式失败并说清怎么修**，不偷偷下载、不静默降级。
+//
+// 唯一的本地例外是 `ZACE_CLIENT_BINARY`（开发者显式指定）与仓库内已构建产物
+// ——它们是**开发期**通道，不是用户分发路径，且会打印用了哪一条。
 //
 // 纪律：本包装器**只往 stderr 写日志**，stdout 必须原样留给 MCP 的 JSON-RPC 帧。
 
 "use strict";
 
-const { spawn, spawnSync } = require("child_process");
-const crypto = require("crypto");
+const { spawn } = require("child_process");
 const fs = require("fs");
-const https = require("https");
 const os = require("os");
 const path = require("path");
 
 const PACKAGE_NAME = "zace-client";
 const BINARY_NAME = process.platform === "win32" ? "zace-client.exe" : "zace-client";
-const REPO_OWNER = "baoanaz";
-const REPO_NAME = "zace";
-const MAX_REDIRECTS = 10;
-const REQUEST_TIMEOUT = 60_000;
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1_000;
 
-// 本地回退：仓库内已构建的二进制（开发者用 `cargo build` 后即可跑 `node npm/run.js`）。
-// **另加 `ZACE_CLIENT_BINARY`**（TASK-099 实测需要）：GitHub Release 还没发资产时，
-// 用户可以显式指一个现成二进制（例如从源码 `cargo build --release` 得到的），
-// 而不必把文件拷进缓存目录。
-function localFallbacks() {
-  const explicit = process.env.ZACE_CLIENT_BINARY;
-  return [
-    ...(explicit ? [explicit] : []),
-    path.resolve(__dirname, "..", "client", "target", "release", BINARY_NAME),
-    path.resolve(__dirname, "..", "client", "target", "debug", BINARY_NAME),
-  ];
-}
-
-function packageVersion() {
-  return require("./package.json").version;
-}
-
-function cacheDir() {
-  const home = os.homedir();
-  const base =
-    process.platform === "win32"
-      ? path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), PACKAGE_NAME)
-      : process.platform === "darwin"
-        ? path.join(home, "Library", "Caches", PACKAGE_NAME)
-        : path.join(process.env.XDG_CACHE_HOME || path.join(home, ".cache"), PACKAGE_NAME);
-  // 版本进路径：升级后自然换目录，避免旧二进制残留。
-  return path.join(base, packageVersion());
-}
-
-// 资产命名与 .github/workflows/release.yml 的 asset_name 一一对应（改一处必须改两处）。
-function assetName() {
-  const { platform, arch } = process;
-  if (platform === "linux" && arch === "x64") return "zace-client_Linux_x86_64.tar.gz";
-  if (platform === "linux" && arch === "arm64") return "zace-client_Linux_aarch64.tar.gz";
-  if (platform === "darwin") return "zace-client_Darwin_universal.tar.gz";
-  if (platform === "win32" && arch === "x64") return "zace-client_Windows_x86_64.zip";
-  if (platform === "win32" && arch === "arm64") return "zace-client_Windows_aarch64.zip";
-  throw new Error(
-    `不支持的平台：${platform}/${arch}。` +
-      "支持 Linux(x64/arm64)、macOS(x64/arm64)、Windows(x64/arm64)，或从源码构建：cd client && cargo build --release"
-  );
-}
-
-// 再一层回退：PATH 里已有 zace-client（例如 `cargo install --path client` 装的）。
-function fromPath(name) {
-  for (const directory of (process.env.PATH || "").split(path.delimiter)) {
-    if (!directory) continue;
-    const candidate = path.join(directory, name);
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-    } catch {
-      continue;
-    }
-    // **不能把本包装器自己当成二进制**（TASK-099 实测踩到的真实缺陷）：
-    // 用 npm/npx 安装时，PATH 里的 `zace-client` 正是本包装器生成的 shim
-    // （`node_modules/.bin/zace-client` → 本 `run.js`）。不排除它就会“回退到自己”，
-    // 子进程再次走同一段逻辑、再次找不到二进制、再次回退……无限循环刷屏。
-    if (isSelfWrapper(candidate)) continue;
-    return candidate;
-  }
-  return null;
-}
-
-/** 该可执行文件是不是本包装器（或其 shim）。
- *
- * 两种形态都要认：
- * 1. 直接指向本文件（`node run.js` 或某些包的硬链接）；
- * 2. npm 生成的 shell/bat shim——内容里包含本包的包名与 `run.js`（或 `.bin` 下的同名转发）。
- *
- * 用内容嗅探而不是只比路径：npx 的缓存目录、全局安装、`npm link` 三种形态路径都不同，
- * 而“里面是 node 脚本 + 提到 zace-client/run.js”这个特征在三种形态下都成立。
- */
-function isSelfWrapper(candidate) {
-  try {
-    if (path.resolve(candidate) === path.resolve(__filename)) return true;
-    const stat = fs.statSync(candidate);
-    // 真二进制通常是上百 KB 且不带头部脚本；这里只嗅探小文件，避免白读大文件。
-    if (stat.size > 64 * 1024) return false;
-    const head = fs.readFileSync(candidate, "utf8");
-    if (head.includes("zace-client") && head.includes("run.js")) return true;
-    // Windows 的 .cmd shim / bash shim：指向 node_modules/zace-client/run.js。
-    return /node_modules[\\/]+zace-client[\\/]+run\.js/.test(head);
-  } catch {
-    // 二进制读不成 utf8（乱码不会包含 ASCII 关键词）/无权限 → 无法自证是自己
-    return false;
-  }
-}
+//: 平台子包前缀与平台表。**必须与 `scripts/make-platform-packages.py` 的 `PLATFORMS`
+//: 一一对应**——`scripts/check-npm-platforms.js` 会校验这张表（含子包与 CI 矩阵）。
+const PLATFORM_PACKAGE_PREFIX = "zace-client";
+const PLATFORMS = [
+  { platform: "linux", arch: "x64", suffix: "linux-x64" },
+  { platform: "linux", arch: "arm64", suffix: "linux-arm64" },
+  { platform: "darwin", arch: "x64", suffix: "darwin-x64" },
+  { platform: "darwin", arch: "arm64", suffix: "darwin-arm64" },
+  { platform: "win32", arch: "x64", suffix: "win32-x64" },
+  { platform: "win32", arch: "arm64", suffix: "win32-arm64" },
+];
 
 function log(message) {
   console.error(`[${PACKAGE_NAME}] ${message}`);
 }
 
-function httpsGet(url, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > MAX_REDIRECTS) return reject(new Error("重定向过多"));
-    const headers = { "User-Agent": PACKAGE_NAME, Accept: "application/vnd.github.v3+json" };
-    if (process.env.GITHUB_TOKEN) headers.Authorization = `token ${process.env.GITHUB_TOKEN}`;
-    const request = https.get(url, { headers }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        const next = response.headers.location;
-        if (!next.startsWith("https://")) return reject(new Error(`不安全的跳转：${next}`));
-        return resolve(httpsGet(next, redirects + 1));
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        return reject(new Error(`HTTP ${response.statusCode}：${response.statusMessage}`));
-      }
-      const chunks = [];
-      response.on("data", (chunk) => chunks.push(chunk));
-      response.on("end", () => resolve(Buffer.concat(chunks)));
-      response.on("error", reject);
-    });
-    request.on("error", reject);
-    request.setTimeout(REQUEST_TIMEOUT, () => {
-      request.destroy();
-      reject(new Error("请求超时"));
-    });
-  });
+/** 当前平台对应的子包名；本平台没有子包时返回 ``null``。 */
+function platformPackage() {
+  const hit = PLATFORMS.find(
+    (item) => item.platform === process.platform && item.arch === process.arch
+  );
+  return hit ? `${PLATFORM_PACKAGE_PREFIX}-${hit.suffix}` : null;
 }
 
-function downloadToFile(url, destination, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > MAX_REDIRECTS) return reject(new Error("重定向过多"));
-    const headers = { "User-Agent": PACKAGE_NAME, Accept: "application/octet-stream" };
-    if (process.env.GITHUB_TOKEN) headers.Authorization = `token ${process.env.GITHUB_TOKEN}`;
-    const file = fs.createWriteStream(destination);
-    const fail = (error) => {
-      file.close(() => {
-        try {
-          fs.unlinkSync(destination);
-        } catch {}
-        reject(error);
-      });
-    };
-    const request = https.get(url, { headers }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        const next = response.headers.location;
-        if (!next.startsWith("https://")) return fail(new Error(`不安全的跳转：${next}`));
-        file.close(() => {
-          try {
-            fs.unlinkSync(destination);
-          } catch {}
-          downloadToFile(next, destination, redirects + 1).then(resolve).catch(reject);
-        });
-        return;
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        return fail(new Error(`HTTP ${response.statusCode}：${response.statusMessage}`));
-      }
-      response.pipe(file);
-      file.on("finish", () => file.close(() => resolve()));
-      file.on("error", fail);
-    });
-    request.on("error", fail);
-    request.setTimeout(REQUEST_TIMEOUT, () => request.destroy(new Error("下载超时")));
-  });
-}
-
-// 子进程的 stdout 一律重定向到 stderr：解压工具绝不允许污染 MCP 的 stdout。
-function runQuietly(command, args) {
-  const result = spawnSync(command, args, { stdio: ["ignore", process.stderr, process.stderr] });
-  if (result.error) {
-    throw new Error(
-      result.error.code === "ENOENT" ? `找不到命令：${command}` : result.error.message
+/**
+ * 在 npm 平台子包里找二进制（**唯一的分发路径**）。
+ *
+ * 试多个位置是因为安装布局随包管理器变化，而这些都是**同一次 npm 安装**的产物：
+ * - 平级：npm 把可选依赖提升到同一 `node_modules/`；
+ * - 仓库根 `node_modules/`：在仓库内跑 `node npm/run.js` 时；
+ * - `require.resolve`：pnpm / 嵌套安装等非常规布局。
+ */
+function fromPlatformPackage() {
+  const name = platformPackage();
+  if (!name) return null;
+  const candidates = [
+    path.resolve(__dirname, "..", name, BINARY_NAME),
+    path.resolve(__dirname, "node_modules", name, BINARY_NAME),
+    path.resolve(__dirname, "..", "node_modules", name, BINARY_NAME),
+  ];
+  try {
+    candidates.push(
+      path.join(path.dirname(require.resolve(`${name}/package.json`)), BINARY_NAME)
     );
+  } catch {
+    /* 未安装：正常，由调用方报错 */
   }
-  if (result.status !== 0) throw new Error(`${command} 退出码 ${result.status}`);
-}
-
-function extract(archive, destination, name) {
-  if (name.endsWith(".zip")) {
-    runQuietly("powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `Expand-Archive -LiteralPath '${archive.replace(/'/g, "''")}' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`,
-    ]);
-  } else {
-    runQuietly("tar", ["-xzf", archive, "-C", destination]);
-  }
-}
-
-function acquireLock(lockPath) {
-  try {
-    fs.writeFileSync(lockPath, String(process.pid), { flag: "wx" });
-    return true;
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-    // 锁存在：持有者还活着就等，已死则清掉重抢。
+  for (const candidate of candidates) {
     try {
-      const pid = Number.parseInt(fs.readFileSync(lockPath, "utf8"), 10);
-      process.kill(pid, 0);
-      return false;
+      if (fs.statSync(candidate).isFile()) return { path: candidate, package: name };
     } catch {
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {}
-      return acquireLock(lockPath);
+      continue;
     }
   }
+  return null;
 }
 
-async function withRetry(operation) {
-  let lastError;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (attempt < MAX_RETRIES - 1) {
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * 2 ** attempt));
-      }
+/**
+ * 开发期通道（**不是用户分发路径**，命中时会打印来源）。
+ *
+ * 优先级：显式 `ZACE_CLIENT_BINARY` → 仓库内 `cargo build` 的产物。
+ * 刻意不含「PATH 里的 zace-client」：那会把包装器自己（npm 生成的 shim）当成二进制，
+ * 造成无限自我递归（TASK-099 实测踩到）。
+ */
+function fromDevChannel() {
+  const explicit = process.env.ZACE_CLIENT_BINARY;
+  if (explicit && fs.existsSync(explicit)) {
+    return { path: explicit, package: "ZACE_CLIENT_BINARY" };
+  }
+  const built = [
+    path.resolve(__dirname, "..", "client", "target", "release", BINARY_NAME),
+    path.resolve(__dirname, "..", "client", "target", "debug", BINARY_NAME),
+  ];
+  for (const candidate of built) {
+    if (fs.existsSync(candidate)) {
+      return { path: candidate, package: "local build" };
     }
   }
-  throw lastError;
+  return null;
 }
 
-async function fetchBinary(target) {
-  const name = assetName();
-  const directory = path.dirname(target);
-  fs.mkdirSync(directory, { recursive: true });
-  const lockPath = `${target}.lock`;
-
-  if (!acquireLock(lockPath)) {
-    for (let waited = 0; waited < 60; waited += 1) {
-      if (fs.existsSync(target)) return;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    throw new Error("等待其它进程下载超时");
+/** 找不到二进制时的**可操作**报错（不静默降级，也不猜用户环境）。 */
+function failMissingBinary() {
+  const name = platformPackage();
+  const target = name ? `${name}/${BINARY_NAME}` : `（本平台无对应子包）`;
+  log(`找不到本平台的二进制：${target}`);
+  log(`平台：${process.platform}/${process.arch}｜node：${process.version}`);
+  log("");
+  if (!name) {
+    log("本平台没有对应的 npm 平台子包。支持：Linux/macOS/Windows × x64/arm64。");
+    log("请从源码构建：git clone https://github.com/baoanaz/zace && cd zace/client && cargo build --release");
+    log(`然后用 ZACE_CLIENT_BINARY=<path> 指定，或把二进制放到 ${BINARY_NAME} 可被找到的位置。`);
+    process.exit(1);
   }
-
-  try {
-    if (fs.existsSync(target)) return;
-    const version = packageVersion();
-    log(`下载 v${version} 的 ${name} …`);
-    const release = await withRetry(() =>
-      httpsGet(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/v${version}`)
-    ).then(JSON.parse);
-    const asset = (release.assets || []).find((item) => item.name === name);
-    if (!asset) {
-      const available = (release.assets || []).map((item) => item.name).join(", ") || "(空)";
-      throw new Error(`release 里没有 ${name}；可用资产：${available}`);
-    }
-
-    const stamp = crypto.randomBytes(8).toString("hex");
-    const archive = path.join(directory, `${stamp}-${name}`);
-    const staging = path.join(directory, `${stamp}-extract`);
-    fs.mkdirSync(staging, { recursive: true });
-    await withRetry(() => downloadToFile(asset.browser_download_url, archive));
-    extract(archive, staging, name);
-
-    const extracted = path.join(staging, BINARY_NAME);
-    if (!fs.existsSync(extracted)) {
-      throw new Error(`归档里没有 ${BINARY_NAME}（解压目录：${staging}）`);
-    }
-    // 跨设备 move 会 EXDEV，退回复制 + 删除。
-    try {
-      fs.renameSync(extracted, target);
-    } catch (error) {
-      if (error.code !== "EXDEV") throw error;
-      fs.copyFileSync(extracted, target);
-    }
-    if (process.platform !== "win32") fs.chmodSync(target, 0o755);
-    fs.rmSync(staging, { recursive: true, force: true });
-    try {
-      fs.unlinkSync(archive);
-    } catch {}
-    log(`已安装到 ${target}`);
-  } finally {
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {}
-  }
+  log("原因通常是：平台子包没装上（装了可选依赖被跳过、或该版本漏发了这个平台）。");
+  log("");
+  log("请按顺序尝试：");
+  log(`  1) 重装最新版（让 npm 重新解析可选依赖）：`);
+  log(`       npx --yes --prefer-online ${PACKAGE_NAME}@latest --help`);
+  log(`     或全局安装：npm i -g ${PACKAGE_NAME}@latest`);
+  log(`  2) 确认子包是否存在于 registry：npm view ${name} version`);
+  log(`     - 查不到 → 发布侧漏发了这个平台，请到仓库提 issue（附上面的平台信息）；`);
+  log(`     - 能查到 → 本地 npm 缓存/可选依赖状态异常，删掉 node_modules 重装；`);
+  log(`  3) 开发者可显式指定二进制：ZACE_CLIENT_BINARY=/abs/path/${BINARY_NAME}`);
+  process.exit(1);
 }
 
-async function resolveBinary() {
-  const target = path.join(cacheDir(), BINARY_NAME);
-  if (!fs.existsSync(target)) {
-    try {
-      await fetchBinary(target);
-    } catch (error) {
-      log(`从 GitHub Release 获取二进制失败：${error.message}`);
-      for (const candidate of localFallbacks()) {
-        if (fs.existsSync(candidate)) {
-          log(`改用本地已构建的二进制：${candidate}`);
-          return candidate;
-        }
-      }
-      const onPath = fromPath(BINARY_NAME);
-      if (onPath && path.resolve(onPath) !== path.resolve(target)) {
-        log(`改用 PATH 里的二进制：${onPath}`);
-        return onPath;
-      }
-      log("");
-      if (/HTTP 404|Not Found/.test(error.message)) {
-        log(`原因：v${packageVersion()} 的 GitHub Release 还没有该平台资产——通常是“先发了 npm 包、还没发 Release”。`);
-      }
-      log("请任选一种方式解决：");
-      log(`  1) 下载对应平台的 release 资产并放到：${target}`);
-      log("  2) 从源码构建：git clone 后执行  cd client && cargo build --release");
-      log("     （在仓库内运行时，包装器会自动发现 client/target/release/zace-client）");
-      log("  3) 用环境变量指定一个现成二进制：ZACE_CLIENT_BINARY=/abs/path/zace-client");
-      log(`  4) 从 release 页下载：https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`);
-      process.exit(1);
-    }
+function resolveBinary() {
+  const packaged = fromPlatformPackage();
+  if (packaged) return packaged;
+  const dev = fromDevChannel();
+  if (dev) {
+    log(`使用开发期二进制（${dev.package}）：${dev.path}`);
+    return dev;
   }
-  return target;
+  failMissingBinary();
+  return null; // 到不了这里（failMissingBinary 会 exit）
 }
 
-async function main() {
-  const binary = await resolveBinary();
+function main() {
+  const binary = resolveBinary().path;
   const child = spawn(binary, process.argv.slice(2), { stdio: "inherit", env: process.env });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => {
@@ -357,7 +166,9 @@ async function main() {
   });
 }
 
-main().catch((error) => {
+try {
+  main();
+} catch (error) {
   log(error.stack || String(error));
   process.exit(1);
-});
+}
